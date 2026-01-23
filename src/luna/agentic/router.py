@@ -156,6 +156,17 @@ class QueryRouter:
         r"\b(process|analyze|research) (all|everything|the whole)\b",
     ]
 
+    # Memory query patterns - triggers RETRIEVE action
+    MEMORY_QUERY_PATTERNS = [
+        r"\b(remember|recall|recollect)\b",
+        r"\bwhat do (you|I) know about\b",
+        r"\bdo you (remember|know)\b",
+        r"\btry (to|and) remember\b",
+        r"\bwho (is|was)\b",
+        r"\btell me about\b",
+        r"\byour memor(y|ies)\b",
+    ]
+
     def __init__(self):
         """Initialize the query router."""
         # Compile patterns for efficiency
@@ -164,6 +175,7 @@ class QueryRouter:
         self._research_re = [re.compile(p, re.IGNORECASE) for p in self.RESEARCH_PATTERNS]
         self._multi_step_re = [re.compile(p, re.IGNORECASE) for p in self.MULTI_STEP_PATTERNS]
         self._background_re = [re.compile(p, re.IGNORECASE) for p in self.BACKGROUND_PATTERNS]
+        self._memory_query_re = [re.compile(p, re.IGNORECASE) for p in self.MEMORY_QUERY_PATTERNS]
         self._tool_re = {
             tool: [re.compile(p, re.IGNORECASE) for p in patterns]
             for tool, patterns in self.TOOL_PATTERNS.items()
@@ -188,6 +200,23 @@ class QueryRouter:
         """
         decision = self.analyze(query)
         return decision.path
+
+    def needs_memory_access(self, query: str) -> bool:
+        """
+        Check if a query requires memory access (should delegate).
+
+        Memory queries ALWAYS delegate to the cloud model because:
+        - Local model doesn't have access to memory matrix
+        - Memory queries need retrieval + reasoning
+        - User is asking about something they expect Luna to remember
+
+        Args:
+            query: The user's input query.
+
+        Returns:
+            True if query needs memory access.
+        """
+        return self._matches_any(query, self._memory_query_re)
 
     def analyze(self, query: str) -> RoutingDecision:
         """
@@ -324,6 +353,10 @@ class QueryRouter:
             signals.append("multi_step")
         if self._matches_any(query, self._background_re):
             signals.append("background_request")
+
+        # Memory query detection - triggers RETRIEVE action
+        if self._matches_any(query, self._memory_query_re):
+            signals.append("memory_query")
 
         return signals
 

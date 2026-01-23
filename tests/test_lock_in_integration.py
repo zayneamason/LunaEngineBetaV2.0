@@ -36,15 +36,10 @@ async def memory_matrix(tmp_path):
 
 
 @pytest.fixture
-async def engine_with_actors(tmp_path, monkeypatch):
+async def engine_with_actors(tmp_path):
     """
     Create a LunaEngine with Matrix and Librarian actors for integration tests.
-
-    Disables Eclissi to use basic substrate for controlled testing.
     """
-    import luna.actors.matrix as matrix_module
-    monkeypatch.setattr(matrix_module, "ECLISSI_AVAILABLE", False)
-
     config = EngineConfig(
         cognitive_interval=0.1,
         reflective_interval=60,
@@ -55,7 +50,7 @@ async def engine_with_actors(tmp_path, monkeypatch):
 
     # Initialize Matrix actor with test database
     from luna.actors.matrix import MatrixActor
-    matrix_actor = MatrixActor(db_path=tmp_path / "engine_test.db", use_eclissi=False)
+    matrix_actor = MatrixActor(db_path=tmp_path / "engine_test.db")
     engine.register_actor(matrix_actor)
     await matrix_actor.initialize()
 

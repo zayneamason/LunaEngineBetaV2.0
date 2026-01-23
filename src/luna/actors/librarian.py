@@ -28,10 +28,18 @@ from luna.extraction.types import (
     ExtractedEdge,
     FilingResult,
 )
+from luna.entities.models import (
+    Entity,
+    EntityType,
+    ChangeType,
+    EntityUpdate,
+    EntityVersion,
+)
 
 if TYPE_CHECKING:
     from luna.engine import LunaEngine
     from luna.substrate.memory import MemoryMatrix, MemoryNode
+    from luna.entities.resolution import EntityResolver
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +83,9 @@ class LibrarianActor(Actor):
         # Entity resolution cache: name_lower -> node_id
         self.alias_cache: dict[str, str] = {}
 
+        # Entity resolver (lazy init)
+        self._entity_resolver: Optional["EntityResolver"] = None
+
         # Inference queue for deferred processing
         self.inference_queue: list[str] = []
         self.batch_threshold = 10
@@ -85,6 +96,8 @@ class LibrarianActor(Actor):
         self._nodes_merged = 0
         self._edges_created = 0
         self._context_retrievals = 0
+        self._entity_updates_filed = 0
+        self._entity_versions_created = 0
         self._total_filing_time_ms = 0
 
         logger.info("Librarian (The Dude) initialized")
@@ -101,11 +114,17 @@ class LibrarianActor(Actor):
             case "file":
                 await self._handle_file(msg)
 
+            case "entity_update":
+                await self._handle_entity_update(msg)
+
             case "get_context":
                 await self._handle_get_context(msg)
 
             case "resolve_entity":
                 await self._handle_resolve_entity(msg)
+
+            case "rollback_entity":
+                await self._handle_rollback_entity(msg)
 
             case "prune":
                 await self._handle_prune(msg)
@@ -143,6 +162,92 @@ class LibrarianActor(Actor):
         # Send result back if requested
         if msg.reply_to:
             await self.send_to_engine("filing_result", result.to_dict())
+
+    async def _handle_entity_update(self, msg: Message) -> None:
+        """
+        Handle entity update from Scribe.
+
+        Payload: EntityUpdate dict (from Scribe)
+        - update_type: create, update, synthesize
+        - entity_id: Optional entity ID (for updates to existing)
+        - name: Entity name (required for create)
+        - entity_type: person, persona, place, project
+        - facts: Dictionary of facts to add/update
+        - source: Source of the update
+        """
+        payload = msg.payload or {}
+
+        # Parse the update type
+        update_type_str = payload.get("update_type", "update")
+        try:
+            update_type = ChangeType(update_type_str) if update_type_str in [e.value for e in ChangeType] else ChangeType.UPDATE
+        except ValueError:
+            update_type = ChangeType.UPDATE
+
+        # Parse entity type
+        entity_type_str = payload.get("entity_type", "person")
+        try:
+            entity_type = EntityType(entity_type_str) if entity_type_str in [e.value for e in EntityType] else EntityType.PERSON
+        except ValueError:
+            entity_type = EntityType.PERSON
+
+        entity_update = EntityUpdate(
+            update_type=update_type,
+            entity_id=payload.get("entity_id"),
+            name=payload.get("name"),
+            entity_type=entity_type,
+            facts=payload.get("facts", {}),
+            source=payload.get("source"),
+        )
+
+        # File the entity update
+        result = await self._file_entity_update(entity_update)
+
+        if result:
+            logger.info(f"The Dude: Filed entity update for '{entity_update.name}'")
+            self._entity_updates_filed += 1
+        else:
+            logger.warning(f"The Dude: Failed to file entity update for '{entity_update.name}'")
+
+        # Send result if requested
+        if msg.reply_to:
+            await self.send_to_engine("entity_update_result", {
+                "success": result is not None,
+                "entity_id": result.id if result else None,
+                "name": entity_update.name,
+            })
+
+    async def _handle_rollback_entity(self, msg: Message) -> None:
+        """
+        Handle entity rollback request.
+
+        Payload:
+        - entity_id: Entity ID to rollback
+        - version: Target version number (optional, defaults to previous)
+        - reason: Reason for rollback
+        """
+        payload = msg.payload or {}
+        entity_id = payload.get("entity_id", "")
+        target_version = payload.get("version")
+        reason = payload.get("reason", "Rollback requested")
+
+        if not entity_id:
+            logger.warning("The Dude: Rollback requested without entity_id")
+            return
+
+        result = await self._rollback_entity(entity_id, target_version, reason)
+
+        if result:
+            logger.info(f"The Dude: Rolled back entity '{entity_id}' to version {target_version or 'previous'}")
+        else:
+            logger.warning(f"The Dude: Failed to rollback entity '{entity_id}'")
+
+        # Send result
+        await self.send_to_engine("rollback_result", {
+            "success": result,
+            "entity_id": entity_id,
+            "reason": reason,
+        })
 
     async def _handle_get_context(self, msg: Message) -> None:
         """
@@ -315,6 +420,272 @@ class LibrarianActor(Actor):
         )
 
         return node_id
+
+    # =========================================================================
+    # ENTITY FILING
+    # =========================================================================
+
+    async def _get_entity_resolver(self) -> Optional["EntityResolver"]:
+        """Get or create EntityResolver instance."""
+        if self._entity_resolver is not None:
+            return self._entity_resolver
+
+        # Try to get database from Matrix actor
+        matrix = await self._get_matrix()
+        if not matrix or not hasattr(matrix, 'db'):
+            logger.warning("The Dude: Can't create EntityResolver, no database available")
+            return None
+
+        try:
+            from luna.entities.resolution import EntityResolver
+            self._entity_resolver = EntityResolver(matrix.db)
+            logger.debug("The Dude: EntityResolver initialized")
+            return self._entity_resolver
+        except Exception as e:
+            logger.error(f"The Dude: Failed to create EntityResolver: {e}")
+            return None
+
+    async def _file_entity_update(self, update: EntityUpdate) -> Optional[Entity]:
+        """
+        File an entity update to the database.
+
+        Creates or updates an entity based on the update type.
+        Always creates a new version record (append-only).
+
+        Args:
+            update: EntityUpdate from Scribe
+
+        Returns:
+            Updated Entity if successful, None otherwise
+        """
+        import json
+        from datetime import datetime
+
+        resolver = await self._get_entity_resolver()
+        if not resolver:
+            logger.error("The Dude: No EntityResolver available for filing")
+            return None
+
+        try:
+            # Resolve or create the entity
+            name = update.name or ""
+            entity_type = update.entity_type.value if hasattr(update.entity_type, 'value') else str(update.entity_type)
+
+            if update.update_type == ChangeType.CREATE or not update.entity_id:
+                # Use resolve_or_create for new entities
+                entity = await resolver.resolve_or_create(
+                    name=name,
+                    entity_type=entity_type,
+                    source=update.source or "scribe",
+                )
+            else:
+                # Get existing entity by ID
+                entity = await resolver.get_entity(update.entity_id)
+                if not entity:
+                    # Try to resolve by name
+                    entity = await resolver.resolve_entity(name)
+
+                if not entity:
+                    logger.warning(f"The Dude: Entity not found: {update.entity_id or name}")
+                    return None
+
+            # Merge new facts with existing
+            merged_facts = dict(entity.core_facts)
+            merged_facts.update(update.facts)
+
+            # Update entity record
+            now = datetime.now().isoformat()
+            new_version = entity.current_version + 1
+
+            await resolver.db.execute(
+                """
+                UPDATE entities
+                SET core_facts = ?, current_version = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(merged_facts),
+                    new_version,
+                    now,
+                    entity.id,
+                )
+            )
+
+            # Create version record (append-only)
+            change_type = update.update_type.value if hasattr(update.update_type, 'value') else str(update.update_type)
+            change_summary = f"Added facts: {', '.join(update.facts.keys())}" if update.facts else "Update"
+
+            await resolver.db.execute(
+                """
+                INSERT INTO entity_versions (
+                    entity_id, version, core_facts, full_profile, voice_config,
+                    change_type, change_summary, changed_by, change_source,
+                    created_at, valid_from, valid_until
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entity.id,
+                    new_version,
+                    json.dumps(merged_facts),
+                    entity.full_profile,
+                    json.dumps(entity.voice_config) if entity.voice_config else None,
+                    change_type,
+                    change_summary,
+                    "scribe",
+                    update.source,
+                    now,
+                    now,
+                    None,  # valid_until = NULL (current version)
+                )
+            )
+
+            # Close out previous version
+            await resolver.db.execute(
+                """
+                UPDATE entity_versions
+                SET valid_until = ?
+                WHERE entity_id = ? AND version = ?
+                """,
+                (now, entity.id, entity.current_version)
+            )
+
+            self._entity_versions_created += 1
+
+            # Return updated entity
+            entity.core_facts = merged_facts
+            entity.current_version = new_version
+            entity.updated_at = now
+
+            logger.debug(f"The Dude: Filed entity update for '{entity.id}' v{new_version}")
+            return entity
+
+        except Exception as e:
+            logger.error(f"The Dude: Failed to file entity update: {e}")
+            return None
+
+    async def _rollback_entity(
+        self,
+        entity_id: str,
+        target_version: Optional[int] = None,
+        reason: str = "Rollback requested",
+    ) -> bool:
+        """
+        Rollback an entity to a previous version.
+
+        Args:
+            entity_id: Entity ID to rollback
+            target_version: Target version (None = previous version)
+            reason: Reason for rollback
+
+        Returns:
+            True if rollback successful
+        """
+        import json
+        from datetime import datetime
+
+        resolver = await self._get_entity_resolver()
+        if not resolver:
+            logger.error("The Dude: No EntityResolver available for rollback")
+            return False
+
+        try:
+            # Get current entity
+            entity = await resolver.get_entity(entity_id)
+            if not entity:
+                logger.warning(f"The Dude: Entity not found for rollback: {entity_id}")
+                return False
+
+            # Determine target version
+            if target_version is None:
+                target_version = entity.current_version - 1
+
+            if target_version < 1:
+                logger.warning(f"The Dude: Invalid target version {target_version}")
+                return False
+
+            # Get target version record
+            row = await resolver.db.fetchone(
+                """
+                SELECT core_facts, full_profile, voice_config
+                FROM entity_versions
+                WHERE entity_id = ? AND version = ?
+                """,
+                (entity_id, target_version)
+            )
+
+            if not row:
+                logger.warning(f"The Dude: Version {target_version} not found for {entity_id}")
+                return False
+
+            # Parse version data
+            target_core_facts = json.loads(row[0]) if row[0] else {}
+            target_full_profile = row[1]
+            target_voice_config = json.loads(row[2]) if row[2] else {}
+
+            # Create new version with rollback data
+            now = datetime.now().isoformat()
+            new_version = entity.current_version + 1
+
+            # Update entity to rolled-back state
+            await resolver.db.execute(
+                """
+                UPDATE entities
+                SET core_facts = ?, full_profile = ?, voice_config = ?,
+                    current_version = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(target_core_facts),
+                    target_full_profile,
+                    json.dumps(target_voice_config) if target_voice_config else None,
+                    new_version,
+                    now,
+                    entity_id,
+                )
+            )
+
+            # Create rollback version record
+            await resolver.db.execute(
+                """
+                INSERT INTO entity_versions (
+                    entity_id, version, core_facts, full_profile, voice_config,
+                    change_type, change_summary, changed_by, change_source,
+                    created_at, valid_from, valid_until
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entity_id,
+                    new_version,
+                    json.dumps(target_core_facts),
+                    target_full_profile,
+                    json.dumps(target_voice_config) if target_voice_config else None,
+                    "rollback",
+                    f"Rolled back to v{target_version}: {reason}",
+                    "librarian",
+                    None,
+                    now,
+                    now,
+                    None,
+                )
+            )
+
+            # Close out previous version
+            await resolver.db.execute(
+                """
+                UPDATE entity_versions
+                SET valid_until = ?
+                WHERE entity_id = ? AND version = ?
+                """,
+                (now, entity_id, entity.current_version)
+            )
+
+            self._entity_versions_created += 1
+            logger.info(f"The Dude: Rolled back '{entity_id}' to v{target_version}")
+            return True
+
+        except Exception as e:
+            logger.error(f"The Dude: Failed to rollback entity: {e}")
+            return False
 
     # =========================================================================
     # KNOWLEDGE WIRING
@@ -630,6 +1001,8 @@ class LibrarianActor(Actor):
             "nodes_merged": self._nodes_merged,
             "edges_created": self._edges_created,
             "context_retrievals": self._context_retrievals,
+            "entity_updates_filed": self._entity_updates_filed,
+            "entity_versions_created": self._entity_versions_created,
             "avg_filing_time_ms": avg_time,
             "cache_size": len(self.alias_cache),
             "inference_queue_size": len(self.inference_queue),

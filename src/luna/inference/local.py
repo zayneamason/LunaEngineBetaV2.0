@@ -18,7 +18,7 @@ Usage:
 
 LoRA Adapter:
     Luna has a trained personality LoRA at:
-    ~/.HeyLuna_BETA/_Eclessi_BetaProject_Root/src/training/luna_director_3b_lora/
+    models/luna_lora_mlx/
 
     To use it:
     1. Convert PEFT LoRA to MLX format:
@@ -444,7 +444,7 @@ class HybridInference:
     def __init__(
         self,
         local: Optional[LocalInference] = None,
-        complexity_threshold: float = 0.7,
+        complexity_threshold: float = 0.15,  # Low threshold - delegate most queries to Claude
     ):
         """
         Initialize hybrid inference.

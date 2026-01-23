@@ -38,8 +38,10 @@ class MemoryDatabase:
             await db.close()
     """
 
-    DEFAULT_DB_DIR = Path.home() / ".luna"
-    DEFAULT_DB_NAME = "luna.db"
+    # Use project's data directory, not ~/.luna (which caused memory wipe)
+    # See: Docs/LUNA ENGINE Bible/Handoffs/HANDOFF-MEMORY-WIPE-INVESTIGATION.md
+    DEFAULT_DB_DIR = Path(__file__).parent.parent.parent.parent / "data"
+    DEFAULT_DB_NAME = "luna_engine.db"
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
         """

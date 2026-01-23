@@ -16,7 +16,6 @@ The context window is assembled dynamically each tick, prioritizing:
 
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import IntEnum
 from typing import Any, Deque, Dict, List, Optional
 import logging
@@ -93,16 +92,21 @@ DEFAULT_SOURCE_WEIGHTS: Dict[ContextSource, float] = {
     ContextSource.LIBRARIAN: 0.65,
 }
 
-# Default TTL (time-to-live) in seconds for each source
-DEFAULT_SOURCE_TTL: Dict[ContextSource, float] = {
-    ContextSource.IDENTITY: float('inf'),  # Never expires
-    ContextSource.CONVERSATION: 300.0,     # 5 minutes
-    ContextSource.MEMORY: 600.0,           # 10 minutes
-    ContextSource.TOOL: 120.0,             # 2 minutes
-    ContextSource.TASK: 900.0,             # 15 minutes
-    ContextSource.SCRIBE: 180.0,           # 3 minutes
-    ContextSource.LIBRARIAN: 600.0,        # 10 minutes
+# Default TTL in TURNS (conversation exchanges) for each source
+# This is more meaningful than time - an item expires after N turns, not N seconds
+# Note: A "turn" = one user message + one Luna response
+DEFAULT_SOURCE_TTL_TURNS: Dict[ContextSource, int] = {
+    ContextSource.IDENTITY: -1,       # Never expires (-1 = infinite)
+    ContextSource.CONVERSATION: 20,   # Last 20 turns of conversation (was 10)
+    ContextSource.MEMORY: 25,         # Memories persist a bit longer
+    ContextSource.TOOL: 5,            # Tool results are short-lived
+    ContextSource.TASK: 30,           # Tasks persist through completion
+    ContextSource.SCRIBE: 10,         # Extraction results
+    ContextSource.LIBRARIAN: 20,      # Retrieved knowledge
 }
+
+# Global turn counter - incremented by RevolvingContext
+_GLOBAL_TURN_COUNTER: int = 0
 
 
 @dataclass
@@ -111,10 +115,10 @@ class ContextItem:
     A single item in the context window.
 
     Items have:
-    - Relevance score (0-1) that decays over time
+    - Relevance score (0-1) that decays per turn
     - Ring placement based on source and relevance
     - Token count for budget management
-    - TTL for automatic expiration
+    - TTL in TURNS for automatic expiration (not time!)
 
     Attributes:
         id: Unique identifier for this item.
@@ -122,9 +126,9 @@ class ContextItem:
         source: Where this item came from (ContextSource enum).
         ring: Current ring placement (ContextRing enum).
         relevance: Relevance score from 0.0 to 1.0.
-        created_at: When this item was created.
-        last_accessed: When this item was last accessed.
-        ttl_seconds: Time-to-live in seconds.
+        created_at_turn: Turn number when this item was created.
+        last_accessed_turn: Turn number when this item was last accessed.
+        ttl_turns: Time-to-live in conversation turns (-1 = never expires).
         tokens: Token count for this item's content.
         metadata: Additional metadata dictionary.
     """
@@ -133,9 +137,9 @@ class ContextItem:
     ring: ContextRing = ContextRing.MIDDLE
     relevance: float = 1.0  # 0.0 to 1.0
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    created_at: datetime = field(default_factory=datetime.now)
-    last_accessed: datetime = field(default_factory=datetime.now)
-    ttl_seconds: float = 600.0  # 10 minutes default
+    created_at_turn: int = field(default_factory=lambda: _GLOBAL_TURN_COUNTER)
+    last_accessed_turn: int = field(default_factory=lambda: _GLOBAL_TURN_COUNTER)
+    ttl_turns: int = 10  # Default: expires after 10 turns
     tokens: int = field(init=False)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -143,8 +147,8 @@ class ContextItem:
         """Calculate token count on creation and set TTL based on source."""
         self.tokens = count_tokens(self.content)
         # Set TTL based on source if still at default
-        if self.ttl_seconds == 600.0 and self.source in DEFAULT_SOURCE_TTL:
-            self.ttl_seconds = DEFAULT_SOURCE_TTL[self.source]
+        if self.ttl_turns == 10 and self.source in DEFAULT_SOURCE_TTL_TURNS:
+            self.ttl_turns = DEFAULT_SOURCE_TTL_TURNS[self.source]
 
     def decay(self, factor: float = 0.95) -> None:
         """
@@ -169,31 +173,31 @@ class ContextItem:
         Args:
             relevance_boost: Amount to increase relevance (capped at 1.0).
         """
-        self.last_accessed = datetime.now()
+        self.last_accessed_turn = _GLOBAL_TURN_COUNTER
         self.relevance = min(1.0, self.relevance + relevance_boost)
 
     @property
     def is_expired(self) -> bool:
-        """Check if item has exceeded its TTL."""
-        if self.ttl_seconds == float('inf'):
+        """Check if item has exceeded its TTL in turns."""
+        if self.ttl_turns == -1:  # -1 means never expires
             return False
-        age = (datetime.now() - self.created_at).total_seconds()
-        return age > self.ttl_seconds
+        age_turns = _GLOBAL_TURN_COUNTER - self.created_at_turn
+        return age_turns > self.ttl_turns
 
     @property
-    def age_seconds(self) -> float:
-        """Time since creation in seconds."""
-        return (datetime.now() - self.created_at).total_seconds()
+    def age_turns(self) -> int:
+        """Turns since creation."""
+        return _GLOBAL_TURN_COUNTER - self.created_at_turn
 
     @property
-    def idle_seconds(self) -> float:
-        """Time since last access in seconds."""
-        return (datetime.now() - self.last_accessed).total_seconds()
+    def idle_turns(self) -> int:
+        """Turns since last access."""
+        return _GLOBAL_TURN_COUNTER - self.last_accessed_turn
 
     def __repr__(self) -> str:
         preview = self.content[:40].replace('\n', ' ')
         return (f"ContextItem(id={self.id}, ring={self.ring.name}, "
-                f"rel={self.relevance:.2f}, tok={self.tokens}, '{preview}...')")
+                f"rel={self.relevance:.2f}, tok={self.tokens}, age={self.age_turns}t, '{preview}...')")
 
 
 class QueueManager:
@@ -262,21 +266,21 @@ class QueueManager:
         Poll all queues, returning items sorted by weighted priority.
 
         Items from higher-weight sources appear first.
-        Within same weight, older items (FIFO) appear first.
+        Within same weight, older items (FIFO by turn) appear first.
 
         Returns:
             List of all queued items, sorted by priority.
         """
-        items: List[tuple[float, datetime, ContextItem]] = []
+        items: List[tuple[float, int, ContextItem]] = []
 
         for source, queue in self._queues.items():
             weight = self._weights.get(source, 0.5)
             while queue:
                 item = queue.popleft()
-                items.append((weight, item.created_at, item))
+                items.append((weight, item.created_at_turn, item))
                 self._total_polled += 1
 
-        # Sort by weight (descending), then timestamp (ascending for FIFO)
+        # Sort by weight (descending), then turn (ascending for FIFO)
         items.sort(key=lambda x: (-x[0], x[1]))
 
         return [item for _, _, item in items]
@@ -429,6 +433,34 @@ class RevolvingContext:
         self._total_evicted = 0
         self._assembly_count = 0
 
+    @property
+    def current_turn(self) -> int:
+        """Get current turn number."""
+        return _GLOBAL_TURN_COUNTER
+
+    def advance_turn(self) -> int:
+        """
+        Advance the conversation turn counter.
+
+        Call this once per conversation exchange (user message + response).
+        This drives TTL expiration and decay for all context items.
+
+        Returns:
+            The new turn number.
+        """
+        global _GLOBAL_TURN_COUNTER
+        _GLOBAL_TURN_COUNTER += 1
+
+        # Apply decay and rebalance on each turn
+        self.decay_all()
+        self._rebalance_rings()
+
+        # Enforce budget (evicts expired items first)
+        self._enforce_budget()
+
+        logger.debug(f"Advanced to turn {_GLOBAL_TURN_COUNTER}")
+        return _GLOBAL_TURN_COUNTER
+
     def set_core_identity(
         self,
         identity_text: str,
@@ -449,7 +481,7 @@ class RevolvingContext:
             source=ContextSource.IDENTITY,
             ring=ContextRing.CORE,
             relevance=1.0,
-            ttl_seconds=float('inf'),
+            ttl_turns=-1,  # Never expires
             metadata=metadata or {},
         )
 

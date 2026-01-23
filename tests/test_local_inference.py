@@ -145,7 +145,8 @@ class TestHybridInference:
         hybrid = HybridInference(local)
 
         assert hybrid.local is local
-        assert hybrid.complexity_threshold == 0.7
+        # Default threshold is 0.15 (low) - delegate most queries to Claude
+        assert hybrid.complexity_threshold == 0.15
         assert hybrid._local_count == 0
         assert hybrid._cloud_count == 0
 

@@ -29,11 +29,8 @@ def temp_data_dir():
 
 
 @pytest.fixture
-def engine_config(temp_data_dir, monkeypatch):
-    """Create test engine configuration with Eclissi mocked out."""
-    import luna.actors.matrix as matrix_module
-    monkeypatch.setattr(matrix_module, "ECLISSI_AVAILABLE", False)
-
+def engine_config(temp_data_dir):
+    """Create test engine configuration."""
     return EngineConfig(
         cognitive_interval=0.1,  # Fast ticks for tests
         reflective_interval=60,

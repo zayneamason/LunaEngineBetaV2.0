@@ -277,6 +277,11 @@ class AgentLoop:
         self.planner = Planner()
         self.router = QueryRouter()
 
+        # Tool registry with default tools
+        from luna.tools import ToolRegistry
+        self.tool_registry = ToolRegistry()
+        self._register_default_tools()
+
         # State
         self.working_context: Optional[WorkingContext] = None
         self.status = AgentStatus.IDLE
@@ -287,6 +292,16 @@ class AgentLoop:
 
         # Execution ID for tracking
         self._execution_id: Optional[str] = None
+
+    def _register_default_tools(self) -> None:
+        """Register default tools available to the agent."""
+        from luna.tools.file_tools import register_file_tools
+        from luna.tools.memory_tools import register_memory_tools
+
+        register_file_tools(self.tool_registry)
+        register_memory_tools(self.tool_registry)
+
+        logger.info(f"Registered {len(self.tool_registry.list_tools())} tools")
 
     def on_progress(self, callback: Callable[[str], None]) -> None:
         """Register a callback for progress updates."""
@@ -394,7 +409,15 @@ class AgentLoop:
         await self._emit_progress("Planning simple task...")
 
         # Determine what single step is needed
-        if routing.suggested_tools:
+        # Memory queries take priority - route to RETRIEVE action
+        if "memory_query" in routing.signals:
+            plan = self.planner.create_single_step_plan(
+                goal=goal,
+                step_type=PlanStepType.RETRIEVE,
+                description="Search memory for relevant information",
+                params={"query": goal},
+            )
+        elif routing.suggested_tools:
             tool = routing.suggested_tools[0]
             plan = self.planner.create_single_step_plan(
                 goal=goal,
@@ -402,11 +425,13 @@ class AgentLoop:
                 description=f"Execute {tool}",
                 tool=tool,
             )
-        elif "memory_query" in routing.signals or "memory" in goal.lower():
+        elif "memory" in goal.lower():
+            # Fallback memory detection
             plan = self.planner.create_single_step_plan(
                 goal=goal,
                 step_type=PlanStepType.RETRIEVE,
-                description="Retrieve relevant memories",
+                description="Search memory for relevant information",
+                params={"query": goal},
             )
         else:
             # Default to think-respond
@@ -644,10 +669,41 @@ class AgentLoop:
             )
 
     async def _execute_think(self, action: Action) -> str:
-        """Execute a THINK action."""
-        # In a full implementation, this would use the Director
-        # For now, just return the description
-        return f"Thinking: {action.description}"
+        """Execute a THINK action using local inference."""
+        if not self.orchestrator:
+            return f"Thought: {action.description}"
+
+        director = self.orchestrator.get_actor("director")
+
+        # THINK actions prefer local inference
+        if director and hasattr(director, 'local_available') and director.local_available:
+            try:
+                prompt = f"Think through this step: {action.description}"
+
+                if self.working_context and self.working_context.variables:
+                    context = "\n".join([
+                        f"- {k}: {str(v)[:100]}"
+                        for k, v in self.working_context.variables.items()
+                    ])
+                    prompt = f"Context:\n{context}\n\n{prompt}"
+
+                response = await director._generate_local_direct(
+                    prompt=prompt,
+                    max_tokens=500,
+                    temperature=0.3,
+                )
+
+                if self.working_context:
+                    thoughts = self.working_context.variables.get("thoughts", [])
+                    thoughts.append(response)
+                    self.working_context.variables["thoughts"] = thoughts
+
+                return f"Thought: {response}"
+
+            except Exception as e:
+                logger.debug(f"Local think failed: {e}")
+
+        return f"Thought: {action.description}"
 
     async def _execute_observe(self, action: Action) -> str:
         """Execute an OBSERVE action."""
@@ -655,35 +711,127 @@ class AgentLoop:
         return f"Observed: {action.description}"
 
     async def _execute_retrieve(self, action: Action) -> str:
-        """Execute a RETRIEVE action."""
-        # Would query the Matrix actor
-        if self.orchestrator:
-            matrix = self.orchestrator.get_actor("matrix")
-            if matrix and hasattr(matrix, "get_context"):
+        """Execute a RETRIEVE action by querying the Matrix."""
+        if not self.orchestrator:
+            return "Memory retrieval not available (no orchestrator)"
+
+        matrix = self.orchestrator.get_actor("matrix")
+        if not matrix:
+            return "Memory retrieval not available (no matrix actor)"
+
+        if not matrix.is_ready:
+            return "Memory not ready"
+
+        # Determine query from action params or working context
+        query = action.params.get("query") or self.working_context.goal
+
+        try:
+            if hasattr(matrix, "get_context"):
                 context = await matrix.get_context(
-                    self.working_context.goal,
+                    query=query,
                     max_tokens=1000,
                 )
-                return context
 
-        return "Memory retrieval not available"
+                if self.working_context and context:
+                    self.working_context.variables["memory_context"] = context
+
+                if context:
+                    preview = context[:500]
+                    if len(context) > 500:
+                        preview += f"... ({len(context)} chars)"
+                    return f"Retrieved context:\n{preview}"
+                else:
+                    return "No relevant memories found"
+
+            return "Memory retrieval method not available"
+
+        except Exception as e:
+            logger.error(f"Memory retrieval failed: {e}")
+            return f"Memory retrieval failed: {e}"
 
     async def _execute_tool(self, action: Action) -> str:
-        """Execute a TOOL action."""
-        # Would call the tool registry
-        # For now, just acknowledge
-        return f"Tool '{action.tool}' executed with params: {action.params}"
+        """Execute a tool action via the ToolRegistry."""
+        if not action.tool:
+            return "No tool specified"
+
+        # Check if tool exists
+        tool = self.tool_registry.get(action.tool)
+        if not tool:
+            available = ", ".join(self.tool_registry.list_tools())
+            return f"Tool '{action.tool}' not found. Available: {available}"
+
+        # Execute the tool
+        result = await self.tool_registry.execute(
+            action.tool,
+            action.params,
+            skip_confirmation=True,
+        )
+
+        if result.success:
+            if self.working_context:
+                var_name = f"tool_result_{action.tool}"
+                self.working_context.variables[var_name] = result.output
+
+            if isinstance(result.output, str):
+                output_str = result.output[:500]
+                if len(result.output) > 500:
+                    output_str += f"... ({len(result.output)} chars total)"
+            elif isinstance(result.output, dict):
+                output_str = str(result.output)
+            elif isinstance(result.output, list):
+                output_str = f"[{len(result.output)} items]"
+            else:
+                output_str = str(result.output)
+
+            return f"Tool '{action.tool}' succeeded: {output_str}"
+        else:
+            return f"Tool '{action.tool}' failed: {result.error}"
 
     async def _execute_delegate(self, action: Action) -> str:
-        """Execute a DELEGATE action."""
-        # Would call the Director for Claude delegation
-        if self.orchestrator:
-            director = self.orchestrator.get_actor("director")
-            if director:
-                # In a full implementation, we'd send a message and wait
-                pass
+        """Execute a DELEGATE action by calling Claude via Director."""
+        if not self.orchestrator:
+            return "Delegation not available (no orchestrator)"
 
-        return f"Delegated: {action.description}"
+        director = self.orchestrator.get_actor("director")
+        if not director:
+            return "Delegation not available (no director actor)"
+
+        task = action.description
+
+        context_parts = []
+        if self.working_context:
+            if self.working_context.variables.get("memory_context"):
+                context_parts.append(f"Relevant memories:\n{self.working_context.variables['memory_context']}")
+
+        context = "\n\n".join(context_parts) if context_parts else ""
+
+        if context:
+            prompt = f"Task: {task}\n\nContext:\n{context}\n\nPlease complete this task."
+        else:
+            prompt = f"Task: {task}\n\nPlease complete this task."
+
+        try:
+            if hasattr(director, 'generate'):
+                response = await director.generate(
+                    prompt=prompt,
+                    system="You are helping Luna complete a task. Be thorough but concise.",
+                    max_tokens=2000,
+                )
+
+                if self.working_context:
+                    self.working_context.variables["delegation_result"] = response
+
+                preview = response[:1000]
+                if len(response) > 1000:
+                    preview += f"... ({len(response)} chars)"
+
+                return f"Claude response:\n{preview}"
+            else:
+                return "Director doesn't support generate method"
+
+        except Exception as e:
+            logger.error(f"Delegation failed: {e}")
+            return f"Delegation failed: {e}"
 
     async def _execute_respond(self, action: Action) -> str:
         """Execute a RESPOND action."""
@@ -692,8 +840,42 @@ class AgentLoop:
 
     async def _generate_response(self, goal: str) -> str:
         """Generate a response using the Director."""
-        # In a full implementation, this would call the Director actor
-        # For now, return a placeholder
+        if not self.orchestrator:
+            logger.warning("No orchestrator available for response generation")
+            return "I'm unable to generate a response right now."
+
+        director = self.orchestrator.get_actor("director")
+        if not director:
+            logger.warning("Director actor not available")
+            return "I'm unable to generate a response right now."
+
+        context_parts = []
+
+        if self.working_context and self.working_context.observations:
+            obs_text = "\n".join([
+                f"- {obs.type}: {obs.content}"
+                for obs in self.working_context.observations[-5:]
+            ])
+            context_parts.append(f"Observations:\n{obs_text}")
+
+        if self.working_context and self.working_context.action_history:
+            history_text = "\n".join([
+                f"- {r.action.description}: {'✓' if r.success else '✗'} {r.output or r.error or ''}"
+                for r in self.working_context.action_history[-5:]
+            ])
+            context_parts.append(f"Actions taken:\n{history_text}")
+
+        context = "\n\n".join(context_parts) if context_parts else ""
+
+        if context:
+            prompt = f"Goal: {goal}\n\n{context}\n\nGenerate a helpful response."
+        else:
+            prompt = goal
+
+        if hasattr(director, 'generate'):
+            response = await director.generate(prompt)
+            return response
+
         return f"Response for: {goal}"
 
     async def _generate_final_response(self) -> str:

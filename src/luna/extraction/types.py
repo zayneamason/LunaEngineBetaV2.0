@@ -22,6 +22,10 @@ class ExtractionType(str, Enum):
     CONNECTION = "CONNECTION"   # Relationship between entities
     ACTION = "ACTION"           # Something done or to be done
     OUTCOME = "OUTCOME"         # Result of action or decision
+    QUESTION = "QUESTION"       # A question asked or to be answered
+    PREFERENCE = "PREFERENCE"   # User preference or opinion
+    OBSERVATION = "OBSERVATION" # Something noticed or observed
+    MEMORY = "MEMORY"           # A memory or recollection shared
 
 
 @dataclass

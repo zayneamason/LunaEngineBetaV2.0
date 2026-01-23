@@ -274,7 +274,7 @@ class TestScribeActor:
             ],
         })
 
-        result = scribe._parse_extraction_response(response, "test")
+        result, entity_updates = scribe._parse_extraction_response(response, "test")
 
         assert len(result.objects) == 1
         assert result.objects[0].content == "Alex lives in Berlin"
@@ -290,14 +290,14 @@ class TestScribeActor:
 }
 ```"""
 
-        result = scribe._parse_extraction_response(response, "test")
+        result, entity_updates = scribe._parse_extraction_response(response, "test")
 
         assert len(result.objects) == 1
         assert result.objects[0].content == "Test"
 
     def test_parse_extraction_response_invalid(self, scribe):
         """Test parsing invalid JSON returns empty result."""
-        result = scribe._parse_extraction_response("not valid json", "test")
+        result, entity_updates = scribe._parse_extraction_response("not valid json", "test")
 
         assert result.is_empty()
 
@@ -354,7 +354,7 @@ class TestScribeExtraction:
 
         chunks = [Chunk(content="We decided to use SQLite for the database.")]
 
-        result = await scribe_with_mock._extract_chunks(chunks)
+        result, entity_updates = await scribe_with_mock._extract_chunks(chunks)
 
         assert len(result.objects) == 1
         assert result.objects[0].type.value == "DECISION"

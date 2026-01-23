@@ -12,7 +12,7 @@ from .context import (
     RevolvingContext,
     count_tokens,
     DEFAULT_SOURCE_WEIGHTS,
-    DEFAULT_SOURCE_TTL,
+    DEFAULT_SOURCE_TTL_TURNS,
 )
 
 __all__ = [
@@ -35,5 +35,5 @@ __all__ = [
     "RevolvingContext",
     "count_tokens",
     "DEFAULT_SOURCE_WEIGHTS",
-    "DEFAULT_SOURCE_TTL",
+    "DEFAULT_SOURCE_TTL_TURNS",
 ]

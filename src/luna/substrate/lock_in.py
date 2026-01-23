@@ -75,6 +75,7 @@ LOCK_IN_MAX = 0.85
 @dataclass
 class LockInConfig:
     """Configuration for lock-in computation."""
+    enabled: bool = True  # When False, all memories return neutral lock-in (0.5)
     weight_retrieval: float = DEFAULT_WEIGHTS["retrieval"]
     weight_reinforcement: float = DEFAULT_WEIGHTS["reinforcement"]
     weight_network: float = DEFAULT_WEIGHTS["network"]
@@ -174,6 +175,7 @@ def compute_lock_in(
     Compute lock-in coefficient using sigmoid of activity.
 
     Returns value between LOCK_IN_MIN (0.15) and LOCK_IN_MAX (0.85).
+    When lock-in is disabled, returns 0.5 (neutral) for all memories.
 
     Args:
         retrieval_count: How often this memory was accessed
@@ -182,8 +184,14 @@ def compute_lock_in(
         locked_tag_sibling_count: Tag-sharing nodes with L >= 0.7
 
     Returns:
-        Lock-in coefficient (0.15 to 0.85)
+        Lock-in coefficient (0.15 to 0.85), or 0.5 if disabled
     """
+    config = get_config()
+
+    # If lock-in is disabled, return neutral value (all memories equal)
+    if not config.enabled:
+        return 0.5
+
     activity = compute_activity(
         retrieval_count=retrieval_count,
         reinforcement_count=reinforcement_count,

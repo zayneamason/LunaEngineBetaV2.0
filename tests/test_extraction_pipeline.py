@@ -102,12 +102,9 @@ def scribe_with_mock_client(mock_anthropic_response):
 
 
 @pytest.fixture
-async def matrix_actor(temp_db_path, monkeypatch):
-    """Create MatrixActor with basic Luna substrate (not Eclissi)."""
-    import luna.actors.matrix as matrix_module
-    monkeypatch.setattr(matrix_module, "ECLISSI_AVAILABLE", False)
-
-    matrix = MatrixActor(db_path=temp_db_path, use_eclissi=False)
+async def matrix_actor(temp_db_path):
+    """Create MatrixActor with Luna substrate."""
+    matrix = MatrixActor(db_path=temp_db_path)
     await matrix.initialize()
     yield matrix
     await matrix.stop()
@@ -128,7 +125,6 @@ class TestExtractionPipelineWire:
     async def test_full_extraction_pipeline(
         self,
         temp_db_path,
-        monkeypatch,
         mock_anthropic_response,
     ):
         """
@@ -139,10 +135,6 @@ class TestExtractionPipelineWire:
         4. Librarian files in Memory Matrix
         5. Verify node exists in database with correct attributes
         """
-        # Disable Eclissi to use basic substrate
-        import luna.actors.matrix as matrix_module
-        monkeypatch.setattr(matrix_module, "ECLISSI_AVAILABLE", False)
-
         # Setup: Create actors with shared memory
         db = MemoryDatabase(temp_db_path)
         await db.connect()
@@ -151,7 +143,7 @@ class TestExtractionPipelineWire:
             memory = MemoryMatrix(db)
 
             # Create Matrix actor (for shared state)
-            matrix_actor = MatrixActor(db_path=temp_db_path, use_eclissi=False)
+            matrix_actor = MatrixActor(db_path=temp_db_path)
             await matrix_actor.initialize()
 
             # Create Scribe with mocked Claude API
@@ -233,12 +225,8 @@ class TestExtractionPipelineWire:
     async def test_extraction_pipeline_with_edges(
         self,
         temp_db_path,
-        monkeypatch,
     ):
         """Test extraction with entity edges."""
-        import luna.actors.matrix as matrix_module
-        monkeypatch.setattr(matrix_module, "ECLISSI_AVAILABLE", False)
-
         # Mock response with edges
         mock_response_with_edges = MagicMock()
         mock_response_with_edges.content = [MagicMock(text=json.dumps({
@@ -270,10 +258,11 @@ class TestExtractionPipelineWire:
         await db.connect()
 
         try:
-            memory = MemoryMatrix(db)
-
-            matrix_actor = MatrixActor(db_path=temp_db_path, use_eclissi=False)
+            matrix_actor = MatrixActor(db_path=temp_db_path)
             await matrix_actor.initialize()
+
+            # Use the MatrixActor's internal memory matrix
+            memory = matrix_actor._matrix
 
             config = ExtractionConfig(backend="haiku", batch_size=1, min_content_length=10)
             scribe = ScribeActor(config=config)
@@ -400,11 +389,8 @@ class TestExtractionPipelineEdgeCases:
         assert scribe._extractions_count >= 1
 
     @pytest.mark.asyncio
-    async def test_malformed_api_response_graceful(self, temp_db_path, monkeypatch):
+    async def test_malformed_api_response_graceful(self, temp_db_path):
         """Test graceful handling of malformed API response."""
-        import luna.actors.matrix as matrix_module
-        monkeypatch.setattr(matrix_module, "ECLISSI_AVAILABLE", False)
-
         # Mock response with invalid JSON
         mock_response = MagicMock()
         mock_response.content = [MagicMock(text="not valid json {{{")]

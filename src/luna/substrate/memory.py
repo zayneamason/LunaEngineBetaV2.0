@@ -431,7 +431,7 @@ class MemoryMatrix:
         Get relevant context for a query.
 
         Retrieves memories that might be relevant to the query,
-        staying within the token budget. Uses simple text matching
+        staying within the token budget. Uses tokenized text matching
         and importance weighting.
 
         Args:
@@ -446,38 +446,198 @@ class MemoryMatrix:
         chars_per_token = 4
         max_chars = max_tokens * chars_per_token
 
-        search_pattern = f"%{query}%"
+        # Tokenize query into meaningful words (skip common stopwords)
+        stopwords = {
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "could",
+            "should", "may", "might", "must", "can", "to", "of", "in", "for",
+            "on", "with", "at", "by", "from", "as", "into", "through", "during",
+            "before", "after", "above", "below", "between", "under", "again",
+            "further", "then", "once", "here", "there", "when", "where", "why",
+            "how", "all", "each", "few", "more", "most", "other", "some", "such",
+            "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
+            "just", "and", "but", "if", "or", "because", "until", "while", "about",
+            "this", "that", "these", "those", "am", "it", "its", "my", "me", "you",
+            "your", "he", "him", "his", "she", "her", "we", "us", "our", "they",
+            "them", "their", "what", "which", "who", "whom", "i", "try", "remember",
+            "now", "tell", "know", "think", "want", "need", "like", "please", "hi",
+            "hello", "hey", "ok", "okay", "yes", "no", "luna",
+        }
 
-        # Build query based on filters
+        # Extract meaningful words (3+ chars, not stopwords)
+        words = [w.strip(".,!?;:'\"()[]{}") for w in query.lower().split()]
+        keywords = [w for w in words if len(w) >= 3 and w not in stopwords]
+
+        # Detect backward reference patterns (need recent conversation, not keyword search)
+        backward_patterns = [
+            "what were we", "what did we", "what was that",
+            "earlier", "before", "last time", "just now",
+            "you said", "you mentioned", "we discussed", "we talked",
+            "remember when", "do you remember", "recall",
+            "where were we", "continue", "going back"
+        ]
+        is_backward_ref = any(p in query.lower() for p in backward_patterns)
+
+        # For backward references OR no keywords: fetch recent conversation directly
+        if is_backward_ref or not keywords:
+            logger.info(f"Context: backward_ref={is_backward_ref}, keywords={keywords or 'empty'} → fetching conversation")
+
+            # Query conversation_turns table (NOT memory_nodes)
+            conversation_rows = await self.db.fetchall("""
+                SELECT id, session_id, role, content, tokens, created_at
+                FROM conversation_turns
+                ORDER BY created_at DESC
+                LIMIT 15
+            """)
+
+            if conversation_rows:
+                results = []
+                total_chars = 0
+                max_chars = max_tokens * 4  # ~4 chars per token
+
+                for row in conversation_rows:
+                    # Row is (id, session_id, role, content, tokens, created_at)
+                    row_id, _, role, content, _, created_at = row[0], row[1], row[2], row[3], row[4], row[5]
+                    content = content or ""
+                    if total_chars + len(content) > max_chars:
+                        break
+                    # Create MemoryNode for compatibility with return type
+                    node = MemoryNode(
+                        id=str(row_id),
+                        node_type="CONVERSATION",
+                        content=f"[{role}]: {content}",
+                        created_at=created_at,
+                    )
+                    results.append(node)
+                    total_chars += len(content)
+
+                logger.info(f"Context: returning {len(results)} conversation turns ({total_chars} chars)")
+                return results
+
+            # No conversation found - fall through to keyword search
+            logger.debug("Context: no conversation found, falling back to keyword search")
+
+        if not keywords:
+            # Fall back to original behavior if no keywords found
+            keywords = [query]
+
+        logger.debug(f"Context search keywords: {keywords}")
+
+        # Build search query with compound phrase boosting
+        # Strategy:
+        # 1. Try compound phrase first (e.g., "mars college" as one phrase)
+        # 2. Fall back to individual keywords
+        # 3. Prioritize smaller nodes (extracted facts) over huge conversation dumps
+        # 4. Sort by lock_in for relevance
+
+        # If we have 2+ keywords, also search for compound phrase
+        compound_phrase = " ".join(keywords) if len(keywords) >= 2 else None
+
         if node_types:
             placeholders = ", ".join("?" * len(node_types))
+            like_clauses = " OR ".join(
+                ["(content LIKE ? OR summary LIKE ?)" for _ in keywords]
+            )
+            params = []
+            for kw in keywords:
+                params.extend([f"%{kw}%", f"%{kw}%"])
+            params.extend(node_types)
+
             rows = await self.db.fetchall(
                 f"""
                 SELECT * FROM memory_nodes
-                WHERE (content LIKE ? OR summary LIKE ?)
+                WHERE ({like_clauses})
                   AND node_type IN ({placeholders})
-                ORDER BY importance DESC, access_count DESC, created_at DESC
+                ORDER BY lock_in DESC, length(content) ASC, created_at DESC
                 LIMIT 50
                 """,
-                (search_pattern, search_pattern, *node_types)
+                tuple(params)
             )
         else:
-            rows = await self.db.fetchall(
-                """
+            like_clauses = " OR ".join(
+                ["(content LIKE ? OR summary LIKE ?)" for _ in keywords]
+            )
+            params = []
+            for kw in keywords:
+                params.extend([f"%{kw}%", f"%{kw}%"])
+
+            # First, try to find exact compound phrase matches (these are most relevant)
+            if compound_phrase:
+                compound_rows = await self.db.fetchall(
+                    """
+                    SELECT * FROM memory_nodes
+                    WHERE (content LIKE ? OR summary LIKE ?)
+                    ORDER BY lock_in DESC, length(content) ASC, created_at DESC
+                    LIMIT 25
+                    """,
+                    (f"%{compound_phrase}%", f"%{compound_phrase}%")
+                )
+            else:
+                compound_rows = []
+
+            # Then get individual keyword matches
+            keyword_rows = await self.db.fetchall(
+                f"""
                 SELECT * FROM memory_nodes
-                WHERE content LIKE ? OR summary LIKE ?
-                ORDER BY importance DESC, access_count DESC, created_at DESC
+                WHERE {like_clauses}
+                ORDER BY lock_in DESC, length(content) ASC, created_at DESC
                 LIMIT 50
                 """,
-                (search_pattern, search_pattern)
+                tuple(params)
             )
 
-        # Collect nodes within token budget
+            # Combine: compound matches first (deduplicated), then keyword matches
+            seen_ids = set()
+            rows = []
+            for row in compound_rows:
+                if row[0] not in seen_ids:
+                    seen_ids.add(row[0])
+                    rows.append(row)
+            for row in keyword_rows:
+                if row[0] not in seen_ids:
+                    seen_ids.add(row[0])
+                    rows.append(row)
+                if len(rows) >= 50:
+                    break
+
+        # Collect nodes within token budget, filtering out confusing identity nodes
         results = []
         total_chars = 0
 
         for row in rows:
             node = MemoryNode.from_row(row)
+
+            # Filter out potentially confusing identity nodes about other people
+            # This prevents Luna from confusing the current user (Ahab/Zayne) with others
+            content_lower = node.content.lower()
+            if "my name is" in content_lower and "ahab" not in content_lower and "zayne" not in content_lower:
+                logger.debug(f"Filtering out potentially confusing identity node: {node.id}")
+                continue
+
+            # Filter out raw conversation dumps (system prompts embedded in content)
+            # These are not useful as memory context - they're just logs
+            if "# luna's foundation" in content_lower or "# luna's core identity" in content_lower:
+                logger.debug(f"Filtering out system prompt dump: {node.id}")
+                continue
+
+            # Filter out development notes (start with ### markdown headers)
+            # These are technical specs, not Luna's actual knowledge
+            if node.content.strip().startswith("###") or node.content.strip().startswith("## "):
+                logger.debug(f"Filtering out dev note: {node.id}")
+                continue
+
+            # Filter out raw "User (desktop):" conversation logs
+            # These contain system prompts and aren't useful knowledge
+            if node.content.strip().startswith("User (desktop):") or node.content.strip().startswith("User (mobile):"):
+                logger.debug(f"Filtering out raw conversation log: {node.id}")
+                continue
+
+            # Skip very long nodes (likely raw conversation dumps, not extracted facts)
+            # Prefer concise, extracted knowledge over conversation transcripts
+            if len(node.content) > 5000:
+                logger.debug(f"Skipping oversized node ({len(node.content)} chars): {node.id}")
+                continue
+
             node_chars = len(node.content) + (len(node.summary) if node.summary else 0)
 
             if total_chars + node_chars > max_chars:

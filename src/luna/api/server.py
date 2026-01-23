@@ -74,6 +74,7 @@ class StatusResponse(BaseModel):
     messages_generated: int
     actors: list[str]
     buffer_size: int
+    current_turn: int = 0  # Conversation turn counter (for context TTL)
     context: Optional[dict] = None  # Revolving context stats
     agentic: Optional[AgenticStats] = None  # Agentic processing stats
 
@@ -254,6 +255,7 @@ async def get_status():
         messages_generated=status["messages_generated"],
         actors=status["actors"],
         buffer_size=status["buffer"]["size"],
+        current_turn=status.get("current_turn", 0),
         context=status.get("context"),
         agentic=agentic_stats,
     )
@@ -268,6 +270,180 @@ async def health_check():
     return {
         "status": "healthy",
         "state": _engine.state.name,
+    }
+
+
+@app.post("/api/system/relaunch")
+async def relaunch_system(background_tasks: BackgroundTasks):
+    """
+    Trigger a system relaunch.
+
+    Executes the relaunch script in the background and returns immediately.
+    The server will restart, so the client should expect a brief disconnection.
+    """
+    import subprocess
+    import os
+    from pathlib import Path
+
+    # Find project root by looking for scripts directory
+    # server.py is at: src/luna/api/server.py (4 levels deep)
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent.parent  # Go up 4 levels
+    script_path = project_root / "scripts" / "relaunch.sh"
+
+    logger.info(f"[RELAUNCH] Looking for script at: {script_path}")
+
+    if not script_path.exists():
+        logger.error(f"[RELAUNCH] Script not found at: {script_path}")
+        raise HTTPException(status_code=404, detail=f"Relaunch script not found at {script_path}")
+
+    def run_relaunch():
+        """Run the relaunch script in background."""
+        try:
+            subprocess.Popen(
+                ["/bin/bash", str(script_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                cwd=str(project_root),
+            )
+        except Exception as e:
+            logger.error(f"Failed to execute relaunch script: {e}")
+
+    background_tasks.add_task(run_relaunch)
+
+    return {
+        "status": "restarting",
+        "message": "Relaunch initiated. Server will restart shortly.",
+    }
+
+
+# ===========================================================================
+# Ring Buffer API — Conversation memory controls
+# ===========================================================================
+
+class RingBufferStatus(BaseModel):
+    """Ring buffer status response."""
+    current_turns: int
+    max_turns: int
+    topics: list[str]
+    recent_messages: list[dict]
+
+
+class RingBufferConfig(BaseModel):
+    """Ring buffer configuration request."""
+    max_turns: int = Field(..., ge=2, le=20, description="Max turns (2-20)")
+
+
+@app.get("/api/ring/status", response_model=RingBufferStatus)
+async def get_ring_status():
+    """
+    Get current ring buffer status.
+
+    Returns the number of turns, max capacity, detected topics,
+    and recent messages in the conversation ring buffer.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    director = _engine.get_actor("director")
+    if not director:
+        raise HTTPException(status_code=503, detail="Director not available")
+
+    # Access the active ring buffer
+    ring = getattr(director, "_active_ring", None)
+    if ring is None:
+        ring = getattr(director, "_standalone_ring", None)
+
+    if ring is None:
+        return RingBufferStatus(
+            current_turns=0,
+            max_turns=6,
+            topics=[],
+            recent_messages=[],
+        )
+
+    # Get topics and recent messages
+    topics = list(ring.get_mentioned_topics()) if hasattr(ring, "get_mentioned_topics") else []
+    messages = ring.get_as_dicts() if hasattr(ring, "get_as_dicts") else []
+
+    return RingBufferStatus(
+        current_turns=len(ring),
+        max_turns=ring._max_turns,
+        topics=topics[:10],  # Limit to 10 topics
+        recent_messages=messages[-6:],  # Last 6 messages
+    )
+
+
+@app.post("/api/ring/config")
+async def configure_ring(config: RingBufferConfig):
+    """
+    Configure the ring buffer size.
+
+    Changes take effect immediately. Existing history is preserved
+    up to the new limit (oldest evicted if shrinking).
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    director = _engine.get_actor("director")
+    if not director:
+        raise HTTPException(status_code=503, detail="Director not available")
+
+    # Get current ring
+    ring = getattr(director, "_standalone_ring", None)
+    if ring is None:
+        raise HTTPException(status_code=503, detail="Ring buffer not available")
+
+    # Preserve existing messages
+    old_messages = list(ring._buffer)
+    old_max = ring._max_turns
+
+    # Create new buffer with new size
+    from collections import deque
+    ring._buffer = deque(maxlen=config.max_turns)
+    ring._max_turns = config.max_turns
+
+    # Re-add old messages (newest will be kept if shrinking)
+    for msg in old_messages:
+        ring._buffer.append(msg)
+
+    logger.info(f"[RING-API] Resized from {old_max} to {config.max_turns} turns")
+
+    return {
+        "status": "configured",
+        "previous_max_turns": old_max,
+        "new_max_turns": config.max_turns,
+        "current_turns": len(ring),
+    }
+
+
+@app.post("/api/ring/clear")
+async def clear_ring():
+    """
+    Clear the ring buffer.
+
+    Resets conversation memory. Use sparingly — typically for
+    starting a fresh conversation or after significant context shifts.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    director = _engine.get_actor("director")
+    if not director:
+        raise HTTPException(status_code=503, detail="Director not available")
+
+    ring = getattr(director, "_standalone_ring", None)
+    if ring is None:
+        raise HTTPException(status_code=503, detail="Ring buffer not available")
+
+    old_size = len(ring)
+    ring.clear()
+    logger.info(f"[RING-API] Cleared {old_size} turns")
+
+    return {
+        "status": "cleared",
+        "cleared_turns": old_size,
     }
 
 
@@ -287,64 +463,63 @@ async def get_history(limit: int = 20):
 
     # Query database directly for conversation-tagged turns
     try:
-        logger.debug(f"History: matrix ready={matrix.is_ready}, eclissi={matrix._eclissi_matrix is not None}")
-        if matrix._eclissi_matrix:
-            cursor = matrix._eclissi_matrix.conn.execute("""
-                SELECT content, timestamp FROM memory_nodes
-                WHERE tags LIKE '%"conversation"%'
-                ORDER BY timestamp DESC
-                LIMIT ?
-            """, (limit,))
-            rows = cursor.fetchall()
-            logger.debug(f"History: found {len(rows)} conversation turns")
-
-            messages = []
-            for row in rows:
-                # Row might be tuple or dict depending on connection settings
-                if isinstance(row, tuple):
-                    content = row[0]
-                    timestamp = row[1]
-                else:
-                    content = row['content']
-                    timestamp = row['timestamp']
-                # Parse role from content prefix - multiple formats exist
-                if content.startswith("User (desktop):") or content.startswith("User:"):
-                    # Remove prefix to get actual message
-                    if content.startswith("User (desktop):"):
-                        msg_content = content[15:].strip()
-                    else:
-                        msg_content = content[5:].strip()
-                    messages.append(HistoryMessage(
-                        role="user",
-                        content=msg_content,
-                        timestamp=timestamp
-                    ))
-                elif content.startswith("Luna:"):
-                    messages.append(HistoryMessage(
-                        role="assistant",
-                        content=content[5:].strip(),
-                        timestamp=timestamp
-                    ))
-                elif content.startswith("[user]"):
-                    messages.append(HistoryMessage(
-                        role="user",
-                        content=content[7:].strip(),
-                        timestamp=timestamp
-                    ))
-                elif content.startswith("[assistant]"):
-                    messages.append(HistoryMessage(
-                        role="assistant",
-                        content=content[12:].strip(),
-                        timestamp=timestamp
-                    ))
-
-            # Reverse to get chronological order
-            messages.reverse()
-
-            return HistoryResponse(messages=messages, total=len(messages))
-        else:
-            logger.warning("History: No Eclissi matrix available")
+        memory = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+        if not memory or not hasattr(memory, "db"):
+            logger.warning("History: No memory matrix available")
             return HistoryResponse(messages=[], total=0)
+
+        logger.debug(f"History: matrix ready={matrix.is_ready}")
+
+        # Query conversation nodes from Luna's native substrate
+        rows = await memory.db.fetchall("""
+            SELECT content, created_at FROM memory_nodes
+            WHERE tags LIKE '%"conversation"%'
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+
+        logger.debug(f"History: found {len(rows)} conversation turns")
+
+        messages = []
+        for row in rows:
+            content = row[0]
+            timestamp = row[1]
+
+            # Parse role from content prefix - multiple formats exist
+            if content.startswith("User (desktop):") or content.startswith("User:"):
+                # Remove prefix to get actual message
+                if content.startswith("User (desktop):"):
+                    msg_content = content[15:].strip()
+                else:
+                    msg_content = content[5:].strip()
+                messages.append(HistoryMessage(
+                    role="user",
+                    content=msg_content,
+                    timestamp=timestamp
+                ))
+            elif content.startswith("Luna:"):
+                messages.append(HistoryMessage(
+                    role="assistant",
+                    content=content[5:].strip(),
+                    timestamp=timestamp
+                ))
+            elif content.startswith("[user]"):
+                messages.append(HistoryMessage(
+                    role="user",
+                    content=content[7:].strip(),
+                    timestamp=timestamp
+                ))
+            elif content.startswith("[assistant]"):
+                messages.append(HistoryMessage(
+                    role="assistant",
+                    content=content[12:].strip(),
+                    timestamp=timestamp
+                ))
+
+        # Reverse to get chronological order
+        messages.reverse()
+
+        return HistoryResponse(messages=messages, total=len(messages))
     except Exception as e:
         import traceback
         logger.error(f"Failed to get history: {e}\n{traceback.format_exc()}")
@@ -476,6 +651,171 @@ async def stream_message(request: MessageRequest):
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
+
+
+@app.post("/persona/stream")
+async def persona_stream(request: MessageRequest):
+    """
+    Stream Luna's response with context-first SSE format.
+
+    This endpoint sends context (memory + state) BEFORE streaming tokens,
+    allowing the frontend to prepare UI with relevant information.
+
+    SSE data format (no named events, typed JSON):
+    - {"type": "context", "memory": [...], "state": {...}}
+    - {"type": "token", "text": "chunk"}
+    - {"type": "done", "response": "full text", "metadata": {...}}
+    - {"type": "error", "message": "..."}
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    async def generate_sse() -> AsyncGenerator[str, None]:
+        """Generate context-first SSE stream."""
+        token_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        response_complete = asyncio.Event()
+        full_response: list[str] = []
+        final_metadata: dict = {}
+
+        def on_token(text: str) -> None:
+            """Callback for each token."""
+            full_response.append(text)
+            token_queue.put_nowait(text)
+
+        async def on_complete(text: str, data: dict) -> None:
+            """Callback when generation completes."""
+            nonlocal final_metadata
+            final_metadata = data
+            token_queue.put_nowait(None)  # Signal end
+            response_complete.set()
+
+        # Get director
+        director = _engine.get_actor("director")
+        if not director:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Director not available'})}\n\n"
+            return
+
+        # Get matrix for memory context
+        matrix = _engine.get_actor("matrix")
+        memory_items = []
+        memory_context = ""
+
+        try:
+            # --- PHASE 1: Send context first ---
+            if matrix and matrix.is_ready:
+                # Get memory context for the query
+                memory_context = await matrix.get_context(request.message, max_tokens=1500)
+
+                # Get recent memories for frontend display
+                recent = await matrix.get_recent_turns(limit=5)
+                memory_items = [
+                    {
+                        "id": str(m.id),
+                        "content": (m.content or "")[:200],  # Truncate for frontend
+                        "type": getattr(m, "node_type", "unknown"),
+                        "source": getattr(m, "source", ""),
+                    }
+                    for m in recent
+                ]
+
+                # Store user turn
+                await matrix.store_turn(
+                    session_id=_engine.session_id,
+                    role="user",
+                    content=request.message,
+                )
+
+            # Build state summary
+            state_summary = {
+                "session_id": getattr(_engine, "session_id", "unknown"),
+                "is_processing": True,
+                "state": str(getattr(_engine, "_state", "unknown")),
+                "model": getattr(director, "_current_model", "unknown"),
+            }
+
+            # Send context event FIRST
+            context_event = {
+                "type": "context",
+                "memory": memory_items,
+                "state": state_summary,
+            }
+            yield f"data: {json.dumps(context_event)}\n\n"
+
+            # Emit progress for Thought Stream
+            await _engine._emit_progress(f"[DIRECT] {request.message[:40]}...")
+
+            # Update agentic metrics so EngineStatus shows activity
+            _engine.metrics.agentic_tasks_started += 1
+            _engine.metrics.direct_responses += 1
+
+            # --- PHASE 2: Stream tokens ---
+            director.on_stream(on_token)
+            _engine.on_response(on_complete)
+
+            # Send generation request
+            msg = Message(
+                type="generate_stream",
+                payload={
+                    "user_message": request.message,
+                    "system_prompt": _engine._build_system_prompt(memory_context),
+                },
+            )
+            await director.mailbox.put(msg)
+
+            # Stream tokens as they arrive
+            while True:
+                try:
+                    token = await asyncio.wait_for(
+                        token_queue.get(),
+                        timeout=request.timeout
+                    )
+
+                    if token is None:
+                        break
+
+                    yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
+
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Timeout waiting for tokens'})}\n\n"
+                    break
+
+            # --- PHASE 3: Send done event ---
+            # Emit completion for Thought Stream
+            tokens = final_metadata.get("output_tokens", len("".join(full_response)) // 4)
+            route = "local" if final_metadata.get("local") else "delegated"
+            await _engine._emit_progress(f"[OK] {route}: {tokens} tokens")
+
+            done_event = {
+                "type": "done",
+                "response": "".join(full_response),
+                "metadata": final_metadata,
+            }
+            yield f"data: {json.dumps(done_event)}\n\n"
+
+            # Update completion metrics
+            _engine.metrics.agentic_tasks_completed += 1
+            _engine.metrics.messages_generated += 1
+
+        except Exception as e:
+            logger.error(f"Persona stream error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        finally:
+            # Cleanup callbacks
+            if director:
+                director.remove_stream_callback(on_token)
+            if on_complete in _engine._on_response_callbacks:
+                _engine._on_response_callbacks.remove(on_complete)
+
+    return StreamingResponse(
+        generate_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -620,6 +960,10 @@ class NodeCreateRequest(BaseModel):
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+from datetime import datetime as dt_type
+from typing import Union, Any
+from pydantic import field_validator
+
 class NodeResponse(BaseModel):
     """Response with memory node details."""
     id: str
@@ -633,6 +977,16 @@ class NodeResponse(BaseModel):
     lock_in: float
     lock_in_state: str
     created_at: str
+
+    @field_validator('created_at', mode='before')
+    @classmethod
+    def coerce_datetime(cls, v: Any) -> str:
+        """Convert datetime to ISO string if needed."""
+        if v is None:
+            return ""
+        if isinstance(v, dt_type):
+            return v.isoformat()
+        return str(v)
 
 
 class ExtractionRequest(BaseModel):
@@ -715,7 +1069,7 @@ async def create_node(request: NodeCreateRequest):
             reinforcement_count=node.reinforcement_count,
             lock_in=node.lock_in,
             lock_in_state=node.lock_in_state,
-            created_at=node.created_at,
+            created_at=node.created_at.isoformat() if hasattr(node.created_at, 'isoformat') else str(node.created_at),
         )
     except Exception as e:
         logger.error(f"Failed to create node: {e}")
@@ -747,7 +1101,7 @@ async def get_node(node_id: str):
         reinforcement_count=node.reinforcement_count,
         lock_in=node.lock_in,
         lock_in_state=node.lock_in_state,
-        created_at=node.created_at,
+        created_at=node.created_at.isoformat() if hasattr(node.created_at, 'isoformat') else str(node.created_at),
     )
 
 
@@ -772,7 +1126,8 @@ async def list_nodes(
 
     try:
         # Get the underlying MemoryMatrix
-        memory = matrix._matrix or matrix._memory
+        # Get the underlying MemoryMatrix
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
         if not memory:
             raise HTTPException(status_code=503, detail="Memory matrix not initialized")
 
@@ -797,7 +1152,7 @@ async def list_nodes(
                 reinforcement_count=n.reinforcement_count,
                 lock_in=n.lock_in,
                 lock_in_state=n.lock_in_state,
-                created_at=n.created_at,
+                created_at=n.created_at.isoformat() if hasattr(n.created_at, 'isoformat') else str(n.created_at),
             )
             for n in nodes
         ]
@@ -821,7 +1176,8 @@ async def access_node(node_id: str):
         raise HTTPException(status_code=503, detail="Matrix actor not available")
 
     try:
-        memory = matrix._matrix or matrix._memory
+        # Get the underlying MemoryMatrix
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
         if not memory:
             raise HTTPException(status_code=503, detail="Memory matrix not initialized")
 
@@ -856,7 +1212,8 @@ async def reinforce_node(node_id: str):
         raise HTTPException(status_code=503, detail="Matrix actor not available")
 
     try:
-        memory = matrix._matrix or matrix._memory
+        # Get the underlying MemoryMatrix
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
         if not memory:
             raise HTTPException(status_code=503, detail="Memory matrix not initialized")
 
@@ -886,10 +1243,12 @@ async def get_memory_stats():
         raise HTTPException(status_code=503, detail="Matrix actor not available")
 
     try:
-        memory = matrix._matrix or matrix._memory
+        # Get the underlying MemoryMatrix
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
         if not memory:
             raise HTTPException(status_code=503, detail="Memory matrix not initialized")
 
+        # Get stats from Luna's native substrate
         stats = await memory.get_stats()
 
         return MemoryStatsResponse(
@@ -1015,6 +1374,1320 @@ async def get_extraction_stats():
         stats["librarian"] = librarian.get_stats()
 
     return stats
+
+
+@app.get("/extraction/history")
+async def get_extraction_history(limit: int = 20):
+    """
+    Get recent extraction history from Scribe.
+
+    Shows the actual extracted objects and edges from recent conversations.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    scribe = _engine.get_actor("scribe")
+    if not scribe:
+        raise HTTPException(status_code=503, detail="Scribe actor not available")
+
+    history = scribe.get_extraction_history()
+
+    # Return most recent (up to limit)
+    return {
+        "extractions": history[-limit:] if len(history) > limit else history,
+        "total": len(history),
+    }
+
+
+# =============================================================================
+# DEBUG ENDPOINTS - Context Visibility
+# =============================================================================
+
+class ContextItemResponse(BaseModel):
+    """A single item in Luna's context window."""
+    id: str
+    content: str
+    source: str  # IDENTITY, CONVERSATION, MEMORY, etc.
+    ring: str  # CORE, INNER, MIDDLE, OUTER
+    relevance: float
+    tokens: int
+    age_turns: int
+    ttl_turns: int
+    is_expired: bool
+
+
+class ContextDebugResponse(BaseModel):
+    """Debug view of Luna's current context window."""
+    current_turn: int
+    token_budget: int
+    total_tokens: int
+    items: list[ContextItemResponse]
+    keywords: list[str]  # Keywords Luna is currently aware of
+    ring_stats: dict
+
+
+class ConversationCacheItem(BaseModel):
+    """A single item in Luna's conversation cache."""
+    role: str  # user or assistant
+    content: str
+    turn: int
+    relevance: float
+    age_turns: int
+
+
+class ConversationCacheResponse(BaseModel):
+    """Luna's conversation cache - what she remembers of the conversation."""
+    current_turn: int
+    max_turns: int  # TTL for conversation items
+    items: list[ConversationCacheItem]
+    total_tokens: int
+
+
+@app.get("/debug/conversation-cache", response_model=ConversationCacheResponse)
+async def get_conversation_cache():
+    """
+    Get Luna's conversation cache - the conversation history she's aware of.
+
+    This shows the CONVERSATION items in Luna's RevolvingContext, which is
+    what she actually "remembers" of the conversation when generating responses.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    context = _engine.context
+    from luna.core.context import ContextSource
+
+    # Collect conversation items from all rings
+    items = []
+    total_tokens = 0
+
+    for ring in context.rings:
+        for item in context.rings[ring]:
+            if item.source == ContextSource.CONVERSATION:
+                # Parse role from content
+                content = item.content
+                if content.startswith("User:") or content.startswith("User (desktop):"):
+                    role = "user"
+                    # Strip the prefix
+                    if content.startswith("User (desktop):"):
+                        content = content[15:].strip()
+                    else:
+                        content = content[5:].strip()
+                elif content.startswith("Luna:"):
+                    role = "assistant"
+                    content = content[5:].strip()
+                else:
+                    role = "unknown"
+
+                items.append(ConversationCacheItem(
+                    role=role,
+                    content=content,
+                    turn=item.created_at_turn,
+                    relevance=round(item.relevance, 3),
+                    age_turns=item.age_turns,
+                ))
+                total_tokens += item.tokens
+
+    # Sort by turn (oldest first)
+    items.sort(key=lambda x: x.turn)
+
+    return ConversationCacheResponse(
+        current_turn=context.current_turn,
+        max_turns=20,  # Default TTL for conversation
+        items=items,
+        total_tokens=total_tokens,
+    )
+
+
+# =============================================================================
+# PERSONALITY MONITOR ENDPOINT
+# =============================================================================
+
+
+class PersonalityPatchResponse(BaseModel):
+    """A single personality patch."""
+    patch_id: str
+    topic: str
+    subtopic: str
+    content: str
+    before_state: Optional[str] = None
+    after_state: str
+    trigger: str
+    confidence: float
+    lock_in: float
+    lock_in_state: str
+    reinforcement_count: int
+    active: bool
+    created_at: str
+    last_reinforced: str
+
+
+class PersonalityStatsResponse(BaseModel):
+    """Statistics about personality patches."""
+    total_patches: int
+    active_patches: int
+    average_lock_in: float
+    patches_by_topic: dict
+    patches_by_lock_in_state: dict
+
+
+class MaintenanceStatsResponse(BaseModel):
+    """Lifecycle maintenance statistics."""
+    last_maintenance_run: Optional[str]
+    total_decay_operations: int
+    total_patches_decayed: int
+    total_consolidation_operations: int
+    total_patches_consolidated: int
+    total_cleanup_operations: int
+    total_patches_cleaned: int
+
+
+class SessionStatsResponse(BaseModel):
+    """Session reflection statistics."""
+    messages_tracked: int
+    last_reflection: Optional[str] = None
+    patches_created_this_session: int
+
+
+class PersonalityDebugResponse(BaseModel):
+    """Full personality debug response."""
+    stats: PersonalityStatsResponse
+    patches: list[PersonalityPatchResponse]
+    maintenance: MaintenanceStatsResponse
+    session: SessionStatsResponse
+    mood_state: str
+    bootstrap_status: str
+
+
+@app.get("/debug/personality", response_model=PersonalityDebugResponse)
+async def get_personality_debug():
+    """
+    Get Luna's personality system state for debugging.
+
+    Shows all personality patches, statistics, maintenance status,
+    and session reflection data.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    director = _engine.get_actor("director")
+    if not director:
+        raise HTTPException(status_code=503, detail="Director actor not available")
+
+    # Get entity context and patch manager
+    entity_context = getattr(director, "_entity_context", None)
+    patch_manager = getattr(director, "_patch_manager", None)
+    lifecycle_manager = getattr(director, "_lifecycle_manager", None)
+    reflection_loop = getattr(director, "_reflection_loop", None)
+
+    # Default values
+    patches = []
+    stats = {
+        "total_patches": 0,
+        "active_patches": 0,
+        "average_lock_in": 0.0,
+        "patches_by_topic": {},
+    }
+    patches_by_lock_in_state = {"drifting": 0, "fluid": 0, "settled": 0}
+    maintenance_stats = {
+        "last_maintenance_run": None,
+        "total_decay_operations": 0,
+        "total_patches_decayed": 0,
+        "total_consolidation_operations": 0,
+        "total_patches_consolidated": 0,
+        "total_cleanup_operations": 0,
+        "total_patches_cleaned": 0,
+    }
+    session_stats = {
+        "messages_tracked": 0,
+        "last_reflection": None,
+        "patches_created_this_session": 0,
+    }
+    mood_state = "neutral"
+    bootstrap_status = "unknown"
+
+    # Get patches if patch_manager available
+    if patch_manager:
+        try:
+            stats = await patch_manager.get_stats()
+            all_patches = await patch_manager.get_all_active_patches(limit=100)
+
+            for p in all_patches:
+                patches.append(PersonalityPatchResponse(
+                    patch_id=p.patch_id,
+                    topic=p.topic.value if hasattr(p.topic, 'value') else str(p.topic),
+                    subtopic=p.subtopic,
+                    content=p.content,
+                    before_state=p.before_state,
+                    after_state=p.after_state,
+                    trigger=p.trigger.value if hasattr(p.trigger, 'value') else str(p.trigger),
+                    confidence=p.confidence,
+                    lock_in=p.lock_in,
+                    lock_in_state="settled" if p.lock_in >= 0.7 else "fluid" if p.lock_in >= 0.4 else "drifting",
+                    reinforcement_count=p.reinforcement_count,
+                    active=p.active,
+                    created_at=p.created_at.isoformat() if p.created_at else "",
+                    last_reinforced=p.last_reinforced.isoformat() if p.last_reinforced else "",
+                ))
+
+                # Count by lock_in state
+                if p.lock_in >= 0.7:
+                    patches_by_lock_in_state["settled"] += 1
+                elif p.lock_in >= 0.4:
+                    patches_by_lock_in_state["fluid"] += 1
+                else:
+                    patches_by_lock_in_state["drifting"] += 1
+
+            # Check bootstrap status
+            if stats.get("total_patches", 0) > 0:
+                bootstrap_status = "bootstrapped"
+            else:
+                bootstrap_status = "needs_bootstrap"
+
+        except Exception as e:
+            logger.error(f"Failed to get personality patches: {e}")
+
+    # Get lifecycle stats
+    if lifecycle_manager:
+        try:
+            lm_stats = lifecycle_manager.get_maintenance_stats()
+            maintenance_stats = {
+                "last_maintenance_run": lm_stats.get("last_maintenance_run"),
+                "total_decay_operations": lm_stats.get("total_decay_operations", 0),
+                "total_patches_decayed": lm_stats.get("total_patches_decayed", 0),
+                "total_consolidation_operations": lm_stats.get("total_consolidation_operations", 0),
+                "total_patches_consolidated": lm_stats.get("total_patches_consolidated", 0),
+                "total_cleanup_operations": lm_stats.get("total_cleanup_operations", 0),
+                "total_patches_cleaned": lm_stats.get("total_patches_cleaned", 0),
+            }
+        except Exception as e:
+            logger.debug(f"Could not get lifecycle stats: {e}")
+
+    # Get session stats
+    if director:
+        try:
+            director_session_stats = director.get_session_stats() if hasattr(director, 'get_session_stats') else {}
+            session_stats = {
+                "messages_tracked": director_session_stats.get("messages_tracked", 0),
+                "last_reflection": director_session_stats.get("last_reflection"),
+                "patches_created_this_session": director_session_stats.get("patches_created_this_session", 0),
+            }
+        except Exception as e:
+            logger.debug(f"Could not get session stats: {e}")
+
+    # Get mood from consciousness
+    if _engine.consciousness:
+        mood_state = _engine.consciousness.get_summary().get("mood", "neutral")
+
+    return PersonalityDebugResponse(
+        stats=PersonalityStatsResponse(
+            total_patches=stats.get("total_patches", 0),
+            active_patches=stats.get("active_patches", 0),
+            average_lock_in=stats.get("average_lock_in", 0.0),
+            patches_by_topic=stats.get("patches_by_topic", {}),
+            patches_by_lock_in_state=patches_by_lock_in_state,
+        ),
+        patches=patches,
+        maintenance=MaintenanceStatsResponse(**maintenance_stats),
+        session=SessionStatsResponse(**session_stats),
+        mood_state=mood_state,
+        bootstrap_status=bootstrap_status,
+    )
+
+
+@app.get("/debug/context", response_model=ContextDebugResponse)
+async def get_debug_context():
+    """
+    Get Luna's current context window for debugging.
+
+    Shows everything Luna is currently "aware of" - what goes into her context
+    when generating a response. Items are shown with their ring placement,
+    relevance scores, and expiration info.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    context = _engine.context
+
+    # Collect all items from all rings
+    items = []
+    all_content = []
+
+    for ring in context.rings:
+        for item in context.rings[ring]:
+            items.append(ContextItemResponse(
+                id=item.id,
+                content=item.content,
+                source=item.source.name,
+                ring=item.ring.name,
+                relevance=round(item.relevance, 3),
+                tokens=item.tokens,
+                age_turns=item.age_turns,
+                ttl_turns=item.ttl_turns,
+                is_expired=item.is_expired,
+            ))
+            all_content.append(item.content.lower())
+
+    # Extract keywords Luna is aware of (simple word frequency)
+    from collections import Counter
+    import re
+
+    stopwords = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+                 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+                 'would', 'could', 'should', 'may', 'might', 'must', 'shall',
+                 'can', 'need', 'to', 'of', 'in', 'for', 'on', 'with', 'at',
+                 'by', 'from', 'as', 'into', 'through', 'during', 'before',
+                 'after', 'above', 'below', 'between', 'under', 'again',
+                 'further', 'then', 'once', 'here', 'there', 'when', 'where',
+                 'why', 'how', 'all', 'each', 'few', 'more', 'most', 'other',
+                 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same',
+                 'so', 'than', 'too', 'very', 's', 't', 'just', 'don', 'now',
+                 'and', 'but', 'if', 'or', 'because', 'until', 'while', 'this',
+                 'that', 'these', 'those', 'am', 'i', 'you', 'he', 'she', 'it',
+                 'we', 'they', 'what', 'which', 'who', 'whom', 'my', 'your',
+                 'his', 'her', 'its', 'our', 'their', 'me', 'him', 'us', 'them',
+                 'user', 'luna', 'assistant', 'content', 'memory', 'type'}
+
+    all_text = " ".join(all_content)
+    words = re.findall(r'\b[a-z]{3,}\b', all_text)
+    word_counts = Counter(w for w in words if w not in stopwords)
+    keywords = [word for word, count in word_counts.most_common(30) if count >= 2]
+
+    # Ring stats
+    ring_stats = {}
+    for ring in context.rings:
+        ring_items = context.rings[ring]
+        ring_stats[ring.name] = {
+            "count": len(ring_items),
+            "tokens": sum(item.tokens for item in ring_items),
+            "avg_relevance": round(
+                sum(item.relevance for item in ring_items) / len(ring_items), 3
+            ) if ring_items else 0,
+        }
+
+    return ContextDebugResponse(
+        current_turn=context.current_turn,
+        token_budget=context.token_budget,
+        total_tokens=context._total_tokens(),
+        items=items,
+        keywords=keywords,
+        ring_stats=ring_stats,
+    )
+
+
+# =============================================================================
+# VOICE ENDPOINTS
+# =============================================================================
+
+# Global voice backend instance
+_voice_backend = None
+
+
+class VoiceStatusResponse(BaseModel):
+    """Response from /voice/status endpoint."""
+    running: bool
+    recording: bool
+    hands_free: bool
+    stt_provider: str
+    tts_provider: str
+    persona_connected: bool
+    turn_count: int
+
+
+class VoiceStartRequest(BaseModel):
+    """Request body for /voice/start endpoint."""
+    hands_free: bool = Field(default=False, description="Enable hands-free mode")
+
+
+@app.post("/voice/start")
+async def start_voice(request: VoiceStartRequest):
+    """
+    Start the voice system.
+
+    Initializes voice backend with STT, TTS, and connects to Luna Engine.
+    """
+    global _voice_backend
+
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    if _voice_backend and _voice_backend.is_active:
+        return {"status": "already_running", "message": "Voice system already active"}
+
+    try:
+        # Import voice components
+        from voice.backend import VoiceBackend
+        from voice.stt.manager import STTProviderType
+        from voice.tts.manager import TTSProviderType
+
+        # Create voice backend connected to engine
+        _voice_backend = VoiceBackend(
+            engine=_engine,
+            stt_provider=STTProviderType.MLX_WHISPER,
+            tts_provider=TTSProviderType.PIPER,
+            hands_free=request.hands_free,
+        )
+
+        await _voice_backend.start()
+
+        return {
+            "status": "started",
+            "message": "Voice system started",
+            "hands_free": request.hands_free,
+        }
+    except ImportError as e:
+        logger.error(f"Voice components not available: {e}")
+        raise HTTPException(status_code=503, detail=f"Voice components not available: {e}")
+    except Exception as e:
+        logger.error(f"Failed to start voice: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/voice/stop")
+async def stop_voice():
+    """Stop the voice system."""
+    global _voice_backend
+
+    if _voice_backend is None or not _voice_backend.is_active:
+        return {"status": "not_running", "message": "Voice system not active"}
+
+    try:
+        await _voice_backend.stop()
+        _voice_backend = None
+
+        return {"status": "stopped", "message": "Voice system stopped"}
+    except Exception as e:
+        logger.error(f"Failed to stop voice: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/voice/status", response_model=VoiceStatusResponse)
+async def get_voice_status():
+    """Get voice system status."""
+    global _voice_backend
+
+    if _voice_backend is None:
+        return VoiceStatusResponse(
+            running=False,
+            recording=False,
+            hands_free=False,
+            stt_provider="none",
+            tts_provider="none",
+            persona_connected=False,
+            turn_count=0,
+        )
+
+    state = _voice_backend.get_state()
+
+    return VoiceStatusResponse(
+        running=state["running"],
+        recording=state["recording"],
+        hands_free=state["hands_free"],
+        stt_provider=state["components"]["stt"],
+        tts_provider=state["components"]["tts"],
+        persona_connected=state["components"]["persona"] == "connected",
+        turn_count=state["turn_count"],
+    )
+
+
+@app.post("/voice/listen/start")
+async def start_listening():
+    """
+    Start recording user speech (push-to-talk press).
+
+    Call this when user presses the mic button.
+    """
+    global _voice_backend
+
+    if _voice_backend is None or not _voice_backend.is_active:
+        raise HTTPException(status_code=400, detail="Voice system not active")
+
+    if _voice_backend.hands_free:
+        return {"status": "hands_free", "message": "Using hands-free mode - recording is automatic"}
+
+    await _voice_backend.start_listening()
+
+    return {"status": "listening", "message": "Recording started"}
+
+
+@app.post("/voice/listen/stop")
+async def stop_listening():
+    """
+    Stop recording and process speech (push-to-talk release).
+
+    Call this when user releases the mic button.
+    Returns transcription and triggers response generation.
+    """
+    global _voice_backend
+
+    if _voice_backend is None or not _voice_backend.is_active:
+        raise HTTPException(status_code=400, detail="Voice system not active")
+
+    if _voice_backend.hands_free:
+        return {"status": "hands_free", "message": "Using hands-free mode - recording stops automatically"}
+
+    # Stop listening and get transcription
+    transcription = await _voice_backend.stop_listening()
+
+    if not transcription:
+        # Provide more specific feedback
+        return {
+            "status": "no_speech",
+            "message": "No speech detected. Try speaking louder or longer.",
+            "transcription": None,
+            "hint": "Hold the mic button for at least 1 second while speaking clearly"
+        }
+
+    # Trigger response generation (non-blocking)
+    asyncio.create_task(_voice_backend.process_and_respond(transcription))
+
+    return {
+        "status": "processing",
+        "message": "Speech captured, generating response",
+        "transcription": transcription,
+    }
+
+
+class SpeakRequest(BaseModel):
+    """Request body for speak endpoint."""
+    text: str
+
+
+@app.post("/voice/speak")
+async def speak_text(request: SpeakRequest):
+    """
+    Speak the given text using TTS.
+
+    Use this to have Luna speak a text response when voice mode is on.
+    """
+    global _voice_backend
+
+    if _voice_backend is None or not _voice_backend.is_active:
+        return {"status": "not_running", "message": "Voice system not active"}
+
+    try:
+        # Use the TTS to speak
+        await _voice_backend.speak(request.text)
+        return {"status": "speaking", "text": request.text}
+    except Exception as e:
+        logger.error(f"Failed to speak: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/voice/stream")
+async def voice_stream():
+    """
+    Stream voice status updates via SSE.
+
+    Returns Server-Sent Events with:
+    - event: status - Voice status updates (idle, listening, thinking, speaking)
+    - event: transcription - User speech transcribed
+    - event: response - Luna's response text
+    - event: ping - Keepalive
+    """
+    global _voice_backend
+
+    async def generate_voice_events() -> AsyncGenerator[str, None]:
+        """Generate SSE events for voice status."""
+        event_queue: asyncio.Queue[dict] = asyncio.Queue()
+        connected = True
+        last_status = None
+
+        def on_status_change(status: str) -> None:
+            """Callback for status changes."""
+            if connected:
+                event_queue.put_nowait({
+                    "type": "status",
+                    "status": status,
+                })
+
+        def on_speech_end(transcription: str) -> None:
+            """Callback when speech is transcribed."""
+            if connected:
+                event_queue.put_nowait({
+                    "type": "transcription",
+                    "text": transcription,
+                })
+
+        def on_response(text: str) -> None:
+            """Callback when Luna responds."""
+            if connected:
+                event_queue.put_nowait({
+                    "type": "response",
+                    "text": text,
+                })
+
+        # Register callbacks if voice backend exists
+        if _voice_backend:
+            _voice_backend.on_status_change(on_status_change)
+            _voice_backend.on_speech_end(on_speech_end)
+            _voice_backend.on_response(on_response)
+
+        try:
+            # Send initial status
+            initial_status = "idle"
+            if _voice_backend:
+                if _voice_backend.is_recording:
+                    initial_status = "listening"
+                elif _voice_backend.is_active:
+                    initial_status = "idle"
+                else:
+                    initial_status = "inactive"
+            else:
+                initial_status = "inactive"
+
+            yield f"event: status\ndata: {json.dumps({'connected': True, 'status': initial_status, 'running': _voice_backend is not None and _voice_backend.is_active})}\n\n"
+
+            while connected:
+                try:
+                    event = await asyncio.wait_for(
+                        event_queue.get(),
+                        timeout=10.0  # Keepalive every 10s
+                    )
+
+                    yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+
+                except asyncio.TimeoutError:
+                    # Send keepalive ping
+                    running = _voice_backend is not None and _voice_backend.is_active
+                    yield f"event: ping\ndata: {json.dumps({'running': running})}\n\n"
+
+        except asyncio.CancelledError:
+            connected = False
+
+        finally:
+            connected = False
+
+    return StreamingResponse(
+        generate_voice_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ============================================================================
+# HUB API: CONVERSATION HISTORY ENDPOINTS
+# ============================================================================
+
+class HubSessionCreateRequest(BaseModel):
+    """Request to create a new session."""
+    app_context: str = "terminal"
+
+
+class HubSessionResponse(BaseModel):
+    """Session details."""
+    session_id: str
+    started_at: float
+    ended_at: Optional[float] = None
+    app_context: str
+
+
+class HubTurnAddRequest(BaseModel):
+    """Request to add a turn."""
+    session_id: Optional[str] = None
+    role: str
+    content: str
+    tokens: int
+
+
+class HubTurnResponse(BaseModel):
+    """Response after adding a turn."""
+    turn_id: int
+    tier: str
+
+
+class HubActiveWindowResponse(BaseModel):
+    """Active window turns."""
+    turns: list
+    total_tokens: int
+    turn_count: int
+
+
+class HubTokenCountResponse(BaseModel):
+    """Token count for a tier."""
+    total_tokens: int
+    turn_count: int
+
+
+class HubTierRotateRequest(BaseModel):
+    """Request to rotate a turn to a new tier."""
+    turn_id: int
+    new_tier: str
+
+
+class HubHistorySearchRequest(BaseModel):
+    """Request to search history."""
+    query: str
+    tier: str = "recent"
+    session_id: Optional[str] = None
+    limit: int = 3
+    search_type: str = "hybrid"
+
+
+class HubHistorySearchResponse(BaseModel):
+    """Search results."""
+    results: list
+    total: int
+
+
+# --- Session Endpoints ---
+
+@app.post("/hub/session/create", response_model=HubSessionResponse)
+async def hub_create_session(request: HubSessionCreateRequest):
+    """Create a new conversation session."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        raise HTTPException(status_code=503, detail="History manager not available")
+
+    import time
+    session_id = await history.create_session(app_context=request.app_context)
+    return HubSessionResponse(
+        session_id=session_id,
+        started_at=time.time(),
+        app_context=request.app_context
+    )
+
+
+@app.post("/hub/session/end")
+async def hub_end_session(session_id: str):
+    """End a conversation session."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        raise HTTPException(status_code=503, detail="History manager not available")
+
+    await history.end_session(session_id)
+    return {"success": True, "session_id": session_id}
+
+
+@app.get("/hub/session/active", response_model=Optional[HubSessionResponse])
+async def hub_get_active_session():
+    """Get the currently active session."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        return None
+
+    session = await history.get_active_session()
+    if not session:
+        return None
+
+    return HubSessionResponse(**session)
+
+
+# --- Turn Endpoints ---
+
+@app.post("/hub/turn/add", response_model=HubTurnResponse)
+async def hub_add_turn(request: HubTurnAddRequest):
+    """Add a turn to conversation history."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        raise HTTPException(status_code=503, detail="History manager not available")
+
+    turn_id = await history.add_turn(
+        role=request.role,
+        content=request.content,
+        tokens=request.tokens,
+        session_id=request.session_id
+    )
+    return HubTurnResponse(turn_id=turn_id, tier="active")
+
+
+@app.get("/hub/active_window", response_model=HubActiveWindowResponse)
+async def hub_get_active_window(session_id: Optional[str] = None, limit: int = 10):
+    """Get the Active Window turns."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        return HubActiveWindowResponse(turns=[], total_tokens=0, turn_count=0)
+
+    turns = await history.get_active_window(session_id=session_id, limit=limit)
+    token_count = await history.get_active_token_count(session_id=session_id)
+
+    return HubActiveWindowResponse(
+        turns=turns,
+        total_tokens=token_count["total_tokens"],
+        turn_count=token_count["turn_count"]
+    )
+
+
+@app.get("/hub/active_token_count", response_model=HubTokenCountResponse)
+async def hub_get_active_token_count(session_id: Optional[str] = None):
+    """Get token count for Active tier."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        return HubTokenCountResponse(total_tokens=0, turn_count=0)
+
+    counts = await history.get_active_token_count(session_id=session_id)
+    return HubTokenCountResponse(**counts)
+
+
+# --- Tier Endpoints ---
+
+@app.post("/hub/tier/rotate")
+async def hub_rotate_tier(request: HubTierRotateRequest):
+    """Rotate a turn to a new tier."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        raise HTTPException(status_code=503, detail="History manager not available")
+
+    await history._rotate_turn_tier(request.turn_id, request.new_tier)
+    return {"success": True}
+
+
+@app.get("/hub/tier/oldest_active")
+async def hub_get_oldest_active(session_id: Optional[str] = None):
+    """Get the oldest turn in Active tier."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        return None
+
+    turn = await history.get_oldest_active_turn(session_id=session_id)
+    return turn
+
+
+# --- Search Endpoints ---
+
+@app.post("/hub/search", response_model=HubHistorySearchResponse)
+async def hub_search_history(request: HubHistorySearchRequest):
+    """Search conversation history."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        return HubHistorySearchResponse(results=[], total=0)
+
+    results = await history.search_recent(
+        query=request.query,
+        limit=request.limit,
+        search_type=request.search_type,
+        session_id=request.session_id
+    )
+
+    return HubHistorySearchResponse(results=results, total=len(results))
+
+
+# --- History Manager Stats ---
+
+@app.get("/hub/stats")
+async def hub_get_history_stats():
+    """Get history manager statistics."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    history = _engine.get_actor("history_manager")
+    if not history:
+        return {"error": "History manager not available"}
+
+    return history.get_stats()
+
+
+# =============================================================================
+# TUNING ENDPOINTS
+# =============================================================================
+
+# Global tuning instances
+_param_registry = None
+_evaluator = None
+_session_manager = None
+
+
+class TuningParamResponse(BaseModel):
+    """Response with parameter details."""
+    name: str
+    value: float
+    default: float
+    bounds: tuple
+    step: float
+    category: str
+    description: str
+    is_overridden: bool
+
+
+class TuningParamSetRequest(BaseModel):
+    """Request to set a parameter value."""
+    value: float
+
+
+class TuningSessionNewRequest(BaseModel):
+    """Request to start a new tuning session."""
+    focus: str = Field(default="all", description="Area of focus: memory, routing, latency, context, all")
+    notes: str = Field(default="")
+
+
+class TuningSessionResponse(BaseModel):
+    """Response with session details."""
+    session_id: str
+    focus: str
+    started_at: str
+    best_iteration: int
+    best_score: float
+    iteration_count: int
+
+
+class TuningEvalResponse(BaseModel):
+    """Response with evaluation results."""
+    overall_score: float
+    memory_recall_score: float
+    context_retention_score: float
+    routing_score: float
+    avg_latency_ms: float
+    p95_latency_ms: float
+    total_tests: int
+    passed_tests: int
+    failed_tests: int
+
+
+class TuningCompareResponse(BaseModel):
+    """Response with iteration comparison."""
+    iteration_1: int
+    iteration_2: int
+    score_1: float
+    score_2: float
+    score_diff: float
+    param_diffs: dict
+    metric_diffs: dict
+
+
+async def _ensure_tuning_initialized():
+    """Initialize tuning components if needed."""
+    global _param_registry, _evaluator, _session_manager
+
+    if _param_registry is None:
+        from luna.tuning.params import ParamRegistry
+        from luna.tuning.evaluator import Evaluator
+        from luna.tuning.session import TuningSessionManager
+
+        _param_registry = ParamRegistry(_engine)
+        _evaluator = Evaluator(_engine)
+        _session_manager = TuningSessionManager()
+        await _session_manager.initialize()
+
+
+@app.get("/tuning/params")
+async def list_tuning_params(category: Optional[str] = None):
+    """
+    List all tunable parameters.
+
+    - category: Filter by category (inference, memory, router, etc.)
+    """
+    await _ensure_tuning_initialized()
+
+    params = _param_registry.list_params(category)
+    categories = _param_registry.list_categories()
+
+    return {
+        "params": params,
+        "categories": categories,
+        "count": len(params),
+    }
+
+
+@app.get("/tuning/params/{name:path}", response_model=TuningParamResponse)
+async def get_tuning_param(name: str):
+    """Get details for a specific parameter."""
+    await _ensure_tuning_initialized()
+
+    try:
+        spec = _param_registry.get_spec(name)
+        value = _param_registry.get(name)
+        is_overridden = name in _param_registry._overrides
+
+        return TuningParamResponse(
+            name=name,
+            value=value,
+            default=spec.default,
+            bounds=spec.bounds,
+            step=spec.step,
+            category=spec.category,
+            description=spec.description,
+            is_overridden=is_overridden,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Parameter not found: {name}")
+
+
+@app.post("/tuning/params/{name:path}")
+async def set_tuning_param(name: str, request: TuningParamSetRequest):
+    """
+    Set a parameter value.
+
+    Returns the previous value and runs evaluation if session active.
+    """
+    await _ensure_tuning_initialized()
+
+    try:
+        prev_value = _param_registry.set(name, request.value)
+
+        result = {
+            "name": name,
+            "previous_value": prev_value,
+            "new_value": request.value,
+        }
+
+        # Run evaluation if session active
+        if _session_manager.current_session:
+            eval_results = await _evaluator.run_all()
+            await _session_manager.add_iteration(
+                params_changed={name: request.value},
+                param_snapshot=_param_registry.get_all(),
+                eval_results=eval_results,
+                notes=f"Set {name}={request.value}",
+            )
+            result["eval_score"] = eval_results.overall_score
+            result["iteration"] = len(_session_manager.current_session.iterations)
+
+        return result
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Parameter not found: {name}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/tuning/param-reset/{name:path}")
+async def reset_tuning_param(name: str):
+    """Reset a parameter to its default value."""
+    await _ensure_tuning_initialized()
+
+    try:
+        spec = _param_registry.get_spec(name)
+        prev_value = _param_registry.reset(name)
+
+        return {
+            "name": name,
+            "previous_value": prev_value,
+            "new_value": spec.default,
+            "was_overridden": prev_value is not None,
+        }
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Parameter not found: {name}")
+
+
+@app.post("/tuning/session/new", response_model=TuningSessionResponse)
+async def start_tuning_session(request: TuningSessionNewRequest):
+    """
+    Start a new tuning session.
+
+    Creates a session, records baseline parameters, and runs initial evaluation.
+    """
+    await _ensure_tuning_initialized()
+
+    # End existing session if any
+    if _session_manager.current_session:
+        await _session_manager.end_session()
+
+    # Get baseline parameters
+    base_params = _param_registry.get_all()
+
+    # Create session
+    session = await _session_manager.new_session(
+        focus=request.focus,
+        base_params=base_params,
+        notes=request.notes,
+    )
+
+    # Run baseline evaluation
+    results = await _evaluator.run_all()
+    await _session_manager.add_iteration(
+        params_changed={},
+        param_snapshot=base_params,
+        eval_results=results,
+        notes="Baseline",
+    )
+
+    return TuningSessionResponse(
+        session_id=session.session_id,
+        focus=session.focus,
+        started_at=session.started_at,
+        best_iteration=session.best_iteration,
+        best_score=session.best_score,
+        iteration_count=len(session.iterations),
+    )
+
+
+@app.get("/tuning/session")
+async def get_tuning_session():
+    """Get current tuning session."""
+    await _ensure_tuning_initialized()
+
+    session = _session_manager.current_session
+    if not session:
+        return {"active": False}
+
+    return {
+        "active": True,
+        "session_id": session.session_id,
+        "focus": session.focus,
+        "started_at": session.started_at,
+        "best_iteration": session.best_iteration,
+        "best_score": session.best_score,
+        "iteration_count": len(session.iterations),
+        "iterations": [
+            {
+                "num": i.iteration_num,
+                "score": i.score,
+                "params_changed": i.params_changed,
+                "notes": i.notes,
+                "created_at": i.created_at,
+            }
+            for i in session.iterations
+        ],
+    }
+
+
+@app.post("/tuning/session/end")
+async def end_tuning_session():
+    """End the current tuning session."""
+    await _ensure_tuning_initialized()
+
+    session = await _session_manager.end_session()
+    if not session:
+        return {"ended": False, "message": "No active session"}
+
+    return {
+        "ended": True,
+        "session_id": session.session_id,
+        "best_iteration": session.best_iteration,
+        "best_score": session.best_score,
+        "total_iterations": len(session.iterations),
+    }
+
+
+@app.post("/tuning/eval", response_model=TuningEvalResponse)
+async def run_tuning_eval(category: Optional[str] = None):
+    """
+    Run evaluation.
+
+    - category: Optional category to evaluate (memory_recall, context_retention, routing, latency)
+    """
+    await _ensure_tuning_initialized()
+
+    if category:
+        results = await _evaluator.run_category(category)
+    else:
+        results = await _evaluator.run_all()
+
+    # Record iteration if session active
+    if _session_manager.current_session:
+        await _session_manager.add_iteration(
+            params_changed={},
+            param_snapshot=_param_registry.get_all(),
+            eval_results=results,
+            notes=f"Eval: {category or 'all'}",
+        )
+
+    return TuningEvalResponse(
+        overall_score=results.overall_score,
+        memory_recall_score=results.memory_recall_score,
+        context_retention_score=results.context_retention_score,
+        routing_score=results.routing_score,
+        avg_latency_ms=results.avg_latency_ms,
+        p95_latency_ms=results.p95_latency_ms,
+        total_tests=results.total_tests,
+        passed_tests=results.passed_tests,
+        failed_tests=results.failed_tests,
+    )
+
+
+@app.get("/tuning/compare", response_model=TuningCompareResponse)
+async def compare_tuning_iterations(iter1: int = 1, iter2: Optional[int] = None):
+    """
+    Compare two iterations.
+
+    - iter1: First iteration number (default: 1)
+    - iter2: Second iteration number (default: latest)
+    """
+    await _ensure_tuning_initialized()
+
+    session = _session_manager.current_session
+    if not session:
+        raise HTTPException(status_code=400, detail="No active session")
+
+    if not session.iterations:
+        raise HTTPException(status_code=400, detail="No iterations to compare")
+
+    if iter2 is None:
+        iter2 = len(session.iterations)
+
+    try:
+        comparison = _session_manager.compare_iterations(iter1, iter2)
+        return TuningCompareResponse(**comparison)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/tuning/best")
+async def get_best_params():
+    """Get parameters from the best iteration."""
+    await _ensure_tuning_initialized()
+
+    session = _session_manager.current_session
+    if not session:
+        raise HTTPException(status_code=400, detail="No active session")
+
+    params = _session_manager.get_best_params()
+    return {
+        "best_iteration": session.best_iteration,
+        "best_score": session.best_score,
+        "params": params,
+    }
+
+
+@app.post("/tuning/apply-best")
+async def apply_best_params():
+    """Apply parameters from the best iteration."""
+    await _ensure_tuning_initialized()
+
+    session = _session_manager.current_session
+    if not session:
+        raise HTTPException(status_code=400, detail="No active session")
+
+    best_params = _session_manager.get_best_params()
+    count = _param_registry.import_params(best_params)
+
+    return {
+        "applied": count,
+        "best_iteration": session.best_iteration,
+        "best_score": session.best_score,
+    }
+
+
+@app.get("/tuning/sessions")
+async def list_tuning_sessions(limit: int = 10):
+    """List recent tuning sessions."""
+    await _ensure_tuning_initialized()
+
+    sessions = await _session_manager.list_sessions(limit)
+    return {
+        "sessions": sessions,
+        "count": len(sessions),
+    }
 
 
 def create_app() -> FastAPI:

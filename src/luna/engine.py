@@ -51,12 +51,19 @@ class EngineConfig:
     input_buffer_max: int = 100
     stale_threshold_seconds: float = 5.0
 
-    # Paths
-    data_dir: Path = field(default_factory=lambda: Path.home() / ".luna")
+    # Paths - Use project data directory (synced with substrate/database.py)
+    data_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent.parent / "data")
     snapshot_path: Optional[Path] = None
 
     # Local inference
     enable_local_inference: bool = True
+
+    # Voice system settings
+    voice_enabled: bool = False
+    voice_stt_provider: str = "mlx_whisper"  # mlx_whisper, apple, google
+    voice_tts_provider: str = "piper"  # piper, apple, edge
+    voice_tts_voice: str = "en_US-lessac-medium"  # Piper voice ID
+    voice_mode: str = "push_to_talk"  # push_to_talk, hands_free
 
     def __post_init__(self):
         if self.snapshot_path is None:
@@ -144,6 +151,9 @@ class LunaEngine:
         self._on_response_callbacks: list[Callable] = []
         self._on_progress_callbacks: list[Callable] = []  # For streaming progress
 
+        # Voice system (optional)
+        self._voice: Optional[Any] = None  # VoiceBackend when enabled
+
     # =========================================================================
     # Actor Management
     # =========================================================================
@@ -212,8 +222,7 @@ class LunaEngine:
 
         # Create core actors if not registered
         if "matrix" not in self.actors:
-            # Let MatrixActor use Eclissi's database by default (53k+ nodes)
-            matrix = MatrixActor()  # Uses Eclissi DB if available
+            matrix = MatrixActor()
             self.register_actor(matrix)
             # Initialize matrix (connects DB, loads graph) but DON'T start mailbox loop
             await matrix.initialize()
@@ -231,6 +240,11 @@ class LunaEngine:
             from luna.actors.librarian import LibrarianActor
             self.register_actor(LibrarianActor())
 
+        # Phase 4: History Manager actor (conversation history tiers)
+        if "history_manager" not in self.actors:
+            from luna.actors.history_manager import HistoryManagerActor
+            self.register_actor(HistoryManagerActor())
+
         # Restore consciousness from snapshot
         self.consciousness = await ConsciousnessState.load()
 
@@ -241,6 +255,10 @@ class LunaEngine:
         self.agent_loop = AgentLoop(orchestrator=self, max_iterations=50)
         self.agent_loop.on_progress(self._handle_agent_progress)
         logger.info("AgentLoop initialized")
+
+        # Initialize voice system if enabled
+        if self.config.voice_enabled:
+            await self._init_voice()
 
         logger.info("Boot sequence complete")
 
@@ -257,6 +275,45 @@ class LunaEngine:
             tasks.append(task)
 
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _init_voice(self) -> None:
+        """Initialize the voice system."""
+        try:
+            from voice import VoiceBackend
+            from voice.stt import STTProviderType
+            from voice.tts import TTSProviderType
+
+            # Map config strings to enums
+            stt_map = {
+                "mlx_whisper": STTProviderType.MLX_WHISPER,
+                "apple": STTProviderType.APPLE,
+                "google": STTProviderType.GOOGLE,
+            }
+            tts_map = {
+                "piper": TTSProviderType.PIPER,
+                "apple": TTSProviderType.APPLE,
+                "edge": TTSProviderType.EDGE,
+            }
+
+            stt_provider = stt_map.get(self.config.voice_stt_provider, STTProviderType.MLX_WHISPER)
+            tts_provider = tts_map.get(self.config.voice_tts_provider, TTSProviderType.PIPER)
+            hands_free = self.config.voice_mode == "hands_free"
+
+            self._voice = VoiceBackend(
+                engine=self,
+                stt_provider=stt_provider,
+                tts_provider=tts_provider,
+                tts_voice=self.config.voice_tts_voice,
+                hands_free=hands_free,
+            )
+            logger.info(f"Voice system initialized (TTS={tts_provider.value}, STT={stt_provider.value})")
+
+        except ImportError as e:
+            logger.warning(f"Voice system not available: {e}")
+            self._voice = None
+        except Exception as e:
+            logger.error(f"Failed to initialize voice system: {e}")
+            self._voice = None
 
     async def _wait_for_shutdown(self) -> None:
         """Wait for shutdown signal."""
@@ -312,10 +369,15 @@ class LunaEngine:
         # 3. Consciousness tick
         await self.consciousness.tick()
 
-        # 4. Rebalance rings (decay happens in reflective loop, not every tick)
+        # 4. History Manager tick (process compression/extraction queues)
+        history = self.get_actor("history_manager")
+        if history and hasattr(history, "tick"):
+            await history.tick()
+
+        # 5. Rebalance rings (decay happens in reflective loop, not every tick)
         self.context._rebalance_rings()
 
-        # 5. Persist state periodically (every 10 ticks)
+        # 6. Persist state periodically (every 10 ticks)
         if self.metrics.cognitive_ticks > 0 and self.metrics.cognitive_ticks % 10 == 0:
             await self.consciousness.save()
 
@@ -353,6 +415,12 @@ class LunaEngine:
             content=f"User: {user_message}",
             source=ContextSource.CONVERSATION,
         )
+
+        # Trigger extraction on user message (async, non-blocking)
+        try:
+            await self._trigger_extraction("user", user_message)
+        except Exception as e:
+            logger.error(f"Extraction error for user message: {e}")
 
         # Check if this looks like an interrupt
         interrupt_signals = ["stop", "cancel", "wait", "hold on", "nevermind", "never mind"]
@@ -401,10 +469,32 @@ class LunaEngine:
             routing = self.router.analyze(user_message)
             logger.info(f"Routing: {routing.path.name} (complexity={routing.complexity:.2f})")
 
-            # Retrieve memory context
+            # Retrieve memory context AND conversation history
             memory_context = ""
+            history_context = None
             matrix = self.get_actor("matrix")
+            history_manager = self.get_actor("history_manager")
+
+            # Store user turn in HistoryManager and get history context
+            if history_manager and history_manager.is_ready:
+                # Estimate tokens (rough: 4 chars per token)
+                estimated_tokens = len(user_message) // 4
+
+                # Store the user turn
+                await history_manager.add_turn(
+                    role="user",
+                    content=user_message,
+                    tokens=estimated_tokens
+                )
+
+                # Build history context (may include Recent tier search if backward ref detected)
+                history_context = await history_manager.build_history_context(user_message)
+
             if matrix and matrix.is_ready:
+                # Load recent conversation history into context (if not already there)
+                await self._load_conversation_history(matrix, limit=10)
+
+                # Retrieve semantic memory context
                 memory_context = await matrix.get_context(user_message, max_tokens=1500)
                 await matrix.store_turn(
                     session_id=self.session_id,
@@ -421,11 +511,11 @@ class LunaEngine:
             if routing.path == ExecutionPath.DIRECT:
                 # Skip planning, go straight to Director
                 self.metrics.direct_responses += 1
-                await self._process_direct(user_message, correlation_id, memory_context)
+                await self._process_direct(user_message, correlation_id, memory_context, history_context)
             else:
                 # Use AgentLoop for planned execution
                 self.metrics.planned_responses += 1
-                await self._process_with_agent_loop(user_message, correlation_id, memory_context)
+                await self._process_with_agent_loop(user_message, correlation_id, memory_context, history_context)
 
             self.metrics.agentic_tasks_completed += 1
 
@@ -453,9 +543,13 @@ class LunaEngine:
         self,
         user_message: str,
         correlation_id: str,
-        memory_context: str = ""
+        memory_context: str = "",
+        history_context: Optional[Dict[str, Any]] = None
     ) -> None:
         """Direct path - skip planning, go straight to Director."""
+        # Emit progress for Thought Stream visibility
+        await self._emit_progress(f"[DIRECT] {user_message[:40]}...")
+
         context_window = self.context.get_context_window(max_tokens=4000)
         # Debug: Log context window size
         print(f"[DEBUG] Context window: {len(context_window)} chars, items in INNER ring: {len(self.context.rings[ContextRing.INNER])}")
@@ -466,7 +560,7 @@ class LunaEngine:
                 type="generate",
                 payload={
                     "user_message": user_message,
-                    "system_prompt": self._build_system_prompt(memory_context),
+                    "system_prompt": self._build_system_prompt(memory_context, history_context),
                     "context_window": context_window,
                 },
                 correlation_id=correlation_id,
@@ -477,17 +571,18 @@ class LunaEngine:
         self,
         user_message: str,
         correlation_id: str,
-        memory_context: str = ""
+        memory_context: str = "",
+        history_context: Optional[Dict[str, Any]] = None
     ) -> None:
         """Process through full AgentLoop with planning."""
         if not self.agent_loop:
             logger.warning("AgentLoop not initialized, falling back to direct")
-            await self._process_direct(user_message, correlation_id, memory_context)
+            await self._process_direct(user_message, correlation_id, memory_context, history_context)
             return
 
         # Create the task (allows concurrent checking)
         self._current_task = asyncio.create_task(
-            self._run_agent_loop(user_message, correlation_id, memory_context)
+            self._run_agent_loop(user_message, correlation_id, memory_context, history_context)
         )
 
         try:
@@ -500,7 +595,8 @@ class LunaEngine:
         self,
         user_message: str,
         correlation_id: str,
-        memory_context: str = ""
+        memory_context: str = "",
+        history_context: Optional[Dict[str, Any]] = None
     ) -> None:
         """Run the AgentLoop and handle results."""
         result = await self.agent_loop.run(user_message)
@@ -522,7 +618,7 @@ class LunaEngine:
                     type="generate",
                     payload={
                         "user_message": user_message,
-                        "system_prompt": self._build_system_prompt(memory_context) + plan_context,
+                        "system_prompt": self._build_system_prompt(memory_context, history_context) + plan_context,
                         "context_window": context_window,
                         "agentic": True,
                         "execution_path": result.status.name,
@@ -573,6 +669,80 @@ class LunaEngine:
             except Exception as e:
                 logger.error(f"Progress callback error: {e}")
 
+    async def _trigger_extraction(self, role: str, content: str) -> None:
+        """
+        Trigger extraction on a conversation turn.
+
+        Sends the turn to Scribe for semantic extraction, which then
+        forwards extracted objects to Librarian for filing into memory.
+        """
+        scribe = self.get_actor("scribe")
+        if scribe and len(content) >= 10:  # Skip very short messages
+            from luna.actors.base import Message
+            msg = Message(
+                type="extract_turn",
+                payload={
+                    "role": role,
+                    "content": content,
+                    "session_id": self.session_id,
+                    "immediate": True,  # Process immediately, don't batch
+                },
+            )
+            await scribe.mailbox.put(msg)
+            print(f"📝 Extraction triggered for {role} turn ({len(content)} chars)")
+        else:
+            print(f"📝 Extraction skipped: scribe={scribe is not None}, content_len={len(content)}")
+
+    def _is_valid_response(self, text: str, user_message: str = "") -> bool:
+        """
+        Check if a response is valid for storage in context.
+
+        Filters out:
+        - Clarification echoes (ending with ?)
+        - User question parrots
+        - Very short non-answers
+
+        Args:
+            text: The response text to validate
+            user_message: The original user message (for comparison)
+
+        Returns:
+            True if response should be stored, False to skip
+        """
+        text_clean = text.strip().lower()
+
+        # Skip empty responses
+        if len(text_clean) < 5:
+            return False
+
+        # Skip pure question echoes (high likelihood of clarification)
+        if text_clean.endswith("?"):
+            # Check if it's parroting the user's question
+            if user_message:
+                user_clean = user_message.strip().lower()
+                # Check for high word overlap (>60% shared words)
+                user_words = set(user_clean.split())
+                response_words = set(text_clean.rstrip("?").split())
+                if user_words and response_words:
+                    overlap = len(user_words & response_words) / min(len(user_words), len(response_words))
+                    if overlap > 0.6:
+                        logger.debug(f"Skipping clarification echo: '{text[:50]}...'")
+                        return False
+
+            # Check for common clarification patterns
+            clarification_patterns = [
+                "you're asking", "your asking", "you asking",
+                "are you asking", "so you want", "you want me to",
+                "did you mean", "do you mean", "you mean",
+                "can you clarify", "what do you mean",
+            ]
+            for pattern in clarification_patterns:
+                if pattern in text_clean:
+                    logger.debug(f"Skipping clarification pattern: '{text[:50]}...'")
+                    return False
+
+        return True
+
     async def _emit_response(self, text: str, data: dict = None) -> None:
         """Emit a response to all callbacks."""
         data = data or {}
@@ -595,13 +765,32 @@ class LunaEngine:
                 logger.info(f"Generation complete: {len(text)} chars")
                 self.metrics.messages_generated += 1
 
-                # Add Luna's response to revolving context
-                self.context.add(
-                    content=f"Luna: {text}",
-                    source=ContextSource.CONVERSATION,
-                )
+                # Emit completion status for Thought Stream
+                tokens = data.get("output_tokens", 0)
+                route = "local" if data.get("local") else "delegated"
+                await self._emit_progress(f"[OK] {route}: {tokens} tokens")
 
-                # Store assistant turn in memory
+                # Only add valid responses to revolving context
+                # This filters out clarification echoes and partial responses
+                if self._is_valid_response(text, self._current_goal or ""):
+                    self.context.add(
+                        content=f"Luna: {text}",
+                        source=ContextSource.CONVERSATION,
+                    )
+                else:
+                    logger.info(f"Skipped storing invalid response: '{text[:50]}...'")
+
+                # Store assistant turn in HistoryManager
+                history_manager = self.get_actor("history_manager")
+                if history_manager and history_manager.is_ready:
+                    estimated_tokens = data.get("output_tokens") or (len(text) // 4)
+                    await history_manager.add_turn(
+                        role="assistant",
+                        content=text,
+                        tokens=estimated_tokens
+                    )
+
+                # Store assistant turn in memory (legacy Matrix storage)
                 matrix = self.get_actor("matrix")
                 if matrix and matrix.is_ready:
                     await matrix.store_turn(
@@ -610,6 +799,17 @@ class LunaEngine:
                         content=text,
                         tokens=data.get("output_tokens"),
                     )
+
+                # Trigger extraction on Luna's response
+                try:
+                    await self._trigger_extraction("assistant", text)
+                except Exception as e:
+                    logger.error(f"Extraction error for assistant message: {e}")
+
+                # Advance the turn counter (drives TTL expiration and decay)
+                # A "turn" = user message + Luna response
+                new_turn = self.context.advance_turn()
+                logger.debug(f"Turn {new_turn} complete")
 
                 # Notify callbacks
                 for callback in self._on_response_callbacks:
@@ -661,6 +861,70 @@ class LunaEngine:
     # Context Assembly
     # =========================================================================
 
+    async def _load_conversation_history(self, matrix, limit: int = 10) -> int:
+        """
+        Load recent conversation history from database into RevolvingContext.
+
+        This ensures Luna has awareness of the conversation even after server restart.
+        Only loads turns not already in context (by checking content).
+
+        Args:
+            matrix: The MatrixActor
+            limit: Max conversation turns to load
+
+        Returns:
+            Number of turns loaded
+        """
+        try:
+            memory = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+            if not memory or not hasattr(memory, "db"):
+                return 0
+
+            # Get recent conversation turns from database
+            # Note: tags are stored inside the 'metadata' JSON column, not a separate 'tags' column
+            rows = await memory.db.fetchall("""
+                SELECT content, created_at FROM memory_nodes
+                WHERE metadata LIKE '%"conversation"%'
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+
+            if not rows:
+                return 0
+
+            # Get existing content in context to avoid duplicates
+            existing_content = set()
+            for ring in self.context.rings.values():
+                for item in ring:
+                    existing_content.add(item.content.lower()[:100])  # First 100 chars as key
+
+            loaded = 0
+            # Process in chronological order (oldest first)
+            for row in reversed(rows):
+                content = row[0]
+
+                # Skip if already in context
+                if content.lower()[:100] in existing_content:
+                    continue
+
+                # Add to context as CONVERSATION source
+                self.context.add(
+                    content=content,
+                    source=ContextSource.CONVERSATION,
+                    relevance=0.85,  # Slightly lower than fresh messages
+                )
+                existing_content.add(content.lower()[:100])
+                loaded += 1
+
+            if loaded > 0:
+                logger.info(f"Loaded {loaded} conversation turns from history")
+
+            return loaded
+
+        except Exception as e:
+            logger.error(f"Failed to load conversation history: {e}")
+            return 0
+
     def _build_identity_prompt(self) -> str:
         """
         Build Luna's core identity prompt.
@@ -684,13 +948,18 @@ You grow and evolve through your experiences, but your core values remain consta
 
 Be concise but authentic. No filler phrases like "certainly" or "of course"."""
 
-    def _build_system_prompt(self, memory_context: str = "") -> str:
+    def _build_system_prompt(
+        self,
+        memory_context: str = "",
+        history_context: Optional[Dict[str, Any]] = None
+    ) -> str:
         """
         Build the system prompt for generation.
 
         This is where we inject Luna's soul:
         - Identity (who Luna is)
-        - Memory (relevant context)
+        - Memory (relevant context from Memory Matrix)
+        - History (recent conversation context)
         - State (current attention, mood)
         - Tools (what Luna can do)
         """
@@ -706,6 +975,18 @@ Be concise but authentic. No filler phrases like "certainly" or "of course".
         consciousness_hint = self.consciousness.get_context_hint()
         if consciousness_hint:
             base_prompt += f"\n{consciousness_hint}\n"
+
+        # Add history context (Recent tier search results)
+        if history_context and history_context.get("recent_history"):
+            recent_items = history_context["recent_history"]
+            if recent_items:
+                history_section = "\n## Relevant Earlier Conversation\n\n"
+                for item in recent_items[:3]:  # Max 3 items
+                    summary = item.get("compressed") or item.get("content", "")[:100]
+                    role = item.get("role", "unknown")
+                    history_section += f"- [{role}]: {summary}\n"
+                history_section += "\nUse this naturally if relevant to the current question.\n"
+                base_prompt += history_section
 
         if memory_context:
             memory_section = f"""
@@ -746,6 +1027,38 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
         """Register a callback for progress updates (streaming status)."""
         self._on_progress_callbacks.append(callback)
 
+    @property
+    def voice(self):
+        """Access the voice backend (if enabled)."""
+        return self._voice
+
+    @property
+    def director(self):
+        """Access the director actor for direct calls (voice backend uses this)."""
+        return self.get_actor("director")
+
+    @property
+    def librarian(self):
+        """Access the librarian actor (if exists)."""
+        return self.get_actor("librarian")
+
+    async def start_voice(self) -> bool:
+        """Start voice conversation mode."""
+        if not self._voice:
+            logger.warning("Voice system not initialized")
+            return False
+        try:
+            await self._voice.start()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start voice: {e}")
+            return False
+
+    async def stop_voice(self) -> None:
+        """Stop voice conversation mode."""
+        if self._voice:
+            await self._voice.stop()
+
     async def send_interrupt(self) -> None:
         """Send an interrupt to abort current processing."""
         event = InputEvent(
@@ -754,6 +1067,50 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
             source="api",
         )
         await self.input_buffer.put(event)
+
+    async def run_agent(self, goal: str) -> AgentResult:
+        """
+        Run the agent loop for a complex goal.
+
+        Use this for tasks that require multiple steps,
+        tool use, or delegation to Claude.
+
+        Args:
+            goal: The user's goal or request
+
+        Returns:
+            AgentResult with response and execution trace
+        """
+        if not self.agent_loop:
+            raise RuntimeError("Agent loop not initialized")
+
+        return await self.agent_loop.run(goal)
+
+    async def process_input(self, user_input: str) -> str:
+        """
+        Process user input, routing to chat or agent as appropriate.
+
+        This is a convenience entry point that:
+        1. Analyzes the query complexity
+        2. Routes to direct response or agent loop
+        3. Returns the final response text
+
+        Args:
+            user_input: The user's message
+
+        Returns:
+            Response text
+        """
+        routing = self.router.analyze(user_input)
+
+        if routing.path == ExecutionPath.DIRECT:
+            director = self.get_actor("director")
+            if director and hasattr(director, 'generate'):
+                return await director.generate(user_input)
+            return "I'm not able to respond right now."
+        else:
+            result = await self.run_agent(user_input)
+            return result.response
 
     # =========================================================================
     # Lifecycle
@@ -769,6 +1126,35 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
         """Shutdown sequence."""
         logger.info("Shutdown sequence starting...")
         self.state = EngineState.STOPPED
+
+        # Run session-end reflection and maintenance via Director
+        director = self.get_actor("director")
+        if director:
+            try:
+                # Run session-end reflection to capture personality evolution
+                if hasattr(director, 'session_end_reflection'):
+                    logger.info("Running session-end reflection...")
+                    result = await director.session_end_reflection()
+                    if result:
+                        logger.info(f"Reflection result: {result}")
+
+                # Run personality maintenance if due
+                if hasattr(director, '_lifecycle_manager') and director._lifecycle_manager:
+                    if await director._lifecycle_manager.should_run_maintenance():
+                        logger.info("Running personality maintenance...")
+                        maint_result = await director._lifecycle_manager.run_maintenance()
+                        logger.info(f"Maintenance result: {maint_result}")
+
+            except Exception as e:
+                logger.warning(f"Shutdown personality tasks failed: {e}")
+
+        # Stop voice system if active
+        if self._voice:
+            try:
+                await self._voice.stop()
+                logger.info("Voice system stopped")
+            except Exception as e:
+                logger.warning(f"Voice shutdown error: {e}")
 
         # Stop all actors
         for actor in self.actors.values():
@@ -797,6 +1183,7 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
             "buffer": self.input_buffer.stats,
             "consciousness": self.consciousness.get_summary(),
             "context": self.context.stats(),
+            "current_turn": self.context.current_turn,
             # Agentic stats (Phase XIV)
             "agentic": {
                 "is_processing": self._is_processing,
@@ -809,4 +1196,10 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
                 "planned_responses": self.metrics.planned_responses,
                 "agent_loop_status": self.agent_loop.status.name if self.agent_loop else "NOT_INITIALIZED",
             },
+            # Voice system
+            "voice": {
+                "enabled": self.config.voice_enabled,
+                "initialized": self._voice is not None,
+                "active": self._voice.is_active if self._voice else False,
+            } if self.config.voice_enabled else None,
         }
