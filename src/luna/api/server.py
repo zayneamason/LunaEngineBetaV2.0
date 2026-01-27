@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from luna.engine import LunaEngine, EngineConfig
 from luna.core.events import InputEvent, EventType
 from luna.actors.base import Message
+from luna.agentic.router import ExecutionPath
 
 logger = logging.getLogger(__name__)
 
@@ -743,14 +744,47 @@ async def persona_stream(request: MessageRequest):
             }
             yield f"data: {json.dumps(context_event)}\n\n"
 
-            # Emit progress for Thought Stream
-            await _engine._emit_progress(f"[DIRECT] {request.message[:40]}...")
-
-            # Update agentic metrics so EngineStatus shows activity
+            # --- ROUTING: Determine execution path ---
+            routing = _engine.router.analyze(request.message)
             _engine.metrics.agentic_tasks_started += 1
-            _engine.metrics.direct_responses += 1
 
-            # --- PHASE 2: Stream tokens ---
+            # Emit actual routing decision to Thought Stream
+            await _engine._emit_progress(f"[{routing.path.name}] {request.message[:40]}...")
+
+            # --- PHASE 2: Execute based on routing ---
+            if routing.path == ExecutionPath.DIRECT:
+                # DIRECT path: stream straight from director
+                _engine.metrics.direct_responses += 1
+            else:
+                # SIMPLE_PLAN or FULL_PLAN: execute memory retrieval first
+                _engine.metrics.planned_responses += 1
+
+                # OBSERVE phase
+                await _engine._emit_progress("[OBSERVE] Gathering context... (1/2)")
+
+                # Execute memory retrieval if this is a memory query
+                if "memory_query" in routing.signals or matrix and matrix.is_ready:
+                    await _engine._emit_progress("[THINK] Deciding: Execute memory_query...")
+                    await _engine._emit_progress("[ACT:tool] Execute memory_query...")
+
+                    # Re-fetch with potentially more context for memory queries
+                    if matrix and matrix.is_ready:
+                        memory_context = await matrix.get_context(
+                            request.message,
+                            max_tokens=2000,  # More context for planned queries
+                        )
+                        await _engine._emit_progress(
+                            f"[OK] Retrieved {len(memory_context) if memory_context else 0} chars of context"
+                        )
+                    else:
+                        await _engine._emit_progress("[OK] Memory not available, proceeding without")
+
+                # OBSERVE phase 2
+                await _engine._emit_progress("[OBSERVE] Gathering context... (2/2)")
+                await _engine._emit_progress("[THINK] Deciding: Present result to user...")
+                await _engine._emit_progress("[ACT:respond] Present result to user...")
+
+            # --- PHASE 3: Stream tokens ---
             director.on_stream(on_token)
             _engine.on_response(on_complete)
 
@@ -1264,6 +1298,216 @@ async def get_memory_stats():
     except Exception as e:
         logger.error(f"Failed to get memory stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==============================================================================
+# Memory Search & Add (MCP Plugin Endpoints)
+# ==============================================================================
+
+class MemorySearchRequest(BaseModel):
+    """Request for memory search."""
+    query: str
+    limit: int = 10
+    search_type: str = "hybrid"  # keyword, semantic, hybrid
+
+
+class MemorySearchResponse(BaseModel):
+    """Response from memory search."""
+    results: list[dict]
+    count: int
+
+
+class MemoryAddRequest(BaseModel):
+    """Request to add a memory node."""
+    node_type: str = "FACT"
+    content: str
+    tags: Optional[list[str]] = None
+    confidence: float = 1.0
+    metadata: Optional[dict] = None
+
+
+class MemoryAddResponse(BaseModel):
+    """Response from adding a memory node."""
+    node_id: str
+    success: bool
+
+
+class SmartFetchRequest(BaseModel):
+    """Request for smart context fetch."""
+    query: str
+    budget_preset: str = "balanced"  # minimal, balanced, rich
+
+
+class SmartFetchResponse(BaseModel):
+    """Response from smart fetch."""
+    nodes: list[dict]
+    budget_used: int
+
+
+@app.post("/memory/search", response_model=MemorySearchResponse)
+async def memory_search(request: MemorySearchRequest):
+    """
+    Search memory matrix.
+
+    This is the primary search endpoint used by the MCP plugin.
+    Supports keyword, semantic, and hybrid search modes.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix:
+        return MemorySearchResponse(results=[], count=0)
+
+    try:
+        # Get the underlying MemoryMatrix
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+        if not memory:
+            return MemorySearchResponse(results=[], count=0)
+
+        # Use the matrix's search_nodes method
+        if hasattr(memory, "search_nodes"):
+            nodes = await memory.search_nodes(query=request.query, limit=request.limit)
+            # Convert MemoryNode objects to dicts for JSON response
+            results = [
+                {
+                    "id": n.id,
+                    "node_type": n.node_type,
+                    "content": n.content,
+                    "confidence": n.confidence,
+                    "lock_in": n.lock_in,
+                    "lock_in_state": getattr(n, "lock_in_state", None),
+                }
+                for n in nodes
+            ]
+        else:
+            # Fallback to recent nodes filtered by content
+            nodes = await memory.get_recent_nodes(limit=request.limit * 2)
+            query_lower = request.query.lower()
+            results = [
+                {
+                    "id": n.id,
+                    "node_type": n.node_type,
+                    "content": n.content,
+                    "confidence": n.confidence,
+                    "lock_in": n.lock_in,
+                }
+                for n in nodes
+                if query_lower in n.content.lower()
+            ][:request.limit]
+
+        return MemorySearchResponse(results=results, count=len(results))
+    except Exception as e:
+        logger.error(f"Memory search error: {e}")
+        return MemorySearchResponse(results=[], count=0)
+
+
+@app.post("/memory/smart-fetch", response_model=SmartFetchResponse)
+async def memory_smart_fetch(request: SmartFetchRequest):
+    """
+    Intelligently fetch relevant context with token budgeting.
+
+    This is the primary memory retrieval endpoint used by the MCP plugin.
+    Uses the matrix's get_context method with token budget presets.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix or not matrix.is_ready:
+        return SmartFetchResponse(nodes=[], budget_used=0)
+
+    # Map budget presets to token limits
+    budget_map = {
+        "minimal": 1800,
+        "balanced": 3800,
+        "rich": 7200,
+    }
+    max_tokens = budget_map.get(request.budget_preset, 3800)
+
+    try:
+        # Get the underlying MemoryMatrix
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None)
+        if not memory:
+            return SmartFetchResponse(nodes=[], budget_used=0)
+
+        # Use the matrix's get_context method
+        nodes = await memory.get_context(query=request.query, max_tokens=max_tokens)
+
+        # Convert MemoryNode objects to dicts
+        results = [
+            {
+                "id": n.id,
+                "node_type": n.node_type,
+                "content": n.content,
+                "confidence": n.confidence,
+                "lock_in": n.lock_in,
+                "lock_in_state": getattr(n, "lock_in_state", None),
+            }
+            for n in nodes
+        ]
+
+        # Estimate tokens used (rough: ~4 chars per token)
+        total_chars = sum(len(n.content) for n in nodes)
+        budget_used = total_chars // 4
+
+        return SmartFetchResponse(nodes=results, budget_used=budget_used)
+
+    except Exception as e:
+        logger.error(f"Smart fetch error: {e}")
+        return SmartFetchResponse(nodes=[], budget_used=0)
+
+
+@app.post("/memory/add", response_model=MemoryAddResponse)
+async def memory_add(request: MemoryAddRequest):
+    """
+    Add a memory node.
+
+    This is an alias for /memory/nodes with a simpler interface
+    used by the MCP plugin.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix:
+        raise HTTPException(status_code=503, detail="Matrix actor not available")
+
+    try:
+        node_id = await matrix.add_node(
+            node_type=request.node_type,
+            content=request.content,
+            source="mcp",
+            confidence=request.confidence,
+            importance=0.5,
+        )
+
+        return MemoryAddResponse(node_id=node_id, success=True)
+    except Exception as e:
+        logger.error(f"Failed to add memory node: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/memory/flush")
+async def memory_flush():
+    """
+    Flush pending memory operations.
+
+    Triggers the Scribe to process any pending extractions.
+    """
+    if _engine is None:
+        return {"pending": 0, "flushed": 0, "engine_connected": False}
+
+    scribe = _engine.get_actor("scribe")
+    if scribe and hasattr(scribe, "flush_pending"):
+        try:
+            flushed = await scribe.flush_pending()
+            return {"pending": 0, "flushed": flushed}
+        except Exception as e:
+            logger.error(f"Memory flush error: {e}")
+            return {"pending": 0, "flushed": 0, "error": str(e)}
+
+    return {"pending": 0, "flushed": 0, "message": "No pending operations"}
 
 
 @app.post("/extraction/trigger", response_model=ExtractionResponse)

@@ -2,7 +2,7 @@
 Conversation state management for Luna Engine voice system.
 """
 import logging
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 
 from .state import (
@@ -32,20 +32,6 @@ class ConversationManager:
         self.state = ConversationState()
         self.history: List[Message] = []
         self.turns: List[Turn] = []
-
-        # Memory integration (injected from VoiceBackend)
-        self._memory_callback: Optional[callable] = None
-
-    def set_memory_callback(self, callback: callable):
-        """
-        Set callback for memory persistence.
-
-        Args:
-            callback: Function(role: str, content: str, timestamp: int) -> None
-        """
-        self._memory_callback = callback
-        if callback:
-            logger.info("Memory callback configured for conversation persistence")
 
     def start_conversation(self):
         """Start a new conversation."""
@@ -95,17 +81,6 @@ class ConversationManager:
             role=turn.speaker.value,
             content=text
         ))
-
-        # Persist to memory if callback configured
-        if self._memory_callback:
-            try:
-                self._memory_callback(
-                    role="user" if turn.speaker == Speaker.USER else "assistant",
-                    content=text,
-                    timestamp=int(turn.started_at.timestamp())
-                )
-            except Exception as e:
-                logger.error(f"Memory persistence failed: {e}")
 
         # Trim history if needed
         if len(self.history) > self.max_history * 2:  # *2 for user+assistant pairs

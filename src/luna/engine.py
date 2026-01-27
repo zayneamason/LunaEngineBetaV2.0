@@ -416,12 +416,6 @@ class LunaEngine:
             source=ContextSource.CONVERSATION,
         )
 
-        # Trigger extraction on user message (async, non-blocking)
-        try:
-            await self._trigger_extraction("user", user_message)
-        except Exception as e:
-            logger.error(f"Extraction error for user message: {e}")
-
         # Check if this looks like an interrupt
         interrupt_signals = ["stop", "cancel", "wait", "hold on", "nevermind", "never mind"]
         is_interrupt = any(sig in user_message.lower() for sig in interrupt_signals)
@@ -475,19 +469,15 @@ class LunaEngine:
             matrix = self.get_actor("matrix")
             history_manager = self.get_actor("history_manager")
 
-            # Store user turn in HistoryManager and get history context
+            # Record user turn through unified API (extraction + storage)
+            await self.record_conversation_turn(
+                role="user",
+                content=user_message,
+                source="text",
+            )
+
+            # Build history context (may include Recent tier search if backward ref detected)
             if history_manager and history_manager.is_ready:
-                # Estimate tokens (rough: 4 chars per token)
-                estimated_tokens = len(user_message) // 4
-
-                # Store the user turn
-                await history_manager.add_turn(
-                    role="user",
-                    content=user_message,
-                    tokens=estimated_tokens
-                )
-
-                # Build history context (may include Recent tier search if backward ref detected)
                 history_context = await history_manager.build_history_context(user_message)
 
             if matrix and matrix.is_ready:
@@ -496,11 +486,6 @@ class LunaEngine:
 
                 # Retrieve semantic memory context
                 memory_context = await matrix.get_context(user_message, max_tokens=1500)
-                await matrix.store_turn(
-                    session_id=self.session_id,
-                    role="user",
-                    content=user_message,
-                )
                 if memory_context:
                     self.context.add(
                         content=memory_context,
@@ -669,6 +654,62 @@ class LunaEngine:
             except Exception as e:
                 logger.error(f"Progress callback error: {e}")
 
+    async def record_conversation_turn(
+        self,
+        role: str,
+        content: str,
+        source: str = "text",
+        tokens: Optional[int] = None,
+    ) -> None:
+        """
+        Public API for recording conversation turns.
+
+        Unified entry point for all input paths (text, voice, API).
+        Handles extraction, history, and legacy storage.
+
+        Args:
+            role: Who spoke ("user" or "assistant")
+            content: What was said
+            source: Input source ("text", "voice", "api") for logging
+            tokens: Optional token count (estimated if not provided)
+        """
+        if not content or len(content.strip()) < 5:
+            logger.debug(f"Skipping trivial {role} turn ({len(content)} chars)")
+            return
+
+        # 1. Trigger extraction pipeline (Scribe → Librarian → Memory Matrix)
+        try:
+            await self._trigger_extraction(role, content)
+        except Exception as e:
+            logger.error(f"Extraction error for {role} turn: {e}")
+
+        # 2. Store in HistoryManager (conversation continuity)
+        history_manager = self.get_actor("history_manager")
+        if history_manager and history_manager.is_ready:
+            try:
+                await history_manager.add_turn(
+                    role=role,
+                    content=content,
+                    tokens=tokens or len(content) // 4,
+                )
+            except Exception as e:
+                logger.error(f"HistoryManager error for {role} turn: {e}")
+
+        # 3. Store in Matrix as FACT node (legacy storage)
+        matrix = self.get_actor("matrix")
+        if matrix and matrix.is_ready:
+            try:
+                await matrix.store_turn(
+                    session_id=self.session_id,
+                    role=role,
+                    content=content,
+                    tokens=tokens,
+                )
+            except Exception as e:
+                logger.error(f"Matrix storage error for {role} turn: {e}")
+
+        logger.debug(f"📝 Recorded {source} turn: {role} ({len(content)} chars)")
+
     async def _trigger_extraction(self, role: str, content: str) -> None:
         """
         Trigger extraction on a conversation turn.
@@ -780,31 +821,13 @@ class LunaEngine:
                 else:
                     logger.info(f"Skipped storing invalid response: '{text[:50]}...'")
 
-                # Store assistant turn in HistoryManager
-                history_manager = self.get_actor("history_manager")
-                if history_manager and history_manager.is_ready:
-                    estimated_tokens = data.get("output_tokens") or (len(text) // 4)
-                    await history_manager.add_turn(
-                        role="assistant",
-                        content=text,
-                        tokens=estimated_tokens
-                    )
-
-                # Store assistant turn in memory (legacy Matrix storage)
-                matrix = self.get_actor("matrix")
-                if matrix and matrix.is_ready:
-                    await matrix.store_turn(
-                        session_id=self.session_id,
-                        role="assistant",
-                        content=text,
-                        tokens=data.get("output_tokens"),
-                    )
-
-                # Trigger extraction on Luna's response
-                try:
-                    await self._trigger_extraction("assistant", text)
-                except Exception as e:
-                    logger.error(f"Extraction error for assistant message: {e}")
+                # Record assistant turn through unified API
+                await self.record_conversation_turn(
+                    role="assistant",
+                    content=text,
+                    source="text",
+                    tokens=data.get("output_tokens"),
+                )
 
                 # Advance the turn counter (drives TTL expiration and decay)
                 # A "turn" = user message + Luna response

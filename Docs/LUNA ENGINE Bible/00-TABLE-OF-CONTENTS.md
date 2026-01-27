@@ -1,8 +1,8 @@
 # LUNA ENGINE Bible — Table of Contents
 
-**Version:** 2.2  
-**Last Updated:** January 10, 2026  
-**Status:** Complete (13 Parts + Supporting Documents)
+**Version:** 2.6
+**Last Updated:** January 25, 2026
+**Status:** Complete (16 Parts + Supporting Documents)
 
 ---
 
@@ -34,19 +34,21 @@
 |------|-------|--------|-------------|
 | **II** | [System Architecture v2](02-SYSTEM-ARCHITECTURE.md) | ✅ Current | Layer model, Actor-based runtime, Tiered Execution, data flow. |
 | **III** | [Memory Matrix v2.1](03-MEMORY-MATRIX.md) | ✅ Current | The substrate. SQLite + sqlite-vec + Graph. Unified storage, RRF fusion. |
+| **III-A** | [Lock-In Coefficient](03A-LOCK-IN-COEFFICIENT.md) | ✅ **NEW** | Activity-based memory persistence. Sigmoid dynamics, weighted factors (tag siblings TODO). |
 
 ### Processing Actors
 
 | Part | Title | Status | Description |
 |------|-------|--------|-------------|
-| **IV** | [The Scribe v2](04-THE-SCRIBE.md) | ✅ Current | Ben Franklin. Extraction system, chunking, event-driven scheduling. |
-| **V** | [The Librarian v2](05-THE-LIBRARIAN.md) | ✅ Current | The Dude. Filing, entity resolution, spreading activation, retrieval. |
+| **IV** | [The Scribe v2.1](04-THE-SCRIBE.md) | ✅ Updated | Ben Franklin. Extraction system, 11 types, entity updates, turn compression. |
+| **V** | [The Librarian v2.1](05-THE-LIBRARIAN.md) | ✅ Updated | The Dude. Filing, entity resolution, rollback, NetworkX graph, pruning. |
 
 ### Intelligence Layer
 
 | Part | Title | Status | Description |
 |------|-------|--------|-------------|
 | **VI** | [Director LLM](06-DIRECTOR-LLM.md) | ✅ Current | Local 3B/7B with LoRA. Luna's voice, context integration. |
+| **VI-B** | [Conversation Tiers](06-CONVERSATION-TIERS.md) | ✅ **NEW** | Three-tier history (Active/Recent/Archive), HistoryManager, ConversationRing. |
 | **VII** | [Runtime Engine](07-RUNTIME-ENGINE.md) | ✅ Current | Actor model, fault isolation, mailbox-based communication. |
 | **VIII** | [Delegation Protocol](08-DELEGATION-PROTOCOL.md) | ✅ Current | Shadow Reasoner pattern, `<REQ_CLAUDE>` token, async delegation. |
 
@@ -74,7 +76,13 @@
 
 | Part | Title | Status | Description |
 |------|-------|--------|-------------|
-| **XIV** | [Agentic Architecture](14-AGENTIC-ARCHITECTURE.md) | ✅ **NEW** | Revolving context, queue manager, agent loop, swarm mode. Personal Palantir. |
+| **XIV** | [Agentic Architecture](14-AGENTIC-ARCHITECTURE.md) | ✅ Current | Revolving context, queue manager, agent loop, swarm mode. Personal Palantir. |
+
+### User Interface
+
+| Part | Title | Status | Description |
+|------|-------|--------|-------------|
+| **XVI** | [Luna Hub UI](16-LUNA-HUB-UI.md) | ✅ **NEW** | React frontend, glass morphism design, SSE integration, custom hooks. |
 
 ---
 
@@ -176,6 +184,7 @@ The LLM is like a GPU — a specialized compute resource for inference. We're bu
 | LLM as GPU | LLM is stateless inference; Engine is stateful identity | 0 |
 | Sovereignty | You own your AI companion completely | I, X |
 | Memory Matrix | SQLite + sqlite-vec + Graph = Luna's soul | III |
+| Lock-In Coefficient | Activity-based memory persistence (DRIFTING/FLUID/SETTLED) | III-A |
 | Director | Local LLM that speaks as Luna | VI |
 | Shadow Reasoner | Delegate to Claude without user noticing | VIII |
 | Input Buffer | Engine polls (pull) vs Hub handlers (push) | VII |
@@ -218,6 +227,9 @@ The LLM is like a GPU — a specialized compute resource for inference. We're bu
 | 2.1 | Jan 7, 2026 | Part III: FAISS → sqlite-vec migration |
 | 2.2 | Jan 10, 2026 | **Part 0: Foundations (LLM as GPU). Engine v2 Implementation Spec. Lifecycle Diagrams.** |
 | 2.3 | Jan 17, 2026 | **Part XIV: Agentic Architecture. Revolving context, queue manager, agent loop, swarm mode.** |
+| 2.4 | Jan 25, 2026 | **Part VI-B: Conversation Tiers. Three-tier history system, HistoryManager, ConversationRing.** |
+| 2.5 | Jan 25, 2026 | **Part III-A: Lock-In Coefficient. Activity-based memory persistence, sigmoid transform, state classification.** |
+| 2.6 | Jan 25, 2026 | **Part XVI: Luna Hub UI. React frontend, glass morphism design, SSE integration, custom hooks reference.** |
 
 ---
 

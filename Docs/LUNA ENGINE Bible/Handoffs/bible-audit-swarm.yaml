@@ -1,0 +1,456 @@
+# Claude Flow: Luna Bible Audit & Update
+# 
+# Execute with: claude-flow swarm --config bible-audit-swarm.yaml
+#
+# This configuration orchestrates a multi-agent audit of the Luna Engine
+# codebase and reconciliation with the Bible documentation.
+
+name: "luna-bible-audit"
+description: "Forensic audit of Luna Engine codebase + Bible documentation update"
+
+# Working directory for all agents
+workspace: "/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root"
+
+# Output directory for all generated documents
+output_dir: "Docs/LUNA ENGINE Bible/Audit"
+
+# ============================================================================
+# PHASE 1: CODEBASE AUDIT (Parallel Swarm)
+# ============================================================================
+
+phases:
+  - name: "audit"
+    mode: "parallel"
+    description: "Forensic codebase audit - all agents run simultaneously"
+    
+    agents:
+      # Agent 1: Directory Inventory
+      - name: "inventory-agent"
+        task: |
+          Create a complete inventory of the Luna Engine codebase.
+          
+          Target: src/luna/
+          
+          For each directory:
+          1. List all .py files
+          2. Extract: classes, functions, key constants
+          3. Document: imports (internal + external)
+          4. Identify: entry points, public APIs (__init__.py exports)
+          5. Note: TODO/FIXME comments
+          
+          Format as structured markdown with tables.
+        
+        output: "CODEBASE-INVENTORY.md"
+        
+        context_files:
+          - "src/luna/**/*.py"
+      
+      # Agent 2: Dependency Graph
+      - name: "dependency-agent"
+        task: |
+          Build a complete dependency graph of the Luna Engine.
+          
+          1. Trace all import statements in src/luna/
+          2. Build directed graph: module A imports module B
+          3. Identify any circular imports
+          4. List external dependencies (from requirements/pyproject.toml)
+          5. Create ASCII or Mermaid diagram
+          
+          Focus on:
+          - Actor-to-substrate dependencies
+          - Core module dependencies
+          - External library usage (sqlite-vec, mlx, networkx, etc.)
+        
+        output: "DEPENDENCY-GRAPH.md"
+        
+        context_files:
+          - "src/luna/**/*.py"
+          - "pyproject.toml"
+      
+      # Agent 3: Actor System Trace
+      - name: "actor-trace-agent"
+        task: |
+          Deep trace of the actor system in src/luna/actors/
+          
+          For each actor (director.py, scribe.py, librarian.py, matrix.py, history_manager.py):
+          1. What is the actor's responsibility?
+          2. What messages/methods does it expose?
+          3. What other actors/components does it call?
+          4. What state does it maintain?
+          5. How does it interact with MemorySubstrate?
+          
+          Also document:
+          - base.py: Base actor class, lifecycle methods
+          - Message passing patterns
+          - Error handling
+        
+        output: "ACTOR-TRACE.md"
+        
+        context_files:
+          - "src/luna/actors/*.py"
+          - "src/luna/core/events.py"
+      
+      # Agent 4: Memory Substrate Audit
+      - name: "substrate-audit-agent"
+        task: |
+          Deep audit of src/luna/substrate/ (Luna's soul storage)
+          
+          For each file:
+          - database.py: Connection management, schema initialization
+          - embeddings.py: What model? Dimensions? Provider?
+          - graph.py: NetworkX or rustworkx? What node/edge types?
+          - lock_in.py: Lock-in coefficient algorithm
+          - memory.py: Main MemorySubstrate class API
+          - schema.sql: Full schema documentation
+          
+          Document:
+          - Actual table structure
+          - Index strategy
+          - FTS5 configuration
+          - Vector search implementation
+          - Graph traversal methods
+          
+          Compare with Bible Part III claims.
+        
+        output: "SUBSTRATE-AUDIT.md"
+        
+        context_files:
+          - "src/luna/substrate/*.py"
+          - "src/luna/substrate/schema.sql"
+          - "src/luna/memory/*.py"
+          - "Docs/LUNA ENGINE Bible/03-MEMORY-MATRIX.md"
+      
+      # Agent 5: Engine Lifecycle Trace
+      - name: "lifecycle-agent"
+        task: |
+          Trace the complete lifecycle of Luna Engine.
+          
+          Analyze src/luna/engine.py:
+          1. Boot sequence: What order do components initialize?
+          2. Main loop: Tick-based? Event-driven? Hybrid?
+          3. Actor lifecycle: How are actors started/stopped?
+          4. State persistence: What gets saved? When?
+          5. Shutdown: Graceful termination sequence
+          
+          Also trace:
+          - src/luna/core/state.py
+          - src/luna/core/input_buffer.py
+          - src/luna/core/tasks.py
+          
+          Create lifecycle diagram (ASCII or Mermaid).
+          Compare with Bible Part VII claims.
+        
+        output: "ENGINE-LIFECYCLE-AUDIT.md"
+        
+        context_files:
+          - "src/luna/engine.py"
+          - "src/luna/core/*.py"
+          - "src/luna/actors/base.py"
+          - "Docs/LUNA ENGINE Bible/07-RUNTIME-ENGINE.md"
+      
+      # Agent 6: Test Coverage Analysis
+      - name: "test-coverage-agent"
+        task: |
+          Analyze test coverage of Luna Engine.
+          
+          1. List all test files in tests/
+          2. Map each test file to source modules
+          3. Identify what's tested vs untested
+          4. Note any failing or skipped tests
+          5. Document test patterns used
+          
+          Run: pytest --collect-only
+          
+          Output coverage matrix:
+          | Module | Test File | Test Count | Notes |
+        
+        output: "TEST-COVERAGE.md"
+        
+        context_files:
+          - "tests/**/*.py"
+          - "pyproject.toml"
+
+  # ============================================================================
+  # PHASE 2: RECONCILIATION (Sequential)
+  # ============================================================================
+
+  - name: "reconcile"
+    mode: "sequential"
+    description: "Map Bible chapters to code, identify drift"
+    depends_on: ["audit"]
+    
+    agents:
+      - name: "reconciliation-agent"
+        task: |
+          Create master reconciliation document.
+          
+          For each Bible chapter (02-14), create a table:
+          
+          | Bible Claim | Code Location | Status | Notes |
+          |-------------|---------------|--------|-------|
+          
+          Status values:
+          - ✅ MATCH: Bible matches code
+          - ⚠️ DRIFT: Implemented differently than documented
+          - ❌ MISSING: Documented but not implemented
+          - 🆕 UNDOCUMENTED: Implemented but not in Bible
+          
+          Use audit outputs as primary source of truth.
+          
+          Prioritize discrepancies by impact:
+          - HIGH: Core architecture claims
+          - MEDIUM: API/interface details
+          - LOW: Minor implementation details
+        
+        output: "BIBLE-CODE-RECONCILIATION.md"
+        
+        context_files:
+          - "Audit/CODEBASE-INVENTORY.md"
+          - "Audit/ACTOR-TRACE.md"
+          - "Audit/SUBSTRATE-AUDIT.md"
+          - "Audit/ENGINE-LIFECYCLE-AUDIT.md"
+          - "Docs/LUNA ENGINE Bible/*.md"
+
+  # ============================================================================
+  # PHASE 3: BIBLE UPDATES (Parallel Swarm)
+  # ============================================================================
+
+  - name: "update"
+    mode: "parallel"
+    description: "Update Bible chapters to match reality"
+    depends_on: ["reconcile"]
+    
+    agents:
+      # Part II: System Architecture
+      - name: "bible-part-02-agent"
+        task: |
+          Update Part II (System Architecture) based on reconciliation.
+          
+          1. Read current 02-SYSTEM-ARCHITECTURE.md
+          2. Read BIBLE-CODE-RECONCILIATION.md for Part II issues
+          3. Read ENGINE-LIFECYCLE-AUDIT.md for accurate details
+          4. Update architecture diagrams to match implementation
+          5. Fix code references to point to real files
+          6. Mark "Planned" vs "Implemented" clearly
+          7. Add changelog entry at bottom
+          
+          Preserve existing structure and prose style.
+          Only change what's factually incorrect.
+        
+        output: "../02-SYSTEM-ARCHITECTURE.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/02-SYSTEM-ARCHITECTURE.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+          - "Audit/ENGINE-LIFECYCLE-AUDIT.md"
+          - "Audit/CODEBASE-INVENTORY.md"
+      
+      # Part III: Memory Matrix
+      - name: "bible-part-03-agent"
+        task: |
+          Update Part III (Memory Matrix) based on reconciliation.
+          
+          Focus on:
+          - Actual schema (from schema.sql)
+          - Vector implementation (sqlite-vec vs FAISS?)
+          - Graph implementation (NetworkX vs rustworkx?)
+          - Lock-in coefficient algorithm
+          - FTS5 configuration
+          
+          Include working code snippets from actual codebase.
+        
+        output: "../03-MEMORY-MATRIX.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/03-MEMORY-MATRIX.md"
+          - "Audit/SUBSTRATE-AUDIT.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+      
+      # Part IV: The Scribe
+      - name: "bible-part-04-agent"
+        task: |
+          Update Part IV (The Scribe / Ben Franklin).
+          
+          Focus on:
+          - Actual extraction implementation in actors/scribe.py
+          - Chunking strategy in extraction/
+          - Event-driven vs scheduled operation
+          - Integration with substrate
+        
+        output: "../04-THE-SCRIBE.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/04-THE-SCRIBE.md"
+          - "Audit/ACTOR-TRACE.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+          - "src/luna/actors/scribe.py"
+          - "src/luna/extraction/*.py"
+      
+      # Part V: The Librarian
+      - name: "bible-part-05-agent"
+        task: |
+          Update Part V (The Librarian / The Dude).
+          
+          Focus on:
+          - Actual retrieval implementation in actors/librarian.py
+          - Entity resolution in entities/
+          - Search strategies (keyword, semantic, hybrid)
+          - Spreading activation implementation
+        
+        output: "../05-THE-LIBRARIAN.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/05-THE-LIBRARIAN.md"
+          - "Audit/ACTOR-TRACE.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+          - "src/luna/actors/librarian.py"
+          - "src/luna/entities/*.py"
+      
+      # Part VI: Director LLM
+      - name: "bible-part-06-agent"
+        task: |
+          Update Part VI (Director LLM).
+          
+          Focus on:
+          - Actual inference implementation in inference/local.py
+          - Director actor in actors/director.py
+          - Model loading, context handling
+          - LoRA integration status
+        
+        output: "../06-DIRECTOR-LLM.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/06-DIRECTOR-LLM.md"
+          - "Audit/ACTOR-TRACE.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+          - "src/luna/actors/director.py"
+          - "src/luna/inference/*.py"
+      
+      # Part VII: Runtime Engine
+      - name: "bible-part-07-agent"
+        task: |
+          Update Part VII (Runtime Engine).
+          
+          Focus on:
+          - Actual engine loop in engine.py
+          - Actor base class and lifecycle
+          - Input buffer implementation
+          - State management
+        
+        output: "../07-RUNTIME-ENGINE.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/07-RUNTIME-ENGINE.md"
+          - "Audit/ENGINE-LIFECYCLE-AUDIT.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+      
+      # Part VIII: Delegation Protocol
+      - name: "bible-part-08-agent"
+        task: |
+          Update Part VIII (Delegation Protocol).
+          
+          Focus on:
+          - Agentic router in agentic/router.py
+          - Planner implementation
+          - Actual delegation triggers
+          - Shadow Reasoner status (implemented?)
+        
+        output: "../08-DELEGATION-PROTOCOL.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/08-DELEGATION-PROTOCOL.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+          - "src/luna/agentic/*.py"
+      
+      # Part XIV: Agentic Architecture
+      - name: "bible-part-14-agent"
+        task: |
+          Update Part XIV (Agentic Architecture).
+          
+          Focus on:
+          - Agentic loop implementation
+          - Queue management
+          - Tool registry
+          - Swarm mode status
+        
+        output: "../14-AGENTIC-ARCHITECTURE.md"
+        
+        context_files:
+          - "Docs/LUNA ENGINE Bible/14-AGENTIC-ARCHITECTURE.md"
+          - "Audit/BIBLE-CODE-RECONCILIATION.md"
+          - "src/luna/agentic/*.py"
+          - "src/luna/tools/*.py"
+
+  # ============================================================================
+  # PHASE 4: INFRASTRUCTURE (Sequential)
+  # ============================================================================
+
+  - name: "infrastructure"
+    mode: "sequential"
+    description: "Create maintenance infrastructure"
+    depends_on: ["update"]
+    
+    agents:
+      - name: "infrastructure-agent"
+        task: |
+          Create maintenance infrastructure for Bible.
+          
+          1. Create MAINTENANCE.md with:
+             - Update triggers (when to update Bible)
+             - Review checklist
+             - Code reference validation process
+             
+          2. Create CHANGELOG.md with:
+             - All changes from this audit
+             - Semantic versioning format
+             - Links to audit documents
+             
+          3. Update 00-TABLE-OF-CONTENTS.md:
+             - Add Audit/ directory listing
+             - Update version to 2.3.0
+             - Update "Last Updated" date
+             
+          4. Verify all internal links work
+        
+        outputs:
+          - "../MAINTENANCE.md"
+          - "../CHANGELOG.md"
+          - "../00-TABLE-OF-CONTENTS.md"
+
+# ============================================================================
+# GLOBAL SETTINGS
+# ============================================================================
+
+settings:
+  # Model for all agents
+  model: "claude-sonnet-4-20250514"
+  
+  # Max tokens per agent response
+  max_tokens: 16000
+  
+  # Temperature (lower for factual accuracy)
+  temperature: 0.3
+  
+  # Allow agents to read files
+  file_access: true
+  
+  # Create output directory if needed
+  create_dirs: true
+  
+  # Git commit after completion
+  git_commit: true
+  git_message: "Bible v2.3.0: Forensic audit + documentation update"
+
+# ============================================================================
+# COMPLETION HOOKS
+# ============================================================================
+
+on_complete:
+  - action: "notify"
+    message: "Luna Bible audit and update complete. Review Audit/ directory."
+  
+  - action: "validate"
+    checks:
+      - "All output files created"
+      - "No broken links in updated chapters"
+      - "Version numbers consistent"

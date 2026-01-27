@@ -1,0 +1,402 @@
+# Claude Flow: Luna Bible Parts XV & XVI — API & UI Documentation
+#
+# Execute with: claude-flow swarm --config bible-api-ui-swarm.yaml
+#
+# This configuration creates two new Bible chapters:
+# - Part XV: API Reference (50+ endpoints)
+# - Part XVI: Luna Hub UI (React frontend)
+
+name: "luna-bible-api-ui"
+description: "Document Luna Engine API and Luna Hub UI"
+
+workspace: "/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root"
+output_dir: "Docs/LUNA ENGINE Bible"
+
+# ============================================================================
+# PHASE 1: API AUDIT
+# ============================================================================
+
+phases:
+  - name: "api-audit"
+    mode: "sequential"
+    description: "Extract all API endpoints and SSE events from server.py"
+    
+    agents:
+      - name: "api-endpoint-extractor"
+        task: |
+          Parse src/luna/api/server.py and extract ALL endpoints.
+          
+          For each endpoint, document:
+          1. HTTP method (GET, POST, DELETE, etc.)
+          2. Path (including path parameters like {node_id})
+          3. Query parameters (with types and defaults)
+          4. Request body schema (from Pydantic BaseModel)
+          5. Response schema (from response_model)
+          6. Description (from docstring)
+          7. Status codes returned
+          
+          Group endpoints by category:
+          - Core Interaction: /message, /stream, /persona/stream, /abort, /interrupt
+          - Engine Status: /status, /health, /consciousness, /history
+          - Memory: /memory/*
+          - Extraction: /extraction/*
+          - Hub/History: /hub/*
+          - Debug: /debug/*
+          - Voice: /voice/*
+          - Tuning: /tuning/*
+          - Ring Buffer: /api/ring/*
+          - System: /api/system/*
+          
+          Output as structured markdown with tables.
+        
+        output: "Audit/API-ENDPOINT-INVENTORY.md"
+        
+        context_files:
+          - "src/luna/api/server.py"
+
+      - name: "api-sse-extractor"
+        task: |
+          Extract all Server-Sent Events (SSE) from streaming endpoints.
+          
+          Streaming endpoints to analyze:
+          - POST /stream
+          - POST /persona/stream
+          - GET /thoughts
+          - GET /voice/stream
+          
+          For each endpoint, document:
+          1. Event types (event: name)
+          2. Data format for each event type
+          3. Connection lifecycle (open, keepalive, close)
+          4. Error event format
+          5. Reconnection behavior (if documented)
+          
+          Include example event sequences for common flows.
+        
+        output: "Audit/API-SSE-EVENTS.md"
+        
+        context_files:
+          - "src/luna/api/server.py"
+
+  # ============================================================================
+  # PHASE 2: UI AUDIT (Parallel)
+  # ============================================================================
+
+  - name: "ui-audit"
+    mode: "parallel"
+    description: "Audit React frontend components and architecture"
+    
+    agents:
+      - name: "ui-component-auditor"
+        task: |
+          Inventory all React components in frontend/src/components/.
+          
+          For each component:
+          1. Component name and filename
+          2. Props interface (what props does it accept?)
+          3. Internal state (useState, useReducer)
+          4. Hooks used (custom and built-in)
+          5. API endpoints called (if any)
+          6. Child components rendered
+          7. Key responsibilities/features
+          8. Notable patterns (memoization, refs, effects)
+          
+          Components to audit:
+          - ChatPanel.jsx — Main conversation interface
+          - VoicePanel.jsx — Voice controls
+          - ConsciousnessMonitor.jsx — Mood/coherence display
+          - PersonalityMonitorPanel.jsx — Patch system
+          - ContextDebugPanel.jsx — Context window debug
+          - ConversationCache.jsx — History view
+          - TuningPanel.jsx — Parameter adjustment
+          - ThoughtStream.jsx — Internal process
+          - EngineStatus.jsx — Actor health
+          - GlassCard.jsx — UI primitive
+          - GradientOrb.jsx — Visual element
+          - StatusDot.jsx — Status indicator
+          
+          Also audit frontend/src/App.jsx for overall structure.
+        
+        output: "Audit/UI-COMPONENT-INVENTORY.md"
+        
+        context_files:
+          - "frontend/src/components/*.jsx"
+          - "frontend/src/App.jsx"
+
+      - name: "ui-hooks-auditor"
+        task: |
+          Inventory all custom React hooks in frontend/src/hooks/.
+          
+          For each hook:
+          1. Hook name and filename
+          2. Purpose/responsibility
+          3. Parameters accepted
+          4. Return value (state, functions, etc.)
+          5. API endpoints called
+          6. SSE connections managed
+          7. Dependencies (other hooks, libraries)
+          8. Side effects (localStorage, timers, etc.)
+          
+          Document usage patterns and examples.
+        
+        output: "Audit/UI-HOOKS-INVENTORY.md"
+        
+        context_files:
+          - "frontend/src/hooks/*.js"
+
+      - name: "ui-design-auditor"
+        task: |
+          Extract the design system from the Luna Hub UI.
+          
+          From tailwind.config.js:
+          - Custom colors
+          - Custom fonts
+          - Custom spacing
+          - Custom animations
+          - Breakpoints
+          
+          From index.css:
+          - CSS custom properties
+          - Global styles
+          - Animation keyframes
+          
+          From components (especially GlassCard.jsx):
+          - Glass morphism implementation
+          - Common utility classes used
+          - Shadow patterns
+          - Border patterns
+          
+          Document the visual language:
+          - Color palette with hex values
+          - Typography scale
+          - Spacing scale
+          - Border radius patterns
+          - Shadow patterns
+          - Animation patterns
+        
+        output: "Audit/UI-DESIGN-SYSTEM.md"
+        
+        context_files:
+          - "frontend/tailwind.config.js"
+          - "frontend/src/index.css"
+          - "frontend/src/components/GlassCard.jsx"
+          - "frontend/src/components/GradientOrb.jsx"
+
+      - name: "ui-state-auditor"
+        task: |
+          Analyze state management in the Luna Hub UI.
+          
+          Questions to answer:
+          1. Is Redux used? If so, what slices exist?
+          2. Is React Context used? What contexts exist?
+          3. How is server state managed? (React Query? SWR? Custom?)
+          4. How are SSE connections managed?
+          5. How is form state handled?
+          6. What state is persisted (localStorage, etc.)?
+          
+          Document:
+          - State management strategy
+          - Data flow diagram (props down, events up)
+          - API response caching strategy
+          - Real-time update patterns
+          - Error state handling
+          - Loading state patterns
+        
+        output: "Audit/UI-STATE-ANALYSIS.md"
+        
+        context_files:
+          - "frontend/src/App.jsx"
+          - "frontend/src/hooks/*.js"
+          - "frontend/src/components/*.jsx"
+          - "frontend/package.json"
+
+  # ============================================================================
+  # PHASE 3: WRITE PART XV — API REFERENCE
+  # ============================================================================
+
+  - name: "write-api-docs"
+    mode: "sequential"
+    description: "Write Part XV: API Reference"
+    depends_on: ["api-audit"]
+    
+    agents:
+      - name: "part-15-writer"
+        task: |
+          Write Part XV: API Reference for the Luna Engine Bible.
+          
+          Use the audit documents as source of truth.
+          
+          Structure:
+          1. Overview (base URL, auth, content types, streaming)
+          2. Core Interaction endpoints
+          3. Engine Status endpoints
+          4. Memory Operations endpoints
+          5. Extraction endpoints
+          6. History Management (Hub API) endpoints
+          7. Debug endpoints
+          8. Voice Integration endpoints
+          9. Tuning endpoints
+          10. Ring Buffer endpoints
+          11. System endpoints
+          12. SSE Event Reference (all streaming events)
+          13. Error Handling (status codes, error format)
+          14. Examples (curl commands for common operations)
+          
+          For each endpoint, include:
+          - Method and path
+          - Description
+          - Request body table (field, type, required, description)
+          - Response table (field, type, description)
+          - curl example
+          - Example response JSON
+          
+          Style:
+          - Technical but readable
+          - Tables for structured data
+          - Code blocks for examples
+          - Clear section headers
+          
+          Add changelog entry at bottom.
+        
+        output: "15-API-REFERENCE.md"
+        
+        context_files:
+          - "Audit/API-ENDPOINT-INVENTORY.md"
+          - "Audit/API-SSE-EVENTS.md"
+          - "src/luna/api/server.py"
+
+  # ============================================================================
+  # PHASE 4: WRITE PART XVI — LUNA HUB UI
+  # ============================================================================
+
+  - name: "write-ui-docs"
+    mode: "sequential"
+    description: "Write Part XVI: Luna Hub UI"
+    depends_on: ["ui-audit"]
+    
+    agents:
+      - name: "part-16-writer"
+        task: |
+          Write Part XVI: Luna Hub UI for the Luna Engine Bible.
+          
+          Use the audit documents as source of truth.
+          
+          Structure:
+          1. Overview (stack, architecture, purpose)
+          2. Architecture
+             - Component hierarchy diagram
+             - Data flow diagram
+             - API integration pattern
+          3. Core Components
+             - ChatPanel (conversation interface)
+             - VoicePanel (voice controls)
+             - EngineStatus (health monitoring)
+          4. Monitoring Components
+             - ConsciousnessMonitor
+             - PersonalityMonitorPanel
+             - ContextDebugPanel
+             - ConversationCache
+             - ThoughtStream
+          5. Developer Tools
+             - TuningPanel
+          6. Design System
+             - Color palette
+             - Typography
+             - Spacing
+             - Glass morphism
+             - Animations
+          7. Hooks Reference (all custom hooks)
+          8. SSE Integration
+             - Connection management
+             - Event handling
+             - Reconnection
+          9. UX Patterns
+             - Loading states
+             - Error handling
+             - Real-time updates
+          10. Development
+              - Running locally
+              - Environment setup
+              - Build process
+          
+          Style:
+          - Clear component documentation
+          - Include prop tables
+          - ASCII diagrams for architecture
+          - Code snippets from actual codebase
+          
+          Add changelog entry at bottom.
+        
+        output: "16-LUNA-HUB-UI.md"
+        
+        context_files:
+          - "Audit/UI-COMPONENT-INVENTORY.md"
+          - "Audit/UI-HOOKS-INVENTORY.md"
+          - "Audit/UI-DESIGN-SYSTEM.md"
+          - "Audit/UI-STATE-ANALYSIS.md"
+
+  # ============================================================================
+  # PHASE 5: UPDATE TOC
+  # ============================================================================
+
+  - name: "update-toc"
+    mode: "sequential"
+    description: "Update Table of Contents with new chapters"
+    depends_on: ["write-api-docs", "write-ui-docs"]
+    
+    agents:
+      - name: "toc-updater"
+        task: |
+          Update 00-TABLE-OF-CONTENTS.md to include Parts XV and XVI.
+          
+          Add to Part Index:
+          
+          ### Interface Layer
+          
+          | Part | Title | Status | Description |
+          |------|-------|--------|-------------|
+          | **XV** | [API Reference](15-API-REFERENCE.md) | ✅ **NEW** | Complete HTTP/SSE API documentation. 50+ endpoints. |
+          | **XVI** | [Luna Hub UI](16-LUNA-HUB-UI.md) | ✅ **NEW** | React frontend architecture, components, design system. |
+          
+          Update version to 2.4.0.
+          Update "Last Updated" date.
+          
+          Add to Version History:
+          | 2.4.0 | Jan 25, 2026 | **Parts XV & XVI: API Reference and Luna Hub UI documentation.** |
+          
+          Update dependency graph to show new chapters.
+        
+        output: "00-TABLE-OF-CONTENTS.md"
+        
+        context_files:
+          - "00-TABLE-OF-CONTENTS.md"
+          - "15-API-REFERENCE.md"
+          - "16-LUNA-HUB-UI.md"
+
+# ============================================================================
+# GLOBAL SETTINGS
+# ============================================================================
+
+settings:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 16000
+  temperature: 0.3
+  file_access: true
+  create_dirs: true
+  git_commit: true
+  git_message: "Bible v2.4.0: Add Part XV (API Reference) and Part XVI (Luna Hub UI)"
+
+# ============================================================================
+# COMPLETION
+# ============================================================================
+
+on_complete:
+  - action: "notify"
+    message: "Parts XV and XVI complete. Luna Engine Bible now covers API and UI."
+  
+  - action: "validate"
+    checks:
+      - "15-API-REFERENCE.md exists and has content"
+      - "16-LUNA-HUB-UI.md exists and has content"
+      - "00-TABLE-OF-CONTENTS.md updated with new parts"
+      - "All audit files created in Audit/"

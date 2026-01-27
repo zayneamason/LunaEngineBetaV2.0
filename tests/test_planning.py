@@ -1,12 +1,16 @@
 """
-Tests for the Director planning layer.
+Tests for the Director planning layer and query routing.
 
 The planning layer decides upfront whether to delegate to Claude
 based on query complexity and explicit signals.
+
+The router determines execution path (DIRECT, SIMPLE_PLAN, FULL_PLAN, BACKGROUND)
+based on complexity estimation and signal detection.
 """
 
 import pytest
 from luna.actors.director import DirectorActor
+from luna.agentic.router import QueryRouter, ExecutionPath
 
 
 class TestDelegationSignals:
@@ -99,3 +103,135 @@ class TestShouldDelegate:
         # Should still work based on signals
         assert await director._should_delegate("Research AI trends") is True
         assert await director._should_delegate("Hi there!") is False
+
+
+# =============================================================================
+# QUERY ROUTER PATH FORCING TESTS
+# =============================================================================
+
+class TestQueryRouterPathForcing:
+    """Test the QueryRouter path forcing behavior for memory and research queries."""
+
+    @pytest.fixture
+    def router(self):
+        """Create a fresh QueryRouter instance."""
+        return QueryRouter()
+
+    def test_memory_query_forces_simple_plan(self, router):
+        """Memory queries should be forced to SIMPLE_PLAN when forcing is enabled."""
+        # Default: forcing is enabled
+        assert router._force_memory_to_plan is True
+
+        decision = router.analyze("do you remember alex?")
+        assert decision.path == ExecutionPath.SIMPLE_PLAN
+        assert "memory_query" in decision.signals
+        assert decision.reason == "Memory query requires retrieval step"
+
+    def test_memory_query_various_patterns(self, router):
+        """Various memory query patterns should all route to SIMPLE_PLAN."""
+        memory_queries = [
+            "do you remember alex?",
+            "what do you know about the project?",
+            "recall our conversation yesterday",
+            "who is sarah?",
+            "tell me about the meeting",
+            "check your memories for that",
+        ]
+
+        for query in memory_queries:
+            decision = router.analyze(query)
+            assert decision.path == ExecutionPath.SIMPLE_PLAN, f"Failed for: {query}"
+            assert "memory_query" in decision.signals, f"No memory_query signal for: {query}"
+
+    def test_memory_forcing_can_be_disabled(self, router):
+        """When forcing is disabled, memory queries route based on complexity."""
+        router._force_memory_to_plan = False
+
+        # Short query = low complexity = DIRECT
+        decision = router.analyze("remember?")
+        assert decision.path == ExecutionPath.DIRECT
+
+    def test_memory_min_complexity_floor(self, router):
+        """Memory queries should have their complexity floored."""
+        router._memory_min_complexity = 0.4
+
+        decision = router.analyze("remember alex?")
+        # Even though query is short, complexity should be at least 0.4
+        assert decision.complexity >= 0.4
+        assert decision.path == ExecutionPath.SIMPLE_PLAN
+
+    def test_greeting_still_routes_direct(self, router):
+        """Greetings should still route to DIRECT (no regression)."""
+        greetings = [
+            "hey luna!",
+            "hello",
+            "hi there",
+            "good morning",
+        ]
+
+        for greeting in greetings:
+            decision = router.analyze(greeting)
+            assert decision.path == ExecutionPath.DIRECT, f"Failed for: {greeting}"
+
+    def test_research_query_forces_full_plan(self, router):
+        """Research queries should be forced to FULL_PLAN when forcing is enabled."""
+        assert router._force_research_to_full is True
+
+        decision = router.analyze("research the latest AI developments")
+        assert decision.path == ExecutionPath.FULL_PLAN
+        assert "research_request" in decision.signals
+        assert decision.reason == "Research query requires multi-step planning"
+
+    def test_research_forcing_can_be_disabled(self, router):
+        """When forcing is disabled, research queries route based on complexity."""
+        router._force_research_to_full = False
+
+        # Without forcing, short research query goes based on complexity
+        decision = router.analyze("research AI")
+        # Complexity will be boosted by research patterns, but may not hit FULL threshold
+        assert decision.path in [ExecutionPath.SIMPLE_PLAN, ExecutionPath.FULL_PLAN]
+
+    def test_background_request_takes_priority(self, router):
+        """Explicit background requests should override memory forcing."""
+        decision = router.analyze("remember everything in the background")
+        # Background pattern takes priority over memory pattern
+        assert decision.path == ExecutionPath.BACKGROUND
+
+    def test_memory_query_includes_tool_suggestion(self, router):
+        """Memory queries should suggest the memory_query tool."""
+        decision = router.analyze("do you remember our discussion?")
+        assert "memory_query" in decision.suggested_tools
+
+
+class TestQueryRouterComplexityEstimation:
+    """Test the complexity estimation logic."""
+
+    @pytest.fixture
+    def router(self):
+        return QueryRouter()
+
+    def test_short_queries_low_complexity(self, router):
+        """Short queries should have low base complexity."""
+        complexity = router.estimate_complexity("hi")
+        assert complexity < 0.2
+
+    def test_long_queries_higher_complexity(self, router):
+        """Longer queries should have higher complexity."""
+        short = router.estimate_complexity("hi")
+        long = router.estimate_complexity(
+            "Please analyze the following document and provide a detailed summary "
+            "with key points, action items, and recommendations for next steps."
+        )
+        assert long > short
+
+    def test_research_keywords_increase_complexity(self, router):
+        """Research keywords should increase complexity."""
+        base = router.estimate_complexity("tell me about AI")
+        research = router.estimate_complexity("research and analyze AI trends")
+        assert research > base
+
+    def test_greetings_reduce_complexity(self, router):
+        """Greetings should reduce complexity."""
+        greeting = router.estimate_complexity("Hello!")
+        question = router.estimate_complexity("Hello, how does this work?")
+        assert greeting < question

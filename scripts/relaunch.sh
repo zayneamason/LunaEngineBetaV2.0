@@ -47,8 +47,8 @@ elif [ -d "venv" ]; then
     source venv/bin/activate
 fi
 
-# Start the voice server (or whatever the main backend is)
-LOG_LEVEL=DEBUG python -m luna.voice.server > /tmp/luna_backend.log 2>&1 &
+# Start the Luna Engine API server
+LOG_LEVEL=DEBUG python scripts/run.py --server > /tmp/luna_backend.log 2>&1 &
 BACKEND_PID=$!
 echo -e "${GREEN}✓ Backend started (PID: $BACKEND_PID)${NC}"
 

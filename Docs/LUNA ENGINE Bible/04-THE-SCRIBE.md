@@ -1,8 +1,9 @@
-# Part IV: The Scribe (Ben Franklin) — v2.0
+# Part IV: The Scribe (Ben Franklin) — v2.1
 
 **Status:** CURRENT
-**Replaces:** BIBLE-PART-IV-THE-SCRIBE-v1.md
-**Date:** December 29, 2025
+**Replaces:** BIBLE-PART-IV-THE-SCRIBE-v2.0.md
+**Last Updated:** January 25, 2026
+**Implementation:** `src/luna/actors/scribe.py`
 
 ---
 
@@ -177,7 +178,7 @@ class BenStack:
 
 ## 4.4 Extraction Types
 
-Ben classifies into seven categories:
+Ben classifies into eleven categories (defined in `src/luna/extraction/types.py`):
 
 | Type | Description | Example | Signal Words |
 |------|-------------|---------|--------------|
@@ -187,7 +188,11 @@ Ben classifies into seven categories:
 | **ASSUMPTION** | Believed but unverified | "Users will want voice-first" | assume, probably, likely |
 | **CONNECTION** | Relationship between entities | "Alex and Sarah are teammates" | knows, works with, related to |
 | **ACTION** | Something done or to be done | "Need to implement RRF" | did, need to, should, will |
-| **OUTCOME** | Result of action or decision | "Switching to rustworkx saved 45ms" | resulted in, improved, fixed |
+| **OUTCOME** | Result of action or decision | "Switching to NetworkX saved 45ms" | resulted in, improved, fixed |
+| **QUESTION** | A question asked | "What is the best approach?" | what, how, why, when |
+| **PREFERENCE** | User preference stated | "I prefer dark mode" | prefer, like, want, favor |
+| **OBSERVATION** | Something noticed | "The API seems slow today" | notice, seems, appears |
+| **MEMORY** | A memory shared | "Remember when we debugged that?" | remember, recall, back when |
 
 ### Confidence Scoring
 
@@ -232,29 +237,53 @@ class ExtractionInput:
 ```python
 @dataclass
 class ExtractedObject:
-    type: ExtractionType  # FACT, DECISION, PROBLEM, etc.
-    subtype: str | None  # Further classification
+    type: ExtractionType  # FACT, DECISION, PROBLEM, QUESTION, PREFERENCE, etc.
     content: str  # The distilled content
-    properties: dict  # Structured fields
     confidence: float  # 0.0-1.0
     entities: list[str]  # Mentioned entities
-    embedding: np.ndarray | None  # Pre-computed if available
+    source_id: str = ""  # Source reference
+    metadata: dict = field(default_factory=dict)  # Additional structured fields
 
 @dataclass
 class ExtractedEdge:
-    from_ref: str  # ID or content reference
-    to_ref: str
-    type: str  # "works_on", "decided", "caused", etc.
-    role: str | None  # "author", "subject", etc.
-    context_ref: str | None  # Source conversation
+    from_ref: str  # Source entity name
+    to_ref: str  # Target entity name
+    edge_type: str  # "works_on", "decided", "caused", etc.
+    confidence: float = 1.0  # Edge confidence
+    source_id: str = ""  # Source conversation
 
 @dataclass
 class ExtractionOutput:
     objects: list[ExtractedObject]
     edges: list[ExtractedEdge]
-    source_id: str
-    extraction_time_ms: int
+    source_id: str = ""
+    extraction_time_ms: int = 0
+
+    def is_empty(self) -> bool:
+        """Check if extraction produced no results."""
+        return len(self.objects) == 0 and len(self.edges) == 0
+
+    def to_dict(self) -> dict:
+        """Serialize for message passing."""
+        ...
 ```
+
+### Entity Updates (v2.1 Addition)
+
+Ben also extracts entity updates for the Entity System:
+
+```python
+@dataclass
+class EntityUpdate:
+    update_type: ChangeType  # CREATE, UPDATE, SYNTHESIZE
+    entity_id: str | None  # Existing ID (for updates)
+    name: str  # Entity name
+    entity_type: EntityType  # PERSON, PERSONA, PLACE, PROJECT
+    facts: dict[str, str]  # Facts to add/update
+    source: str = ""  # Source of update
+```
+
+This enables Ben to file biographical facts directly to entity profiles.
 
 ---
 
@@ -352,66 +381,92 @@ class ScribeScheduler:
 
 ---
 
-## 4.8 Implementation
+## 4.8 Implementation (Actor Pattern)
+
+The actual implementation uses the Actor pattern with mailbox-based communication:
 
 ```python
-class Scribe:
-    """Benjamin Franklin: The extraction system."""
+class ScribeActor(Actor):
+    """
+    Benjamin Franklin: The extraction system.
 
-    def __init__(self, director: Director, librarian: Librarian):
-        self.transcriber = WhisperTurboLocal()
-        self.classifier = director.model  # Share with Director
-        self.extractor = ShadowReasonerClient()
+    Extracts structured knowledge from conversations and sends
+    to Librarian for filing in Memory Matrix.
+    """
+
+    def __init__(
+        self,
+        config: Optional[ExtractionConfig] = None,
+        engine: Optional["LunaEngine"] = None,
+    ):
+        super().__init__("scribe", engine)
+
+        self.config = config or ExtractionConfig()
         self.chunker = SemanticChunker()
-        self.stack = BenStack(window_size=5)
-        self.librarian = librarian
+        self.stack: deque[Chunk] = deque(maxlen=5)  # Context window
 
-    async def process_audio(self, audio_chunk: bytes) -> ScribeOutput:
-        """Hot path: Audio → Classification → Route."""
-        # 1. Transcribe (~150ms)
-        text = await self.transcriber.transcribe(audio_chunk)
+        # Anthropic client (lazy init)
+        self._client = None
 
-        # 2. Reflexive classification (~40ms)
-        intent = await self.classifier.classify(text)
+        # Stats
+        self._extractions_count = 0
+        self._objects_extracted = 0
+        self._edges_extracted = 0
+        self._entity_updates_extracted = 0
+```
 
-        # 3. Route based on intent
-        if intent.type == IntentType.COMMAND:
-            return ScribeOutput(text=text, intent=intent, routed_to="director")
+### Message Types (Mailbox Interface)
 
-        elif intent.type == IntentType.QUESTION:
-            return ScribeOutput(text=text, intent=intent, routed_to="director")
+| Message Type | Purpose | Payload |
+|--------------|---------|---------|
+| `extract_turn` | Extract from conversation turn | `{role, content, session_id, immediate}` |
+| `extract_text` | Extract from raw text | `{text, source_id, immediate}` |
+| `entity_note` | Direct entity update command | `{entity_name, entity_type, facts}` |
+| `flush_stack` | Process pending chunks | None |
+| `compress_turn` | Compress for history tier | `{turn_id, content, role}` |
+| `get_stats` | Return extraction statistics | None |
 
-        elif intent.type == IntentType.STATEMENT:
-            # Queue for deep extraction (async)
-            asyncio.create_task(self.deep_extract(text))
-            return ScribeOutput(text=text, intent=intent, routed_to="extraction_queue")
+### Extraction Backend Configuration
 
-        else:  # NOISE
-            return ScribeOutput(text=text, intent=intent, routed_to="ignore")
-
-    async def deep_extract(self, text: str):
-        """Cold path: Full semantic extraction via Shadow Reasoner."""
-        # 1. Chunk
-        chunk = self.chunker.chunk_text(text)
-        self.stack.push(chunk)
-
-        # 2. Extract with context
-        context_window = self.stack.get_context_window()
-        extraction = await self.extractor.extract(
-            text=text,
-            context=context_window,
-            extraction_types=list(ExtractionType)
-        )
-
-        # 3. Hand off to Librarian ("Make it rain")
-        await self.librarian.file(extraction)
-
+```python
 @dataclass
-class ScribeOutput:
-    text: str
-    intent: Intent
-    routed_to: str
-    extraction_queued: bool = False
+class ExtractionConfig:
+    backend: str = "haiku"  # "haiku", "opus", "local", "disabled"
+    batch_size: int = 3
+    min_content_length: int = 20
+    max_tokens: int = 1000
+    temperature: float = 0.3
+```
+
+### Turn Compression (v2.1 Feature)
+
+Ben also handles turn compression for the HistoryManager:
+
+```python
+async def compress_turn(self, content: str, role: str = "user") -> str:
+    """
+    Compress a conversation turn into a one-sentence summary.
+
+    Used by HistoryManager when rotating turns from Active to Recent tier.
+
+    Returns:
+        Compressed summary (<50 words)
+    """
+```
+
+### Extraction Statistics
+
+```python
+{
+    "backend": "claude-opus",
+    "extractions_count": 15,
+    "objects_extracted": 234,
+    "edges_extracted": 89,
+    "entity_updates_extracted": 45,
+    "avg_extraction_time_ms": 2345,
+    "stack_size": 2,
+    "batch_size": 3
+}
 ```
 
 ---
@@ -432,4 +487,4 @@ Ben prepares Luna's memories so they're ready when needed.
 
 ---
 
-*End of Part IV (v2.0)*
+*End of Part IV (v2.1)*

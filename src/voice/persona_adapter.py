@@ -194,6 +194,25 @@ class PersonaAdapter:
                         logger.error(f"Director processing failed: {e}")
                         response_text = "I'm having trouble processing that right now."
 
+                # Record conversation turns through unified engine API
+                if self._engine and hasattr(self._engine, 'record_conversation_turn'):
+                    try:
+                        # Record user turn
+                        await self._engine.record_conversation_turn(
+                            role="user",
+                            content=message,
+                            source="voice",
+                        )
+                        # Record assistant turn
+                        if response_text:
+                            await self._engine.record_conversation_turn(
+                                role="assistant",
+                                content=response_text,
+                                source="voice",
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to record voice turns: {e}")
+
             # Get personality state if entity system available
             if hasattr(self._engine, 'get_personality_state'):
                 try:

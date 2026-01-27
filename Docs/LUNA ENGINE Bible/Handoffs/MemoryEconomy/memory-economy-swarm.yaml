@@ -1,0 +1,125 @@
+# Memory Economy Implementation Swarm
+# Claude Flow Hive Swarm Configuration
+#
+# Usage: claude-flow swarm memory-economy-swarm.yaml
+#
+# Architecture:
+#   Phase 1: A1 (Schema) runs first
+#   Phase 2: A2-A5 run in parallel after A1
+#   Phase 3: A6 (Integration) runs last after all others complete
+
+name: memory-economy-implementation
+description: |
+  Implement the Memory Economy for Luna Engine.
+  Clusters that lock in, edges that strengthen, structures that crystallize.
+
+# Swarm configuration
+swarm:
+  type: hive
+  max_parallel: 4
+  timeout_minutes: 120
+
+# Shared context for all agents
+context:
+  project_root: /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root
+  db_path: data/luna_engine.db
+  handoff_dir: Docs/LUNA ENGINE Bible/Handoffs/MemoryEconomy
+
+# Agent definitions
+agents:
+  # Phase 1: Foundation (runs first, no dependencies)
+  - id: schema-agent
+    name: "A1: Schema Agent"
+    description: "Create Memory Economy database tables"
+    handoff: 01-SCHEMA-AGENT.md
+    dependencies: []
+    outputs:
+      - scripts/migration_001_memory_economy.py
+    validation: |
+      sqlite3 data/luna_engine.db ".tables" | grep -q "clusters"
+    
+  # Phase 2: Parallel agents (depend only on A1)
+  - id: cluster-manager-agent
+    name: "A2: ClusterManager Agent"
+    description: "Implement Cluster CRUD operations"
+    handoff: 02-CLUSTER-MANAGER-AGENT.md
+    dependencies:
+      - schema-agent
+    outputs:
+      - src/luna/memory/cluster_manager.py
+      - scripts/test_clusters.py
+    validation: |
+      python scripts/test_clusters.py
+      
+  - id: clustering-engine-agent
+    name: "A3: ClusteringEngine Agent"
+    description: "Implement automatic memory clustering"
+    handoff: 03-CLUSTERING-ENGINE-AGENT.md
+    dependencies:
+      - schema-agent
+    outputs:
+      - src/luna/memory/clustering_engine.py
+      - src/luna/services/clustering_service.py
+    validation: |
+      python -m luna.services.clustering_service --once
+      
+  - id: librarian-agent
+    name: "A4: Librarian Agent"
+    description: "Integrate cluster retrieval into Librarian"
+    handoff: 04-LIBRARIAN-AGENT.md
+    dependencies:
+      - schema-agent
+    outputs:
+      - src/luna/librarian/cluster_retrieval.py
+    validation: |
+      python -c "from luna.librarian.cluster_retrieval import ClusterRetrieval; print('OK')"
+      
+  - id: lockin-agent
+    name: "A5: LockIn Agent"
+    description: "Implement lock-in dynamics"
+    handoff: 05-LOCKIN-AGENT.md
+    dependencies:
+      - schema-agent
+    outputs:
+      - src/luna/memory/lock_in.py
+      - src/luna/services/lockin_service.py
+    validation: |
+      python -m luna.services.lockin_service --once
+
+  # Phase 3: Integration (runs last, depends on all others)
+  - id: integration-agent
+    name: "A6: Integration Agent"
+    description: "Wire everything together, create constellation assembly"
+    handoff: 06-INTEGRATION-AGENT.md
+    dependencies:
+      - cluster-manager-agent
+      - clustering-engine-agent
+      - librarian-agent
+      - lockin-agent
+    outputs:
+      - src/luna/memory/constellation.py
+      - config/memory_economy_config.json
+      - scripts/test_memory_economy_full.py
+    validation: |
+      python scripts/test_memory_economy_full.py
+
+# Execution plan (auto-generated from dependencies)
+# Phase 1: schema-agent
+# Phase 2: cluster-manager-agent, clustering-engine-agent, librarian-agent, lockin-agent (parallel)
+# Phase 3: integration-agent
+
+# Post-completion tasks
+on_complete:
+  - name: "Run full validation"
+    command: python scripts/test_memory_economy_full.py
+  - name: "Show stats"
+    command: |
+      python -c "
+      from luna.memory.cluster_manager import ClusterManager
+      mgr = ClusterManager('data/luna_engine.db')
+      print(mgr.get_stats())
+      "
+  - name: "Git commit"
+    command: |
+      git add -A
+      git commit -m "feat: Memory Economy implementation complete"

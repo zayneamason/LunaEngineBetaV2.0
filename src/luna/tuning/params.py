@@ -158,6 +158,27 @@ TUNABLE_PARAMS: dict[str, dict] = {
         "description": "Complexity threshold for full (delegated) responses.",
         "category": "router",
     },
+    "router.force_memory_to_plan": {
+        "default": 1.0,
+        "bounds": (0.0, 1.0),
+        "step": 1.0,
+        "description": "Force memory queries to SIMPLE_PLAN path. 0 = off, 1 = on. When on, memory queries always trigger the RETRIEVE action.",
+        "category": "router",
+    },
+    "router.memory_min_complexity": {
+        "default": 0.3,
+        "bounds": (0.1, 0.6),
+        "step": 0.05,
+        "description": "Minimum complexity floor for forced memory queries. Ensures they don't accidentally fall to DIRECT.",
+        "category": "router",
+    },
+    "router.force_research_to_full": {
+        "default": 1.0,
+        "bounds": (0.0, 1.0),
+        "step": 1.0,
+        "description": "Force research queries to FULL_PLAN path. 0 = off, 1 = on. When on, research queries get multi-step planning.",
+        "category": "router",
+    },
 
     # -------------------------------------------------------------------------
     # HISTORY PARAMETERS
@@ -537,6 +558,18 @@ class ParamRegistry:
                         return True
                     if parts[1] == "full_threshold":
                         router.FULL_THRESHOLD = value
+                        return True
+                    # Path forcing params
+                    if parts[1] == "force_memory_to_plan":
+                        router._force_memory_to_plan = bool(value)
+                        logger.info(f"Memory path forcing {'enabled' if value else 'disabled'}")
+                        return True
+                    if parts[1] == "memory_min_complexity":
+                        router._memory_min_complexity = float(value)
+                        return True
+                    if parts[1] == "force_research_to_full":
+                        router._force_research_to_full = bool(value)
+                        logger.info(f"Research path forcing {'enabled' if value else 'disabled'}")
                         return True
 
             if parts[0] == "history":

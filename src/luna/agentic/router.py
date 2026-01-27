@@ -181,6 +181,12 @@ class QueryRouter:
             for tool, patterns in self.TOOL_PATTERNS.items()
         }
 
+        # Path forcing configuration (can be updated via tuning system)
+        # When enabled, certain query types bypass complexity-based routing
+        self._force_memory_to_plan: bool = True
+        self._memory_min_complexity: float = 0.3
+        self._force_research_to_full: bool = True
+
     def route(self, query: str) -> ExecutionPath:
         """
         Route a query to the appropriate execution path.
@@ -244,6 +250,45 @@ class QueryRouter:
                 signals=signals,
                 suggested_tools=suggested_tools,
             )
+
+        # =========================================================================
+        # PATH FORCING - Override complexity-based routing for specific query types
+        # =========================================================================
+
+        # Memory queries MUST use SIMPLE_PLAN to trigger the RETRIEVE action
+        # Without this, "do you remember X?" goes DIRECT and skips memory search
+        if "memory_query" in signals and self._force_memory_to_plan:
+            forced_complexity = max(complexity, self._memory_min_complexity)
+            logger.debug(
+                f"Forcing memory query to SIMPLE_PLAN: "
+                f"original_complexity={complexity:.2f}, forced={forced_complexity:.2f}"
+            )
+            return RoutingDecision(
+                path=ExecutionPath.SIMPLE_PLAN,
+                complexity=forced_complexity,
+                reason="Memory query requires retrieval step",
+                signals=signals,
+                suggested_tools=["memory_query"],
+            )
+
+        # Research queries should use FULL_PLAN for multi-step reasoning
+        if "research_request" in signals and self._force_research_to_full:
+            forced_complexity = max(complexity, self.FULL_THRESHOLD)
+            logger.debug(
+                f"Forcing research query to FULL_PLAN: "
+                f"original_complexity={complexity:.2f}, forced={forced_complexity:.2f}"
+            )
+            return RoutingDecision(
+                path=ExecutionPath.FULL_PLAN,
+                complexity=forced_complexity,
+                reason="Research query requires multi-step planning",
+                signals=signals,
+                suggested_tools=suggested_tools,
+            )
+
+        # =========================================================================
+        # COMPLEXITY-BASED ROUTING (default path)
+        # =========================================================================
 
         # Route based on complexity
         if complexity < self.DIRECT_THRESHOLD:

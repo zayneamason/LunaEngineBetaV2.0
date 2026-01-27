@@ -1,8 +1,9 @@
-# Part V: The Librarian (The Dude) — v2.0
+# Part V: The Librarian (The Dude) — v2.1
 
 **Status:** CURRENT
-**Replaces:** BIBLE-PART-V-THE-LIBRARIAN-v1.md
-**Date:** December 29, 2025
+**Replaces:** BIBLE-PART-V-THE-LIBRARIAN-v2.0.md
+**Last Updated:** January 25, 2026
+**Implementation:** `src/luna/actors/librarian.py`
 
 ---
 
@@ -41,14 +42,28 @@ Why? Luna's responses should be Luna's. The Dude does the filing; Luna does the 
 
 ## 5.2 Core Functions
 
-The Dude handles four primary tasks:
+The Dude handles six primary tasks:
 
 | Function | What It Does | When It Runs |
 |----------|--------------|--------------|
 | Entity Resolution | Deduplicate ("Mark" = "Zuck" = "The Landlord") | Immediate |
 | Knowledge Wiring | Create explicit edges from extractions | Immediate |
+| Entity Updates | File biographical facts to entity profiles | Immediate |
+| Entity Rollback | Revert entities to previous versions | On request |
 | Spreading Activation | Discover hidden connections | Deferred |
-| Synaptic Pruning | Clean low-value edges | Periodic |
+| Synaptic Pruning | Clean low-value edges AND drifting nodes | Periodic |
+
+### Message Types (Mailbox Interface)
+
+| Message Type | Purpose | Payload |
+|--------------|---------|---------|
+| `file` | File extraction from Scribe | `ExtractionOutput dict` |
+| `entity_update` | Update entity profile | `{name, entity_type, facts}` |
+| `get_context` | Retrieve context for query | `{query, budget, node_types}` |
+| `resolve_entity` | Find or create entity | `{name, entity_type}` |
+| `rollback_entity` | Revert to version | `{entity_id, version, reason}` |
+| `prune` | Run maintenance | `{confidence_threshold, age_days}` |
+| `get_stats` | Return statistics | None |
 
 ---
 
@@ -56,132 +71,117 @@ The Dude handles four primary tasks:
 
 "Mark," "Zuck," and "The Landlord" might all be the same node.
 
-### Resolution Strategy
+### Resolution Strategy (3-Level in Implementation)
+
+The actual implementation uses a simplified 3-level resolution:
 
 ```python
-class EntityResolver:
-    def __init__(self, matrix: MemoryMatrix):
-        self.matrix = matrix
-        self.bloom = BloomFilter(capacity=100_000, error_rate=0.001)
-        self.alias_cache = {}  # name -> canonical_id
+async def _resolve_entity(
+    self,
+    name: str,
+    entity_type: str,
+    source_id: str = "",
+) -> str:
+    """
+    Resolve entity to existing node or create new.
 
-    def resolve(self, name: str, entity_type: str) -> UUID:
-        """Resolve entity to existing node or create new."""
-        name_lower = name.lower().strip()
+    Resolution order:
+    1. Alias cache (O(1))
+    2. Exact DB match
+    3. Create new if not found
+    """
+    name_lower = name.lower().strip()
 
-        # 1. Check bloom filter first (O(1))
-        if not self.bloom.might_exist(name_lower):
-            # Definitely new entity
-            return self.create_entity(name, entity_type)
+    # 1. Check alias cache
+    if name_lower in self.alias_cache:
+        logger.debug(f"The Dude: Cache hit for '{name}'")
+        return self.alias_cache[name_lower]
 
-        # 2. Check alias cache
-        if name_lower in self.alias_cache:
-            return self.alias_cache[name_lower]
-
-        # 3. Check exact match in DB
-        existing = self.matrix.find_by_name(name, entity_type)
+    # 2. Check exact DB match via Matrix actor
+    matrix = await self._get_matrix()
+    if matrix:
+        existing = await self._find_existing_node(matrix, name, entity_type)
         if existing:
-            self.alias_cache[name_lower] = existing.id
-            return existing.id
+            self.alias_cache[name_lower] = existing
+            self._nodes_merged += 1
+            return existing
 
-        # 4. Check known aliases
-        existing = self.matrix.find_by_alias(name, entity_type)
-        if existing:
-            self.alias_cache[name_lower] = existing.id
-            return existing.id
+    # 3. Create new node
+    node_id = await self._create_node(name, entity_type, source_id)
+    self.alias_cache[name_lower] = node_id
+    self._nodes_created += 1
 
-        # 5. Semantic similarity search
-        embedding = self.embed(name)
-        similar = self.matrix.faiss_search(
-            embedding,
-            filter_type=entity_type,
-            threshold=0.95
-        )
-        if similar:
-            # Add as alias and return
-            self.matrix.add_alias(similar.id, name)
-            self.alias_cache[name_lower] = similar.id
-            return similar.id
-
-        # 6. Create new entity
-        new_id = self.create_entity(name, entity_type)
-        self.bloom.add(name_lower)
-        self.alias_cache[name_lower] = new_id
-        return new_id
-
-    def create_entity(self, name: str, entity_type: str) -> UUID:
-        """Create new entity node."""
-        node = MemoryNode(
-            id=uuid4(),
-            node_type=entity_type,
-            content=name,
-            embedding=self.embed(name),
-            created_at=datetime.now()
-        )
-        self.matrix.insert(node)
-        return node.id
+    return node_id
 ```
 
 ### Resolution Priority
 
 | Step | Cost | Skip If |
 |------|------|---------|
-| Bloom filter | O(1) | Never |
 | Alias cache | O(1) | Never |
-| Exact DB match | O(log n) | Never |
-| Alias DB match | O(log n) | Cache hit |
-| Semantic search | O(k) | Previous hit |
+| Exact DB match | O(log n) | Cache hit |
+| Create new | O(1) | Previous match |
+
+**Note:** The implementation prioritizes simplicity over the full fuzzy matching described in the original spec. Semantic similarity search is deferred to future enhancement.
 
 ---
 
 ## 5.4 Knowledge Wiring
 
-New memory → find all related nodes → create edges.
+New memory -> find all related nodes -> create edges.
 
 ```python
-class KnowledgeWirer:
-    def __init__(self, matrix: MemoryMatrix, resolver: EntityResolver):
-        self.matrix = matrix
-        self.resolver = resolver
-        # Use rustworkx for 100x faster graph operations
-        self.graph = rx.PyDiGraph()
+async def _wire_extraction(
+    self,
+    extraction: ExtractionOutput,
+) -> FilingResult:
+    """
+    Wire extraction into Memory Matrix.
 
-    async def wire(self, extraction: ExtractionOutput) -> WiringResult:
-        """Wire extraction into the graph."""
-        result = WiringResult()
+    1. Resolve/create nodes for each extracted object
+    2. Create edges between entities
+    """
+    result = FilingResult()
 
-        # 1. Resolve/create entities
-        entity_ids = []
-        for obj in extraction.objects:
-            eid = self.resolver.resolve(obj.content, obj.type)
-            entity_ids.append(eid)
+    # 1. Process objects - create/resolve nodes
+    for obj in extraction.objects:
+        node_id = await self._resolve_entity(
+            name=obj.content,
+            entity_type=obj.type.value if hasattr(obj.type, 'value') else str(obj.type),
+            source_id=extraction.source_id,
+        )
 
-            if eid in result.objects_merged:
-                result.objects_merged.append((obj.content, eid))
-            else:
-                result.objects_created.append(eid)
+        # Track if created or merged
+        if self._nodes_created > len(result.nodes_created) + len(result.nodes_merged):
+            result.nodes_created.append(node_id)
+        else:
+            result.nodes_merged.append((obj.content, node_id))
 
-        # 2. Create explicit edges
-        for edge in extraction.edges:
-            from_id = self.resolver.resolve(edge.from_ref, infer_type(edge.from_ref))
-            to_id = self.resolver.resolve(edge.to_ref, infer_type(edge.to_ref))
+        # Also resolve any mentioned entities
+        for entity in obj.entities:
+            await self._resolve_entity(entity, "ENTITY", extraction.source_id)
 
-            # Check if edge already exists
-            if not self.matrix.edge_exists(from_id, to_id, edge.type):
-                edge_id = self.matrix.create_edge(
-                    from_id=from_id,
-                    to_id=to_id,
-                    edge_type=edge.type,
-                    role=edge.role,
-                    source_id=extraction.source_id,
-                    confidence=1.0  # Explicit edges are high confidence
-                )
-                result.edges_created.append(edge_id)
-            else:
-                result.edges_skipped.append(f"duplicate: {edge.from_ref}->{edge.to_ref}")
+    # 2. Create edges via MatrixActor's graph
+    for edge in extraction.edges:
+        from_id = await self._resolve_entity(edge.from_ref, "ENTITY", extraction.source_id)
+        to_id = await self._resolve_entity(edge.to_ref, "ENTITY", extraction.source_id)
 
-        return result
+        edge_created = await self._create_edge(
+            from_id=from_id,
+            to_id=to_id,
+            edge_type=edge.edge_type,
+            confidence=edge.confidence,
+        )
+
+        if edge_created:
+            result.edges_created.append(f"{from_id}->{to_id}")
+        else:
+            result.edges_skipped.append(f"duplicate: {edge.from_ref}->{edge.to_ref}")
+
+    return result
 ```
+
+**Note:** The implementation uses NetworkX (not rustworkx) for graph operations via the MatrixActor. See Section 5.10 for details.
 
 ---
 
@@ -262,9 +262,64 @@ Result:
 
 ---
 
+## 5.5.1 Entity Updates (v2.1 Addition)
+
+The Dude handles entity profile updates from Ben:
+
+```python
+async def _handle_entity_update(self, data: dict) -> dict:
+    """
+    Update entity profile with new facts.
+
+    Called when Ben extracts biographical information or
+    when a direct entity_note command is received.
+    """
+    name = data.get("name", "")
+    entity_type = data.get("entity_type", "PERSON")
+    facts = data.get("facts", {})
+    source = data.get("source", "extraction")
+
+    # Resolve to existing entity or create new
+    entity_id = await self._resolve_entity(name, entity_type, source)
+
+    # Update facts via EntitySystem (if available)
+    matrix = await self._get_matrix()
+    if matrix and hasattr(matrix, "entity_system"):
+        await matrix.entity_system.update_entity(entity_id, facts)
+        self._entity_updates += 1
+
+    return {"entity_id": entity_id, "facts_added": len(facts)}
+```
+
+## 5.5.2 Entity Rollback (v2.1 Addition)
+
+The Dude can revert entities to previous versions:
+
+```python
+async def _handle_rollback_entity(self, data: dict) -> dict:
+    """
+    Rollback entity to previous version.
+
+    Used when incorrect information needs to be reverted.
+    Preserves audit trail of what was changed and why.
+    """
+    entity_id = data.get("entity_id", "")
+    version = data.get("version", -1)  # -1 = previous version
+    reason = data.get("reason", "")
+
+    matrix = await self._get_matrix()
+    if matrix and hasattr(matrix, "entity_system"):
+        result = await matrix.entity_system.rollback(entity_id, version, reason)
+        return {"success": True, "rolled_back_to": result.version}
+
+    return {"success": False, "error": "Entity system unavailable"}
+```
+
+---
+
 ## 5.6 Synaptic Pruning
 
-Periodically clean low-value connections:
+Periodically clean low-value connections and drifting nodes:
 
 ```python
 class SynapticPruner:
@@ -318,6 +373,38 @@ class PruningConfig:
     confidence_threshold: float = 0.3
     age_threshold: str = '-30 days'
     preserve_identity_chains: bool = True
+```
+
+### Drifting Node Cleanup (v2.1 Addition)
+
+The Dude also prunes "drifting" nodes - entities that have become disconnected from the main graph:
+
+```python
+async def _prune_drifting_nodes(self) -> int:
+    """
+    Remove nodes with no edges (orphans).
+
+    These can accumulate from failed extractions or
+    deleted relationships. The Dude keeps the graph clean.
+    """
+    matrix = await self._get_matrix()
+    if not matrix:
+        return 0
+
+    # Find nodes with degree 0
+    orphans = [n for n in matrix._graph.nodes()
+               if matrix._graph.degree(n) == 0]
+
+    for node_id in orphans:
+        # Don't prune identity or pinned nodes
+        node_data = matrix._graph.nodes[node_id]
+        if node_data.get("pinned") or "identity" in node_data.get("tags", []):
+            continue
+
+        matrix._graph.remove_node(node_id)
+        self._nodes_pruned += 1
+
+    return len(orphans)
 ```
 
 ---
@@ -541,17 +628,28 @@ async def file(extraction: ExtractionOutput) -> FilingResult:
 
 ## 5.10 Performance Notes
 
-### rustworkx Migration
+### Graph Library Choice
 
-For spreading activation and neighbor lookups, use rustworkx instead of NetworkX:
+The current implementation uses **NetworkX** (not rustworkx as originally planned):
+
+```python
+import networkx as nx
+
+# Current implementation (NetworkX)
+self._graph = nx.DiGraph()
+self._graph.add_node(node_id, **node_data)
+self._graph.add_edge(from_id, to_id, **edge_data)
+neighbors = list(self._graph.neighbors(node_id))
+```
+
+**Rationale:** NetworkX is sufficient for current scale (thousands of nodes). The rustworkx migration is deferred until performance profiling indicates need.
+
+**Future Optimization:** If graph operations become a bottleneck (>10K nodes), migrate to rustworkx:
 
 ```python
 import rustworkx as rx
 
-# NetworkX (slow): ~50ms for 10K nodes
-neighbors = G.neighbors(node_id)
-
-# rustworkx (fast): ~0.5ms for 10K nodes
+# rustworkx (100x faster for large graphs)
 neighbors = rx.bfs_successors(G, node_idx)
 ```
 
@@ -584,7 +682,26 @@ See Part III Section 3.9 for migration details.
 
 ---
 
-## 5.11 The Dude's Principles
+## 5.11 Librarian Statistics
+
+The Dude tracks comprehensive filing statistics:
+
+```python
+{
+    "nodes_created": 1234,      # New entities added
+    "nodes_merged": 567,        # Deduplicated to existing
+    "edges_created": 890,       # Relationships filed
+    "edges_skipped": 45,        # Duplicate edges avoided
+    "entity_updates": 123,      # Profile updates filed
+    "nodes_pruned": 12,         # Drifting nodes removed
+    "cache_size": 456,          # Alias cache entries
+    "avg_filing_time_ms": 35    # Average operation time
+}
+```
+
+---
+
+## 5.12 The Dude's Principles
 
 | Principle | Implementation |
 |-----------|----------------|
@@ -600,4 +717,4 @@ The Dude abides by these principles. He files things where they belong, connects
 
 ---
 
-*End of Part V (v2.0)*
+*End of Part V (v2.1)*
