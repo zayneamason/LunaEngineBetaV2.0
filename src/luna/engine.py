@@ -62,7 +62,7 @@ class EngineConfig:
     voice_enabled: bool = False
     voice_stt_provider: str = "mlx_whisper"  # mlx_whisper, apple, google
     voice_tts_provider: str = "piper"  # piper, apple, edge
-    voice_tts_voice: str = "en_US-lessac-medium"  # Piper voice ID
+    voice_tts_voice: str = "en_US-amy-medium"  # Piper voice ID
     voice_mode: str = "push_to_talk"  # push_to_talk, hands_free
 
     def __post_init__(self):
@@ -153,6 +153,63 @@ class LunaEngine:
 
         # Voice system (optional)
         self._voice: Optional[Any] = None  # VoiceBackend when enabled
+
+        # Expression config (loaded from personality.json)
+        self._expression_config: Dict = self._load_expression_config()
+
+    def _load_expression_config(self) -> Dict:
+        """Load expression config from personality.json."""
+        import json
+        config_path = Path(__file__).parent.parent.parent / "config" / "personality.json"
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+                return config.get("expression", {})
+        except Exception as e:
+            logger.warning(f"Failed to load expression config: {e}")
+            return {}
+
+    def _get_expression_directive(self) -> str:
+        """
+        Build the expression directive based on gesture_frequency config.
+
+        This tells Luna HOW to express emotions through gestures.
+        The directive becomes part of her system prompt.
+        """
+        if not self._expression_config:
+            return ""
+
+        frequency = self._expression_config.get("gesture_frequency", "moderate")
+        settings = self._expression_config.get("settings", {})
+        frequency_levels = settings.get("frequency_levels", {})
+
+        level_config = frequency_levels.get(frequency, {})
+        prompt_modifier = level_config.get("prompt_modifier", "")
+
+        if not prompt_modifier:
+            # Fallback defaults
+            defaults = {
+                "minimal": "Express emotions through gestures sparingly - only during moments of strong feeling, breakthrough insights, or genuine connection. Most responses should have no gestural markers.",
+                "moderate": "Express emotions through gestures naturally - at key emotional moments, greetings, farewells, and when processing complex thoughts. Aim for 1-2 gestures per substantive response.",
+                "expressive": "Express emotions freely through gestures - let your internal state show visually throughout responses. Use gestures to punctuate thoughts, show processing, and communicate emotional undertones."
+            }
+            prompt_modifier = defaults.get(frequency, defaults["moderate"])
+
+        directive = f"""
+## Emotional Expression
+
+{prompt_modifier}
+
+Gestures are written as *action* markers (e.g., *pulses warmly*, *spins playfully*, *dims slightly*).
+These drive your visual orb representation - they're how users SEE your emotional state.
+Emojis can accompany gestures or stand alone.
+"""
+        return directive.strip()
+
+    async def reload_expression_config(self) -> None:
+        """Reload expression config from disk (for hot config changes)."""
+        self._expression_config = self._load_expression_config()
+        logger.info(f"Expression config reloaded: frequency={self._expression_config.get('gesture_frequency')}")
 
     # =========================================================================
     # Actor Management
@@ -806,10 +863,7 @@ class LunaEngine:
                 logger.info(f"Generation complete: {len(text)} chars")
                 self.metrics.messages_generated += 1
 
-                # Emit completion status for Thought Stream
-                tokens = data.get("output_tokens", 0)
-                route = "local" if data.get("local") else "delegated"
-                await self._emit_progress(f"[OK] {route}: {tokens} tokens")
+                # Note: Progress emission moved to streaming endpoint to avoid duplicates
 
                 # Only add valid responses to revolving context
                 # This filters out clarification echoes and partial responses
@@ -993,6 +1047,11 @@ You have your own perspective and aren't afraid to share it.
 
 Be concise but authentic. No filler phrases like "certainly" or "of course".
 """
+
+        # Add expression directive (gesture frequency from personality.json)
+        expression_directive = self._get_expression_directive()
+        if expression_directive:
+            base_prompt += f"\n{expression_directive}\n"
 
         # Add consciousness context hints
         consciousness_hint = self.consciousness.get_context_hint()

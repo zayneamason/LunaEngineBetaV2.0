@@ -17,8 +17,12 @@ import logging
 import uuid
 
 from .database import MemoryDatabase
+from .embeddings import EmbeddingStore, EmbeddingGenerator
 
 logger = logging.getLogger(__name__)
+
+# Lazy-loaded entity resolver for mention detection
+_entity_resolver = None
 
 
 # =============================================================================
@@ -220,14 +224,18 @@ class MemoryMatrix:
     This is Luna's soul - all knowledge lives here.
     """
 
-    def __init__(self, db: MemoryDatabase):
+    def __init__(self, db: MemoryDatabase, enable_embeddings: bool = True):
         """
         Initialize the Memory Matrix.
 
         Args:
             db: The underlying MemoryDatabase instance
+            enable_embeddings: Whether to auto-generate embeddings on add_node (default True)
         """
         self.db = db
+        self._enable_embeddings = enable_embeddings
+        self._embedding_store: Optional[EmbeddingStore] = None
+        self._embedding_generator: Optional[EmbeddingGenerator] = None
         logger.info("MemoryMatrix initialized")
 
     # =========================================================================
@@ -243,6 +251,7 @@ class MemoryMatrix:
         summary: Optional[str] = None,
         confidence: float = 1.0,
         importance: float = 0.5,
+        link_entities: bool = True,
     ) -> str:
         """
         Add a new memory node.
@@ -255,6 +264,7 @@ class MemoryMatrix:
             summary: Optional short summary for display
             confidence: Confidence score 0-1 (default 1.0)
             importance: Importance score 0-1 (default 0.5)
+            link_entities: Whether to detect and link mentioned entities (default True)
 
         Returns:
             The ID of the created node
@@ -280,7 +290,148 @@ class MemoryMatrix:
         )
 
         logger.debug(f"Added memory node: {node_id} ({node_type})")
+
+        # Detect and link entity mentions
+        if link_entities:
+            await self._link_entity_mentions(node_id, content)
+
+        # Generate and store embedding
+        if self._enable_embeddings:
+            await self._store_embedding(node_id, content, summary)
+
         return node_id
+
+    async def _ensure_embedding_components(self) -> bool:
+        """
+        Ensure embedding store and generator are initialized.
+
+        Returns:
+            True if embeddings are available, False otherwise
+        """
+        if self._embedding_store is None:
+            from .local_embeddings import EMBEDDING_DIM
+            self._embedding_store = EmbeddingStore(
+                self.db,
+                dim=EMBEDDING_DIM,
+                table_name="memory_embeddings_local"
+            )
+            await self._embedding_store.initialize()
+
+        if self._embedding_generator is None:
+            self._embedding_generator = EmbeddingGenerator(model="local-minilm")
+
+        return self._embedding_store.is_available
+
+    async def _store_embedding(
+        self,
+        node_id: str,
+        content: str,
+        summary: Optional[str] = None,
+    ) -> bool:
+        """
+        Generate and store embedding for a node.
+
+        Args:
+            node_id: The node ID
+            content: The node content
+            summary: Optional summary (prepended to content for embedding)
+
+        Returns:
+            True if embedding was stored, False otherwise
+        """
+        try:
+            available = await self._ensure_embedding_components()
+            if not available:
+                return False
+
+            # Combine summary and content for embedding
+            text = content or ""
+            if summary:
+                text = f"{summary}\n{text}"
+
+            if not text.strip():
+                return False
+
+            embedding = await self._embedding_generator.generate(text)
+            await self._embedding_store.store(node_id, embedding)
+            logger.debug(f"Stored embedding for node {node_id}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to store embedding for {node_id}: {e}")
+            return False
+
+    async def _get_entity_resolver(self):
+        """Get or create the entity resolver instance."""
+        global _entity_resolver
+        if _entity_resolver is None:
+            try:
+                from ..entities.resolution import EntityResolver
+                _entity_resolver = EntityResolver(self.db)
+                logger.debug("EntityResolver initialized for mention detection")
+            except ImportError as e:
+                logger.warning(f"Could not import EntityResolver: {e}")
+                return None
+        return _entity_resolver
+
+    async def _link_entity_mentions(self, node_id: str, content: str) -> int:
+        """
+        Detect entities in content and create mention links.
+
+        Args:
+            node_id: The memory node ID to link
+            content: The content to scan for entity mentions
+
+        Returns:
+            Number of entity mentions created
+        """
+        resolver = await self._get_entity_resolver()
+        if resolver is None:
+            return 0
+
+        try:
+            # Detect entities mentioned in the content
+            entities = await resolver.detect_mentions(content)
+
+            if not entities:
+                return 0
+
+            # Create mentions for each detected entity
+            mention_count = 0
+            for entity in entities:
+                # Create a context snippet (first 100 chars around mention)
+                name_lower = entity.name.lower()
+                content_lower = content.lower()
+                pos = content_lower.find(name_lower)
+                if pos >= 0:
+                    start = max(0, pos - 30)
+                    end = min(len(content), pos + len(entity.name) + 70)
+                    snippet = content[start:end]
+                    if start > 0:
+                        snippet = "..." + snippet
+                    if end < len(content):
+                        snippet = snippet + "..."
+                else:
+                    snippet = content[:100] + "..." if len(content) > 100 else content
+
+                await resolver.create_mention(
+                    entity_id=entity.id,
+                    node_id=node_id,
+                    mention_type="reference",
+                    confidence=1.0,
+                    context_snippet=snippet,
+                )
+                mention_count += 1
+                logger.debug(f"Linked entity '{entity.name}' to node {node_id}")
+
+            if mention_count > 0:
+                logger.info(f"Linked {mention_count} entities to node {node_id}")
+
+            return mention_count
+
+        except Exception as e:
+            logger.warning(f"Failed to link entity mentions for node {node_id}: {e}")
+            return 0
 
     async def get_node(self, node_id: str) -> Optional[MemoryNode]:
         """
@@ -420,6 +571,225 @@ class MemoryMatrix:
             )
 
         return [MemoryNode.from_row(row) for row in rows]
+
+    # =========================================================================
+    # FTS5 SEARCH (Full-Text Search with Stemming)
+    # =========================================================================
+
+    async def fts5_search(
+        self,
+        query: str,
+        node_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> list[tuple[MemoryNode, float]]:
+        """
+        Search memory nodes using FTS5 full-text search.
+
+        Uses Porter stemmer: "collaborate" matches "collaborator", "collaboration".
+        Supports phrase search, boolean operators, and prefix matching.
+
+        Args:
+            query: Search query (FTS5 syntax supported)
+            node_type: Optional filter by node type
+            limit: Maximum number of results (default 10)
+
+        Returns:
+            List of (MemoryNode, score) tuples, sorted by relevance
+        """
+        # Check if FTS5 table exists
+        fts_exists = await self.db.fetchone("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='memory_nodes_fts'
+        """)
+
+        if not fts_exists:
+            logger.warning("FTS5 table not found, falling back to LIKE search")
+            nodes = await self.search_nodes(query, node_type, limit)
+            return [(node, 1.0) for node in nodes]
+
+        # Escape special FTS5 characters and prepare query
+        # FTS5 uses MATCH for searching
+        safe_query = query.replace('"', '""')
+
+        if node_type:
+            rows = await self.db.fetchall(
+                """
+                SELECT m.*, bm25(memory_nodes_fts) as score
+                FROM memory_nodes m
+                JOIN memory_nodes_fts fts ON m.rowid = fts.rowid
+                WHERE memory_nodes_fts MATCH ?
+                  AND m.node_type = ?
+                ORDER BY bm25(memory_nodes_fts)
+                LIMIT ?
+                """,
+                (safe_query, node_type, limit)
+            )
+        else:
+            rows = await self.db.fetchall(
+                """
+                SELECT m.*, bm25(memory_nodes_fts) as score
+                FROM memory_nodes m
+                JOIN memory_nodes_fts fts ON m.rowid = fts.rowid
+                WHERE memory_nodes_fts MATCH ?
+                ORDER BY bm25(memory_nodes_fts)
+                LIMIT ?
+                """,
+                (safe_query, limit)
+            )
+
+        results = []
+        for row in rows:
+            # Last column is the score, rest are node columns
+            node_data = row[:-1]
+            score = abs(row[-1])  # bm25 returns negative, lower is better
+            node = MemoryNode.from_row(node_data)
+            results.append((node, score))
+
+        return results
+
+    # =========================================================================
+    # SEMANTIC SEARCH (Vector Similarity)
+    # =========================================================================
+
+    async def semantic_search(
+        self,
+        query: str,
+        node_type: Optional[str] = None,
+        limit: int = 10,
+        min_similarity: float = 0.3,
+    ) -> list[tuple[MemoryNode, float]]:
+        """
+        Search memory nodes using semantic similarity.
+
+        Uses local MiniLM embeddings for vector search.
+        Finds semantically similar content even without keyword matches.
+
+        Args:
+            query: Search query text
+            node_type: Optional filter by node type
+            limit: Maximum number of results (default 10)
+            min_similarity: Minimum cosine similarity threshold (default 0.3)
+
+        Returns:
+            List of (MemoryNode, similarity) tuples, sorted by similarity
+        """
+        # Get or create embedding components
+        if not hasattr(self, '_embedding_store') or self._embedding_store is None:
+            from .local_embeddings import EMBEDDING_DIM
+            self._embedding_store = EmbeddingStore(
+                self.db,
+                dim=EMBEDDING_DIM,
+                table_name="memory_embeddings_local"
+            )
+            await self._embedding_store.initialize()
+
+        if not hasattr(self, '_embedding_generator') or self._embedding_generator is None:
+            self._embedding_generator = EmbeddingGenerator(model="local-minilm")
+
+        if not self._embedding_store.is_available:
+            logger.warning("sqlite-vec not available, falling back to LIKE search")
+            nodes = await self.search_nodes(query, node_type, limit)
+            return [(node, 1.0) for node in nodes]
+
+        # Generate query embedding
+        query_embedding = await self._embedding_generator.generate(query)
+
+        # Search for similar embeddings
+        similar = await self._embedding_store.search(
+            query_embedding,
+            limit=limit * 2,  # Get extra for filtering
+            min_similarity=min_similarity,
+        )
+
+        if not similar:
+            return []
+
+        # Fetch full nodes and filter by type
+        results = []
+        for node_id, similarity in similar:
+            node = await self.get_node(node_id)
+            if node is None:
+                continue
+            if node_type and node.node_type != node_type:
+                continue
+            results.append((node, similarity))
+            if len(results) >= limit:
+                break
+
+        return results
+
+    # =========================================================================
+    # HYBRID SEARCH (FTS5 + Semantic with RRF Fusion)
+    # =========================================================================
+
+    async def hybrid_search(
+        self,
+        query: str,
+        node_type: Optional[str] = None,
+        limit: int = 10,
+        keyword_weight: float = 0.4,
+        semantic_weight: float = 0.6,
+        rrf_k: int = 60,
+    ) -> list[tuple[MemoryNode, float]]:
+        """
+        Search using both FTS5 and semantic search with Reciprocal Rank Fusion.
+
+        Combines keyword matching (exact terms, stemming) with semantic
+        similarity (meaning-based) for best results.
+
+        Args:
+            query: Search query text
+            node_type: Optional filter by node type
+            limit: Maximum number of results (default 10)
+            keyword_weight: Weight for FTS5 results (default 0.4)
+            semantic_weight: Weight for semantic results (default 0.6)
+            rrf_k: RRF constant (default 60, higher = more emphasis on top ranks)
+
+        Returns:
+            List of (MemoryNode, combined_score) tuples, sorted by score
+        """
+        # Run both searches in parallel conceptually (sequential here for SQLite)
+        fts_results = await self.fts5_search(query, node_type, limit * 2)
+        semantic_results = await self.semantic_search(query, node_type, limit * 2)
+
+        # Build node lookup and rank maps
+        nodes_by_id: dict[str, MemoryNode] = {}
+        fts_ranks: dict[str, int] = {}
+        semantic_ranks: dict[str, int] = {}
+
+        for rank, (node, _score) in enumerate(fts_results, start=1):
+            nodes_by_id[node.id] = node
+            fts_ranks[node.id] = rank
+
+        for rank, (node, _score) in enumerate(semantic_results, start=1):
+            nodes_by_id[node.id] = node
+            semantic_ranks[node.id] = rank
+
+        # Calculate RRF scores
+        # RRF(d) = Σ (weight / (k + rank(d)))
+        rrf_scores: dict[str, float] = {}
+
+        for node_id in nodes_by_id:
+            score = 0.0
+
+            if node_id in fts_ranks:
+                score += keyword_weight / (rrf_k + fts_ranks[node_id])
+
+            if node_id in semantic_ranks:
+                score += semantic_weight / (rrf_k + semantic_ranks[node_id])
+
+            rrf_scores[node_id] = score
+
+        # Sort by RRF score (higher is better)
+        sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+
+        # Return top results
+        results = [
+            (nodes_by_id[node_id], rrf_scores[node_id])
+            for node_id in sorted_ids[:limit]
+        ]
+
+        return results
 
     async def get_context(
         self,

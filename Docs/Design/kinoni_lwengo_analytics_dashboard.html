@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kinoni & Lwengo District Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Segoe UI', system-ui, sans-serif; 
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #e8e8e8;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .dashboard { max-width: 1400px; margin: 0 auto; }
+    
+    header {
+      text-align: center;
+      padding: 30px 20px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 16px;
+      margin-bottom: 24px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    header h1 { 
+      font-size: 2.2em; 
+      background: linear-gradient(90deg, #4ade80, #22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    header p { color: #94a3b8; font-size: 1.1em; }
+    .subtitle { 
+      display: inline-block;
+      background: rgba(74, 222, 128, 0.15);
+      color: #4ade80;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.85em;
+      margin-top: 10px;
+    }
+    
+    .grid { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); 
+      gap: 20px; 
+      margin-bottom: 24px;
+    }
+    
+    .card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 16px;
+      padding: 24px;
+      border: 1px solid rgba(255,255,255,0.1);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .card h3 {
+      font-size: 0.9em;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #94a3b8;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card h3::before {
+      content: '';
+      width: 4px;
+      height: 16px;
+      background: linear-gradient(180deg, #4ade80, #22d3ee);
+      border-radius: 2px;
+    }
+    
+    .stat-large {
+      font-size: 2.8em;
+      font-weight: 700;
+      background: linear-gradient(90deg, #fff, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .stat-unit { font-size: 0.9em; color: #64748b; margin-left: 4px; }
+    .stat-change { 
+      font-size: 0.85em; 
+      margin-top: 8px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      display: inline-block;
+    }
+    .stat-change.positive { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+    .stat-change.negative { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+    .stat-change.neutral { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+    
+    .chart-container { 
+      position: relative; 
+      height: 280px; 
+      margin-top: 16px;
+    }
+    .chart-container.tall { height: 350px; }
+    
+    .full-width { grid-column: 1 / -1; }
+    .half-width { grid-column: span 2; }
+    
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+    }
+    .data-table th, .data-table td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .data-table th { 
+      color: #94a3b8; 
+      font-weight: 500;
+      font-size: 0.85em;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .data-table tr:hover { background: rgba(255,255,255,0.03); }
+    
+    .progress-bar {
+      height: 8px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.5s ease;
+    }
+    .progress-fill.green { background: linear-gradient(90deg, #4ade80, #22c55e); }
+    .progress-fill.yellow { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+    .progress-fill.red { background: linear-gradient(90deg, #ef4444, #dc2626); }
+    .progress-fill.blue { background: linear-gradient(90deg, #3b82f6, #2563eb); }
+    
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-label { color: #94a3b8; }
+    .metric-value { font-weight: 600; }
+    
+    .section-title {
+      font-size: 1.4em;
+      margin: 32px 0 16px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid rgba(255,255,255,0.1);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .section-title .icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, #4ade80, #22d3ee);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2em;
+    }
+    
+    .alert-box {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+    .alert-box.warning {
+      background: rgba(251, 191, 36, 0.1);
+      border-color: rgba(251, 191, 36, 0.3);
+    }
+    .alert-box h4 { color: #fbbf24; margin-bottom: 8px; }
+    .alert-box p { color: #94a3b8; font-size: 0.9em; line-height: 1.5; }
+    
+    footer {
+      text-align: center;
+      padding: 24px;
+      color: #64748b;
+      font-size: 0.85em;
+      margin-top: 40px;
+    }
+    
+    @media (max-width: 768px) {
+      .grid { grid-template-columns: 1fr; }
+      .half-width { grid-column: span 1; }
+      header h1 { font-size: 1.6em; }
+      .stat-large { font-size: 2em; }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <header>
+      <h1>Kinoni Town Council & Lwengo District</h1>
+      <p>Comprehensive Community Analytics Dashboard</p>
+      <span class="subtitle">📍 Central Region, Uganda • 2024 Census Data</span>
+    </header>
+    
+    <!-- POPULATION OVERVIEW -->
+    <h2 class="section-title"><span class="icon">👥</span> Population Demographics</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Kinoni Town Council Population</h3>
+        <div class="stat-large">17,137</div>
+        <div class="stat-change positive">↑ 2024 Census</div>
+        <div class="metric-row">
+          <span class="metric-label">Males</span>
+          <span class="metric-value">7,168 (41.8%)</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Females</span>
+          <span class="metric-value">9,969 (58.2%)</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Lwengo District Population</h3>
+        <div class="stat-large">325,263</div>
+        <div class="stat-change positive">↑ From 267,300 (2012)</div>
+        <div class="metric-row">
+          <span class="metric-label">Households</span>
+          <span class="metric-value">68,671</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Villages</span>
+          <span class="metric-value">438</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Uganda National Population</h3>
+        <div class="stat-large">45.9<span class="stat-unit">M</span></div>
+        <div class="stat-change positive">↑ 2.8% annual growth</div>
+        <div class="metric-row">
+          <span class="metric-label">Median Age</span>
+          <span class="metric-value">16.4 years</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Urban Population</span>
+          <span class="metric-value">27.1%</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Kinoni Age Distribution</h3>
+        <div class="chart-container">
+          <canvas id="ageChart"></canvas>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Gender Distribution - Kinoni</h3>
+        <div class="chart-container">
+          <canvas id="genderChart"></canvas>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>District Population Growth</h3>
+        <div class="chart-container">
+          <canvas id="populationGrowthChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <!-- INFRASTRUCTURE -->
+    <h2 class="section-title"><span class="icon">🏗️</span> Infrastructure & Utilities</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Water Access - Lwengo District</h3>
+        <div class="stat-large">73%</div>
+        <div class="stat-change neutral">320 of 438 villages covered</div>
+        <div style="margin-top: 16px;">
+          <div class="metric-row">
+            <span class="metric-label">Villages with Safe Water</span>
+            <span class="metric-value">320</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill green" style="width: 73%"></div></div>
+        </div>
+        <div style="margin-top: 12px;">
+          <div class="metric-row">
+            <span class="metric-label">Villages Without Safe Water</span>
+            <span class="metric-value" style="color: #ef4444;">118</span>
+          </div>
+          <div class="progress-bar"><div class="progress-fill red" style="width: 27%"></div></div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Piped Water Systems</h3>
+        <table class="data-table">
+          <thead>
+            <tr><th>System</th><th>People Served</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Nkoni Town</td><td>55,150</td></tr>
+            <tr><td>Mbirizi</td><td>38,590</td></tr>
+            <tr><td>Kyazanga</td><td>22,000</td></tr>
+            <tr><td>Kinoni</td><td>11,790</td></tr>
+            <tr><td>Kamuzinda</td><td>~5,000</td></tr>
+          </tbody>
+        </table>
+      </div>
+      
+      <div class="card">
+        <h3>Electricity Access - Uganda</h3>
+        <div class="stat-large">53%</div>
+        <div class="stat-change negative">Rural grid: only 9.1%</div>
+        <div style="margin-top: 16px;">
+          <div class="metric-row">
+            <span class="metric-label">National Grid</span>
+            <span class="metric-value">2.7M households</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Off-grid Solar</span>
+            <span class="metric-value">3.0M households</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">No Electricity</span>
+            <span class="metric-value" style="color: #ef4444;">23M people</span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Infrastructure Coverage</h3>
+        <div class="chart-container">
+          <canvas id="infraChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <!-- HEALTH -->
+    <h2 class="section-title"><span class="icon">🏥</span> Health & Life Expectancy</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Life Expectancy - Uganda</h3>
+        <div class="stat-large">68<span class="stat-unit">years</span></div>
+        <div class="stat-change positive">↑ From 63 (2014)</div>
+        <div class="metric-row">
+          <span class="metric-label">Males</span>
+          <span class="metric-value">66.9 years</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Females</span>
+          <span class="metric-value">70.1 years</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Ankole Region (lowest)</span>
+          <span class="metric-value">60 years</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Teso Region (highest)</span>
+          <span class="metric-value">78 years</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Infant & Child Mortality</h3>
+        <div class="stat-large">34<span class="stat-unit">/1,000</span></div>
+        <div class="stat-change positive">↓ Declining trend</div>
+        <div class="metric-row">
+          <span class="metric-label">Infant Mortality (Under 1)</span>
+          <span class="metric-value">34 per 1,000</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Under-5 Mortality</span>
+          <span class="metric-value">41 per 1,000</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Maternal Mortality</span>
+          <span class="metric-value">440 per 100,000</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Health Facility Staffing - Lwengo</h3>
+        <div class="stat-large">67%</div>
+        <div class="stat-change negative">33% positions unfilled</div>
+        <div style="margin-top: 16px;">
+          <p style="color: #94a3b8; font-size: 0.9em;">Health facilities operating below capacity due to staffing gaps</p>
+          <div class="progress-bar"><div class="progress-fill yellow" style="width: 67%"></div></div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Life Expectancy Trend - Uganda</h3>
+        <div class="chart-container">
+          <canvas id="lifeExpectancyChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <!-- EDUCATION -->
+    <h2 class="section-title"><span class="icon">📚</span> Education</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Primary School Completion - Lwengo</h3>
+        <div class="stat-large">45%</div>
+        <div class="stat-change negative">Below national target</div>
+        <p style="color: #94a3b8; margin-top: 12px; font-size: 0.9em;">Less than half of children complete primary education</p>
+        <div class="progress-bar"><div class="progress-fill red" style="width: 45%"></div></div>
+      </div>
+      
+      <div class="card">
+        <h3>School Infrastructure Crisis</h3>
+        <div class="stat-large">26%</div>
+        <div class="stat-change negative">Schools with adequate toilets</div>
+        <div class="alert-box">
+          <h4>⚠️ Latrine Crisis</h4>
+          <p>Only 26% of 134 government primary schools have adequate toilet facilities. Many schools share 5 stances among 400+ pupils.</p>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Family Planning Access</h3>
+        <div class="stat-large">1 in 5</div>
+        <div class="stat-change negative">Women with unmet need</div>
+        <p style="color: #94a3b8; margin-top: 12px; font-size: 0.9em;">20% of women wanting to prevent pregnancy lack access to family planning</p>
+      </div>
+      
+      <div class="card">
+        <h3>Education & Demographics</h3>
+        <div class="chart-container">
+          <canvas id="educationChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <!-- DIGITAL CONNECTIVITY -->
+    <h2 class="section-title"><span class="icon">📱</span> Digital Connectivity</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Internet Penetration - Uganda</h3>
+        <div class="stat-large">27%</div>
+        <div class="stat-change positive">↑ 10.3% YoY growth</div>
+        <div class="metric-row">
+          <span class="metric-label">Internet Users</span>
+          <span class="metric-value">13.3M</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Offline Population</span>
+          <span class="metric-value" style="color: #ef4444;">36M (73%)</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Mobile Connectivity</h3>
+        <div class="stat-large">67.7%</div>
+        <div class="stat-change positive">33.3M connections</div>
+        <div class="metric-row">
+          <span class="metric-label">Mobile Connections</span>
+          <span class="metric-value">33.34M</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">4G Coverage</span>
+          <span class="metric-value">31% of population</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Without Phones</span>
+          <span class="metric-value" style="color: #ef4444;">7.5M adults</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Rural Broadband</h3>
+        <div class="stat-large">&lt;30%</div>
+        <div class="stat-change negative">Penetration in rural Uganda</div>
+        <div class="alert-box warning">
+          <h4>📡 Connectivity Gap</h4>
+          <p>Rural broadband penetration remains below 30%. Only 65% of Uganda has mobile network coverage. 506 new towers planned with EU funding.</p>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Digital Access Comparison</h3>
+        <div class="chart-container">
+          <canvas id="digitalChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <!-- CLIMATE & DISASTERS -->
+    <h2 class="section-title"><span class="icon">🌍</span> Climate & Natural Disasters</h2>
+    <div class="grid">
+      <div class="card half-width">
+        <h3>Lwengo Climate Profile</h3>
+        <table class="data-table">
+          <thead>
+            <tr><th>Disaster Type</th><th>Frequency</th><th>Impact</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>🌧️ Hailstorms</td><td>Increasing since 2016</td><td>Crop destruction</td></tr>
+            <tr><td>💨 Heavy Winds</td><td>Both rainy seasons</td><td>Housing damage</td></tr>
+            <tr><td>☀️ Long Dry Spells</td><td>May-Aug, Jan-Mar</td><td>Water scarcity</td></tr>
+            <tr><td>🦗 Pests & Disease</td><td>Ongoing</td><td>Agricultural loss</td></tr>
+          </tbody>
+        </table>
+        <div class="alert-box" style="margin-top: 16px;">
+          <h4>⚠️ Recent Event: August 2025</h4>
+          <p>Severe storm ravaged Lwemiyaga, Lwentale, and Kiganda villages in Malongo sub-county. Homes destroyed, crops washed away, hundreds homeless.</p>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Uganda Disaster Statistics</h3>
+        <div class="stat-large">200K</div>
+        <div class="stat-change negative">Ugandans affected yearly</div>
+        <div class="metric-row">
+          <span class="metric-label">Annual Flood Cost</span>
+          <span class="metric-value">$62M+</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">People Affected by Floods/yr</span>
+          <span class="metric-value">~50,000</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Climate Vulnerability Rank</span>
+          <span class="metric-value">10th / 182 countries</span>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>Climate Events - Uganda</h3>
+        <div class="chart-container">
+          <canvas id="climateChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <!-- NEIGHBORING AREAS -->
+    <h2 class="section-title"><span class="icon">🗺️</span> Regional Context</h2>
+    <div class="grid">
+      <div class="card full-width">
+        <h3>Neighboring Districts & Cities</h3>
+        <table class="data-table">
+          <thead>
+            <tr><th>Location</th><th>Direction</th><th>Distance</th><th>Significance</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Masaka City</strong></td><td>East</td><td>45 km</td><td>Nearest major city, regional hub</td></tr>
+            <tr><td>Sembabule District</td><td>North</td><td>Adjacent</td><td>Cattle corridor region</td></tr>
+            <tr><td>Bukomansimbi District</td><td>North-East</td><td>Adjacent</td><td>Agricultural district</td></tr>
+            <tr><td>Rakai District</td><td>South</td><td>Adjacent</td><td>Border with Tanzania</td></tr>
+            <tr><td>Lyantonde District</td><td>West</td><td>Adjacent</td><td>Trans-African highway</td></tr>
+            <tr><td><strong>Kampala</strong></td><td>North-East</td><td>165 km</td><td>National capital</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- SUMMARY METRICS -->
+    <h2 class="section-title"><span class="icon">📊</span> Key Indicators Summary</h2>
+    <div class="grid">
+      <div class="card full-width">
+        <h3>Kinoni/Lwengo vs Uganda National Averages</h3>
+        <div class="chart-container tall">
+          <canvas id="comparisonChart"></canvas>
+        </div>
+      </div>
+    </div>
+    
+    <footer>
+      <p>Data Sources: Uganda Bureau of Statistics (UBOS) 2024 Census, World Bank, UNICEF, PRB, DataReportal, UCC</p>
+      <p style="margin-top: 8px;">Prepared for Project Tapestry • Kinoni ICT Hub Planning • January 2026</p>
+    </footer>
+  </div>
+  
+  <script>
+    // Chart.js defaults
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.borderColor = 'rgba(255,255,255,0.1)';
+    
+    // Age Distribution Chart - Kinoni
+    new Chart(document.getElementById('ageChart'), {
+      type: 'doughnut',
+      data: {
+        labels: ['0-14 years (Children)', '15-64 years (Working Age)', '65+ years (Elderly)'],
+        datasets: [{
+          data: [5753, 10628, 756],
+          backgroundColor: ['#22d3ee', '#4ade80', '#fbbf24'],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { padding: 15, usePointStyle: true } }
+        }
+      }
+    });
+    
+    // Gender Chart - Kinoni
+    new Chart(document.getElementById('genderChart'), {
+      type: 'pie',
+      data: {
+        labels: ['Female (58.2%)', 'Male (41.8%)'],
+        datasets: [{
+          data: [9969, 7168],
+          backgroundColor: ['#f472b6', '#3b82f6'],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { padding: 15, usePointStyle: true } }
+        }
+      }
+    });
+    
+    // Population Growth Chart
+    new Chart(document.getElementById('populationGrowthChart'), {
+      type: 'line',
+      data: {
+        labels: ['1991', '2002', '2012', '2024'],
+        datasets: [{
+          label: 'Lwengo District Population',
+          data: [212600, 242300, 267300, 325263],
+          borderColor: '#4ade80',
+          backgroundColor: 'rgba(74, 222, 128, 0.1)',
+          fill: true,
+          tension: 0.4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: false, ticks: { callback: v => (v/1000) + 'K' } }
+        }
+      }
+    });
+    
+    // Infrastructure Chart
+    new Chart(document.getElementById('infraChart'), {
+      type: 'bar',
+      data: {
+        labels: ['Water Access', 'Electricity (National)', 'Electricity (Rural)', 'Health Staffing'],
+        datasets: [{
+          label: 'Coverage %',
+          data: [73, 53, 9.1, 67],
+          backgroundColor: ['#4ade80', '#fbbf24', '#ef4444', '#fbbf24']
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: { x: { max: 100 } }
+      }
+    });
+    
+    // Life Expectancy Chart
+    new Chart(document.getElementById('lifeExpectancyChart'), {
+      type: 'line',
+      data: {
+        labels: ['1950', '1970', '1990', '2010', '2021', '2024'],
+        datasets: [{
+          label: 'Life Expectancy (years)',
+          data: [39.3, 51, 47, 54, 62.7, 68],
+          borderColor: '#22d3ee',
+          backgroundColor: 'rgba(34, 211, 238, 0.1)',
+          fill: true,
+          tension: 0.4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: false, min: 35, max: 75 } }
+      }
+    });
+    
+    // Education Chart
+    new Chart(document.getElementById('educationChart'), {
+      type: 'bar',
+      data: {
+        labels: ['Primary Completion', 'Adequate School Toilets', 'Fertility Rate'],
+        datasets: [{
+          label: 'Lwengo',
+          data: [45, 26, 47],
+          backgroundColor: '#ef4444'
+        }, {
+          label: 'Target/Ideal',
+          data: [100, 100, 21],
+          backgroundColor: 'rgba(74, 222, 128, 0.3)'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { 
+          legend: { position: 'bottom' },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                if (ctx.dataIndex === 2) return ctx.dataset.label + ': ' + (ctx.raw/10) + ' births/woman';
+                return ctx.dataset.label + ': ' + ctx.raw + '%';
+              }
+            }
+          }
+        },
+        scales: { y: { max: 100 } }
+      }
+    });
+    
+    // Digital Chart
+    new Chart(document.getElementById('digitalChart'), {
+      type: 'radar',
+      data: {
+        labels: ['Internet Users', 'Mobile Connections', '4G Coverage', 'Rural Broadband', 'Smartphone Access'],
+        datasets: [{
+          label: 'Uganda (%)',
+          data: [27, 67.7, 31, 30, 40],
+          borderColor: '#4ade80',
+          backgroundColor: 'rgba(74, 222, 128, 0.2)'
+        }, {
+          label: 'Kenya (comparison)',
+          data: [40, 85, 90, 45, 55],
+          borderColor: '#fbbf24',
+          backgroundColor: 'rgba(251, 191, 36, 0.1)'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: { r: { beginAtZero: true, max: 100 } },
+        plugins: { legend: { position: 'bottom' } }
+      }
+    });
+    
+    // Climate Chart
+    new Chart(document.getElementById('climateChart'), {
+      type: 'bar',
+      data: {
+        labels: ['Floods', 'Droughts', 'Landslides', 'Storms', 'Other'],
+        datasets: [{
+          label: 'Share of Disasters (1985-2024)',
+          data: [55, 25, 10, 7, 3],
+          backgroundColor: ['#3b82f6', '#fbbf24', '#8b5cf6', '#22d3ee', '#94a3b8']
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { ticks: { callback: v => v + '%' } } }
+      }
+    });
+    
+    // Comparison Chart
+    new Chart(document.getElementById('comparisonChart'), {
+      type: 'bar',
+      data: {
+        labels: ['Water Access', 'Electricity', 'Primary Completion', 'Internet', 'Health Staffing', 'Life Expectancy (÷10)'],
+        datasets: [{
+          label: 'Lwengo/Kinoni',
+          data: [73, 53, 45, 27, 67, 6.0],
+          backgroundColor: '#4ade80'
+        }, {
+          label: 'Uganda National',
+          data: [70, 53, 65, 27, 75, 6.8],
+          backgroundColor: '#3b82f6'
+        }, {
+          label: 'Target/SDG',
+          data: [100, 100, 100, 75, 100, 7.5],
+          backgroundColor: 'rgba(251, 191, 36, 0.4)'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom' } },
+        scales: { y: { max: 100 } }
+      }
+    });
+  </script>
+</body>
+</html>

@@ -121,6 +121,44 @@ CREATE TABLE IF NOT EXISTS history_embeddings (
 );
 
 -- ============================================================================
+-- FULL-TEXT SEARCH (FTS5)
+-- ============================================================================
+
+-- FTS5 virtual table for fast text search with stemming
+-- Porter stemmer: "collaborate" matches "collaborator", "collaboration"
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_nodes_fts USING fts5(
+    content,
+    summary,
+    content='memory_nodes',
+    content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+
+-- Trigger: Keep FTS5 in sync on INSERT
+CREATE TRIGGER IF NOT EXISTS memory_nodes_fts_insert
+AFTER INSERT ON memory_nodes
+BEGIN
+    INSERT INTO memory_nodes_fts(rowid, content, summary)
+    VALUES (NEW.rowid, NEW.content, NEW.summary);
+END;
+
+-- Trigger: Keep FTS5 in sync on UPDATE
+CREATE TRIGGER IF NOT EXISTS memory_nodes_fts_update
+AFTER UPDATE OF content, summary ON memory_nodes
+BEGIN
+    UPDATE memory_nodes_fts
+    SET content = NEW.content, summary = NEW.summary
+    WHERE rowid = NEW.rowid;
+END;
+
+-- Trigger: Keep FTS5 in sync on DELETE
+CREATE TRIGGER IF NOT EXISTS memory_nodes_fts_delete
+AFTER DELETE ON memory_nodes
+BEGIN
+    DELETE FROM memory_nodes_fts WHERE rowid = OLD.rowid;
+END;
+
+-- ============================================================================
 -- INDEXES
 -- ============================================================================
 

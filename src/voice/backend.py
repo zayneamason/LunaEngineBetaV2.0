@@ -141,7 +141,7 @@ class VoiceBackend:
         engine=None,
         stt_provider: STTProviderType = STTProviderType.MLX_WHISPER,
         tts_provider: TTSProviderType = TTSProviderType.PIPER,
-        tts_voice: str = "en_US-lessac-medium",
+        tts_voice: str = "en_US-amy-medium",
         hands_free: bool = False
     ):
         """
@@ -608,7 +608,8 @@ class VoiceBackend:
         Speak the given text using TTS.
 
         Used for speaking typed chat responses when voice mode is active.
-        Uses Piper TTS for high-quality neural voice synthesis.
+        Routes through TTSManager which handles preprocessing (removes
+        special characters like asterisks that TTS would read aloud).
 
         Args:
             text: Text to speak
@@ -622,51 +623,12 @@ class VoiceBackend:
             self._on_response(text)
 
         try:
-            import os
-            import tempfile
-
-            # Piper binary and model paths
-            voice_dir = os.path.dirname(os.path.abspath(__file__))
-            piper_bin = os.path.join(voice_dir, "piper_bin", "piper", "piper")
-            piper_model = os.path.join(voice_dir, "piper_models", "en_US-amy-medium.onnx")
-
-            # Generate temp output file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                output_file = f.name
-
-            try:
-                # Run Piper TTS (x86_64 binary via Rosetta)
-                process = await asyncio.create_subprocess_exec(
-                    "arch", "-x86_64", piper_bin,
-                    "--model", piper_model,
-                    "--output_file", output_file,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await process.communicate(input=text.encode())
-
-                if process.returncode != 0:
-                    stderr_data = await process.stderr.read() if process.stderr else b""
-                    logger.error(f"Piper TTS failed: {stderr_data.decode()}")
-                    return
-
-                # Play the audio
-                play_process = await asyncio.create_subprocess_exec(
-                    "afplay", output_file,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                await play_process.wait()
-
-            finally:
-                # Clean up temp file
-                if os.path.exists(output_file):
-                    os.unlink(output_file)
-
+            # Use TTSManager which handles preprocessing and provider fallback
+            audio = await self.tts.synthesize(text)
+            if audio.data:
+                await self.audio_playback.play(audio)
         except Exception as e:
             logger.error(f"TTS failed: {e}")
-
         finally:
             self._notify_status("idle")
 

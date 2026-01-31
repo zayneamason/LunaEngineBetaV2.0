@@ -286,6 +286,122 @@ TUNABLE_PARAMS: dict[str, dict] = {
         "description": "Interval between reflective ticks in seconds.",
         "category": "engine",
     },
+
+    # -------------------------------------------------------------------------
+    # MEMORY ECONOMY PARAMETERS
+    # -------------------------------------------------------------------------
+    "memory_economy.enabled": {
+        "default": 1.0,
+        "bounds": (0.0, 1.0),
+        "step": 1.0,
+        "description": "Enable Memory Economy cluster-based retrieval. 0 = basic node search, 1 = constellation assembly.",
+        "category": "memory_economy",
+    },
+    "memory_economy.use_clusters": {
+        "default": 1.0,
+        "bounds": (0.0, 1.0),
+        "step": 1.0,
+        "description": "Use cluster-aware retrieval. When enabled, related memories are retrieved together.",
+        "category": "memory_economy",
+    },
+    "memory_economy.max_clusters_per_query": {
+        "default": 5,
+        "bounds": (1, 10),
+        "step": 1,
+        "description": "Maximum clusters to activate per query. Higher = more context, more tokens.",
+        "category": "memory_economy",
+    },
+    "memory_economy.cluster_budget_pct": {
+        "default": 0.6,
+        "bounds": (0.3, 0.9),
+        "step": 0.1,
+        "description": "Fraction of token budget allocated to cluster content (vs individual nodes).",
+        "category": "memory_economy",
+    },
+    "memory_economy.auto_activation_threshold": {
+        "default": 0.80,
+        "bounds": (0.5, 0.95),
+        "step": 0.05,
+        "description": "Lock-in threshold for auto-activated clusters (always warm).",
+        "category": "memory_economy",
+    },
+    "memory_economy.similarity_threshold": {
+        "default": 0.82,
+        "bounds": (0.5, 0.95),
+        "step": 0.02,
+        "description": "Minimum similarity for cluster membership.",
+        "category": "memory_economy",
+    },
+    "memory_economy.merge_threshold": {
+        "default": 0.6,
+        "bounds": (0.3, 0.9),
+        "step": 0.1,
+        "description": "Similarity threshold for merging clusters.",
+        "category": "memory_economy",
+    },
+    "memory_economy.min_cluster_size": {
+        "default": 3,
+        "bounds": (2, 10),
+        "step": 1,
+        "description": "Minimum members for a valid cluster.",
+        "category": "memory_economy",
+    },
+    "memory_economy.max_cluster_size": {
+        "default": 50,
+        "bounds": (20, 100),
+        "step": 10,
+        "description": "Maximum members before cluster splits.",
+        "category": "memory_economy",
+    },
+    "memory_economy.decay.drifting": {
+        "default": 0.01,
+        "bounds": (0.001, 0.1),
+        "step": 0.005,
+        "description": "Lock-in decay rate for drifting clusters (per second).",
+        "category": "memory_economy",
+    },
+    "memory_economy.decay.fluid": {
+        "default": 0.001,
+        "bounds": (0.0001, 0.01),
+        "step": 0.001,
+        "description": "Lock-in decay rate for fluid clusters.",
+        "category": "memory_economy",
+    },
+    "memory_economy.decay.settled": {
+        "default": 0.0001,
+        "bounds": (0.00001, 0.001),
+        "step": 0.0001,
+        "description": "Lock-in decay rate for settled clusters.",
+        "category": "memory_economy",
+    },
+    "memory_economy.weight.node": {
+        "default": 0.40,
+        "bounds": (0.1, 0.7),
+        "step": 0.05,
+        "description": "Weight of node content in cluster lock-in calculation.",
+        "category": "memory_economy",
+    },
+    "memory_economy.weight.access": {
+        "default": 0.30,
+        "bounds": (0.1, 0.5),
+        "step": 0.05,
+        "description": "Weight of access frequency in cluster lock-in.",
+        "category": "memory_economy",
+    },
+    "memory_economy.weight.edge": {
+        "default": 0.20,
+        "bounds": (0.05, 0.4),
+        "step": 0.05,
+        "description": "Weight of edge connections in cluster lock-in.",
+        "category": "memory_economy",
+    },
+    "memory_economy.weight.age": {
+        "default": 0.10,
+        "bounds": (0.0, 0.3),
+        "step": 0.05,
+        "description": "Weight of age/recency in cluster lock-in.",
+        "category": "memory_economy",
+    },
 }
 
 
@@ -583,9 +699,89 @@ class ParamRegistry:
                         cfg.max_active_turns = value
                         return True
 
+            if parts[0] == "memory_economy":
+                # Update Memory Economy config file
+                return self._apply_memory_economy_param(parts[1:], value)
+
             logger.debug(f"No live update path for {name}")
             return False
 
         except Exception as e:
             logger.warning(f"Failed to apply {name}={value} to engine: {e}")
+            return False
+
+    def _apply_memory_economy_param(self, parts: list, value: Any) -> bool:
+        """Apply a Memory Economy parameter change to the config file."""
+        import json
+        from pathlib import Path
+
+        # Find project root - params.py is at: src/luna/tuning/params.py (4 levels deep)
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent.parent.parent
+        config_path = project_root / "config" / "memory_economy_config.json"
+
+        try:
+            # Load current config
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+            else:
+                # Create default config if it doesn't exist
+                config = {
+                    "enabled": True,
+                    "use_clusters": True,
+                    "constellation": {"max_tokens": 3000, "prioritize_clusters": True},
+                    "thresholds": {"drifting": 0.20, "fluid": 0.70, "settled": 0.85, "similarity": 0.82, "auto_activation": 0.80},
+                    "weights": {"node": 0.40, "access": 0.30, "edge": 0.20, "age": 0.10},
+                    "decay": {"crystallized": 0.00001, "settled": 0.0001, "fluid": 0.001, "drifting": 0.01},
+                    "clustering": {"min_cluster_size": 3, "max_cluster_size": 50, "merge_similarity_threshold": 0.6}
+                }
+
+            # Route parameter to config location
+            if len(parts) == 1:
+                param = parts[0]
+                if param == "enabled":
+                    config["enabled"] = bool(value)
+                elif param == "use_clusters":
+                    config["use_clusters"] = bool(value)
+                elif param == "max_clusters_per_query":
+                    config.setdefault("retrieval", {})["max_clusters_per_query"] = int(value)
+                elif param == "cluster_budget_pct":
+                    config.setdefault("constellation", {})["cluster_budget_pct"] = float(value)
+                elif param == "auto_activation_threshold":
+                    config.setdefault("thresholds", {})["auto_activation"] = float(value)
+                elif param == "similarity_threshold":
+                    config.setdefault("thresholds", {})["similarity"] = float(value)
+                elif param == "merge_threshold":
+                    config.setdefault("clustering", {})["merge_similarity_threshold"] = float(value)
+                elif param == "min_cluster_size":
+                    config.setdefault("clustering", {})["min_cluster_size"] = int(value)
+                elif param == "max_cluster_size":
+                    config.setdefault("clustering", {})["max_cluster_size"] = int(value)
+                else:
+                    logger.debug(f"Unknown memory_economy param: {param}")
+                    return False
+            elif len(parts) == 2:
+                category, param = parts
+                if category == "decay":
+                    config.setdefault("decay", {})[param] = float(value)
+                elif category == "weight":
+                    config.setdefault("weights", {})[param] = float(value)
+                else:
+                    logger.debug(f"Unknown memory_economy category: {category}")
+                    return False
+            else:
+                logger.debug(f"Unknown memory_economy param path: {parts}")
+                return False
+
+            # Write updated config
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+
+            logger.info(f"Memory Economy config updated: {'.'.join(parts)}={value}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update Memory Economy config: {e}")
             return False

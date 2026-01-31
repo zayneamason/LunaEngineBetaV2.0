@@ -458,14 +458,32 @@ async def memory_matrix_add_edge(
     Args:
         from_node: Source node ID
         to_node: Target node ID
-        relationship: Relationship type (depends_on, enables, etc.)
+        relationship: Relationship type (DEPENDS_ON, RELATES_TO, CAUSED_BY, etc.)
         strength: Relationship strength (0.0-1.0)
 
     Returns:
         Success message or error
     """
-    # TODO: Implement via MCP API when endpoint is ready
-    return f"Edge creation not yet implemented: {from_node} -{relationship}-> {to_node}"
+    try:
+        response = await _call_api(
+            "POST",
+            "/memory/add-edge",
+            json={
+                "from_node": from_node,
+                "to_node": to_node,
+                "relationship": relationship.upper(),
+                "strength": strength,
+            }
+        )
+
+        if response.get('success'):
+            return f"✓ Edge created: {from_node} --{relationship}[{strength}]--> {to_node}"
+        else:
+            return f"Failed to create edge: {response.get('message', 'Unknown error')}"
+    except httpx.ConnectError:
+        return f"Error: MCP API not reachable at {get_api_url()}"
+    except Exception as e:
+        return f"Error creating edge: {str(e)}"
 
 
 async def memory_matrix_get_context(node_id: str, depth: int = 2) -> str:
@@ -479,13 +497,44 @@ async def memory_matrix_get_context(node_id: str, depth: int = 2) -> str:
     Returns:
         Formatted context or error
     """
-    # TODO: Implement via MCP API when endpoint is ready
-    return f"Node context retrieval not yet implemented for: {node_id}"
+    try:
+        response = await _call_api(
+            "POST",
+            "/memory/node-context",
+            json={
+                "node_id": node_id,
+                "depth": depth,
+            }
+        )
+
+        neighbors = response.get('neighbors', [])
+        edges = response.get('edges', [])
+
+        # Format output
+        output_parts = [f"## Context for Node: {node_id}"]
+        output_parts.append(f"**Depth:** {depth}")
+        output_parts.append(f"**Neighbors:** {len(neighbors)}")
+
+        if neighbors:
+            output_parts.append("\n### Connected Nodes:")
+            for n in neighbors[:20]:  # Limit display
+                output_parts.append(f"  - {n}")
+
+        if edges:
+            output_parts.append("\n### Edges:")
+            for e in edges[:20]:  # Limit display
+                output_parts.append(f"  - {e['from_id']} --{e['relationship']}[{e['strength']:.2f}]--> {e['to_id']}")
+
+        return "\n".join(output_parts)
+    except httpx.ConnectError:
+        return f"Error: MCP API not reachable at {get_api_url()}"
+    except Exception as e:
+        return f"Error getting context: {str(e)}"
 
 
 async def memory_matrix_trace(node_id: str, max_depth: int = 5) -> str:
     """
-    Trace dependency paths leading to a memory node.
+    Trace dependency paths leading to a memory node using spreading activation.
 
     Args:
         node_id: Node ID to trace dependencies for
@@ -494,8 +543,42 @@ async def memory_matrix_trace(node_id: str, max_depth: int = 5) -> str:
     Returns:
         Formatted dependency trace or error
     """
-    # TODO: Implement via MCP API when endpoint is ready
-    return f"Dependency tracing not yet implemented for: {node_id}"
+    try:
+        response = await _call_api(
+            "POST",
+            "/memory/trace",
+            json={
+                "node_id": node_id,
+                "max_depth": max_depth,
+            }
+        )
+
+        activations = response.get('activations', {})
+        paths = response.get('paths', [])
+
+        # Format output
+        output_parts = [f"## Dependency Trace for Node: {node_id}"]
+        output_parts.append(f"**Max Depth:** {max_depth}")
+        output_parts.append(f"**Related Nodes:** {len(activations)}")
+
+        if activations:
+            output_parts.append("\n### Activation Scores (Spreading Activation):")
+            # Sort by activation score
+            sorted_acts = sorted(activations.items(), key=lambda x: x[1], reverse=True)
+            for nid, score in sorted_acts[:20]:  # Top 20
+                bar = "█" * int(score * 10)
+                output_parts.append(f"  {nid}: {score:.3f} {bar}")
+
+        if paths:
+            output_parts.append("\n### Direct Connections:")
+            for p in paths[:10]:
+                output_parts.append(f"  {p['from_id']} --{p['relationship']}--> {p['to_id']}")
+
+        return "\n".join(output_parts)
+    except httpx.ConnectError:
+        return f"Error: MCP API not reachable at {get_api_url()}"
+    except Exception as e:
+        return f"Error tracing dependencies: {str(e)}"
 
 
 async def luna_save_memory(

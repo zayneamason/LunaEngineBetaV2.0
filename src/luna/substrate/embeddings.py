@@ -37,7 +37,7 @@ EMBEDDING_DIMS = {
     "local-minilm": 384,
 }
 
-DEFAULT_DIM = 1536  # OpenAI text-embedding-3-small
+DEFAULT_DIM = 384  # Local MiniLM (all-MiniLM-L6-v2)
 
 
 def vector_to_blob(vector: list[float]) -> bytes:
@@ -287,25 +287,26 @@ class EmbeddingGenerator:
     """
     Generate embeddings using various models.
 
-    Currently supports:
-    - OpenAI text-embedding-3-small/large
-    - Local models via sentence-transformers (future)
+    Supports:
+    - local-minilm: Free local embeddings (384 dims, ~50ms) - DEFAULT
+    - OpenAI text-embedding-3-small/large (1536/3072 dims, costs money)
     """
 
-    def __init__(self, model: str = "text-embedding-3-small"):
+    def __init__(self, model: str = "local-minilm"):
         """
         Initialize the embedding generator.
 
         Args:
-            model: The embedding model to use
+            model: The embedding model to use (default: local-minilm)
         """
         self.model = model
         self.dim = EMBEDDING_DIMS.get(model, DEFAULT_DIM)
         self._client = None
+        self._local_embeddings = None
 
     @property
     def client(self):
-        """Lazy init OpenAI client."""
+        """Lazy init OpenAI client (only for OpenAI models)."""
         if self._client is None:
             try:
                 from openai import OpenAI
@@ -313,6 +314,14 @@ class EmbeddingGenerator:
             except ImportError:
                 raise RuntimeError("openai package not installed. Run: pip install openai")
         return self._client
+
+    @property
+    def local_embeddings(self):
+        """Lazy init local embeddings (for local-minilm model)."""
+        if self._local_embeddings is None:
+            from .local_embeddings import get_embeddings
+            self._local_embeddings = get_embeddings()
+        return self._local_embeddings
 
     async def generate(self, text: str) -> list[float]:
         """
@@ -324,7 +333,10 @@ class EmbeddingGenerator:
         Returns:
             The embedding vector
         """
-        if self.model.startswith("text-embedding"):
+        if self.model == "local-minilm":
+            # Local MiniLM embeddings (free, fast)
+            return self.local_embeddings.encode(text)
+        elif self.model.startswith("text-embedding"):
             # OpenAI embeddings
             response = self.client.embeddings.create(
                 model=self.model,
@@ -344,7 +356,10 @@ class EmbeddingGenerator:
         Returns:
             List of embedding vectors
         """
-        if self.model.startswith("text-embedding"):
+        if self.model == "local-minilm":
+            # Local MiniLM batch embeddings
+            return self.local_embeddings.encode_batch(texts)
+        elif self.model.startswith("text-embedding"):
             # OpenAI embeddings (batch)
             response = self.client.embeddings.create(
                 model=self.model,

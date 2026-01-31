@@ -563,6 +563,122 @@ async def hub_search(request: HubSearchRequest):
         return {"results": [], "total": 0}
 
 
+# ==============================================================================
+# Graph Edge Operations (Proxy to Engine API)
+# ==============================================================================
+
+class AddEdgeProxyRequest(BaseModel):
+    from_node: str
+    to_node: str
+    relationship: str = "RELATES_TO"
+    strength: float = 1.0
+
+
+class NodeContextProxyRequest(BaseModel):
+    node_id: str
+    depth: int = 2
+
+
+class TraceProxyRequest(BaseModel):
+    node_id: str
+    max_depth: int = 5
+
+
+class SetAppContextProxyRequest(BaseModel):
+    app: str
+    app_state: str
+
+
+@app.post("/memory/add-edge")
+async def memory_add_edge_proxy(request: AddEdgeProxyRequest):
+    """Add an edge between memory nodes via engine API."""
+    if not await check_engine_health():
+        raise HTTPException(503, "Luna Engine not running")
+
+    try:
+        result = await call_engine(
+            "POST",
+            "/memory/add-edge",
+            json={
+                "from_node": request.from_node,
+                "to_node": request.to_node,
+                "relationship": request.relationship,
+                "strength": request.strength,
+            }
+        )
+        return result
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"Engine error: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to add edge: {str(e)}")
+
+
+@app.post("/memory/node-context")
+async def memory_node_context_proxy(request: NodeContextProxyRequest):
+    """Get context around a memory node via engine API."""
+    if not await check_engine_health():
+        raise HTTPException(503, "Luna Engine not running")
+
+    try:
+        result = await call_engine(
+            "POST",
+            "/memory/node-context",
+            json={
+                "node_id": request.node_id,
+                "depth": request.depth,
+            }
+        )
+        return result
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"Engine error: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get node context: {str(e)}")
+
+
+@app.post("/memory/trace")
+async def memory_trace_proxy(request: TraceProxyRequest):
+    """Trace dependencies via engine API."""
+    if not await check_engine_health():
+        raise HTTPException(503, "Luna Engine not running")
+
+    try:
+        result = await call_engine(
+            "POST",
+            "/memory/trace",
+            json={
+                "node_id": request.node_id,
+                "max_depth": request.max_depth,
+            }
+        )
+        return result
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"Engine error: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to trace dependencies: {str(e)}")
+
+
+@app.post("/state/set-app-context")
+async def set_app_context_proxy(request: SetAppContextProxyRequest):
+    """Set app context via engine API."""
+    if not await check_engine_health():
+        raise HTTPException(503, "Luna Engine not running")
+
+    try:
+        result = await call_engine(
+            "POST",
+            "/state/set-app-context",
+            json={
+                "app": request.app,
+                "app_state": request.app_state,
+            }
+        )
+        return result
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"Engine error: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to set app context: {str(e)}")
+
+
 @app.post("/extraction/trigger")
 async def extraction_trigger(request: ExtractionRequest):
     """Trigger memory extraction via engine API."""

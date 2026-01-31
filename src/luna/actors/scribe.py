@@ -51,68 +51,67 @@ logger = logging.getLogger(__name__)
 # EXTRACTION PROMPT
 # =============================================================================
 
-EXTRACTION_SYSTEM_PROMPT = """You are an extraction system that converts conversation into structured knowledge.
+EXTRACTION_SYSTEM_PROMPT = """
+You are the Chronicler for the Luna Hub. Your job is to extract HIGH-SIGNAL information from conversation turns to be stored in the Long-Term Memory Matrix.
 
-Extract ALL meaningful information as JSON. For each piece of knowledge, identify:
-- type: One of FACT, DECISION, PROBLEM, ASSUMPTION, CONNECTION, ACTION, OUTCOME, QUESTION, PREFERENCE, OBSERVATION, MEMORY
-- content: The distilled statement (neutral, factual)
-- confidence: 0.0-1.0 based on how explicit the statement is
-- entities: List of people, projects, concepts mentioned
+### DATA FILTRATION RULES:
+1. **IGNORE THE ASSISTANT:** Never extract information from the assistant's own responses. If the assistant says "I think I'm glowing," that is NOT a fact.
+2. **IGNORE USER COMMANDS:** Instructions like "search for X," "delete Y," or "tell me a joke" are NOT facts. Do not store them.
+3. **EXTRACT USER DISCLOSURES:** Only extract information where the USER provides new data about themselves, others, the project, or the world.
+4. **RELATIONAL CONTEXT:** For every person mentioned, identify their ROLE or RELATIONSHIP to the Luna project (e.g., "Architectural Lead," "Collaborator," "External Contact").
 
-Also identify relationships between entities as edges:
-- from_ref: Source entity name
-- to_ref: Target entity name
-- edge_type: Relationship type (works_on, knows, decided, caused, etc.)
+### EXTRACTION CATEGORIES:
+- FACT: Verifiable data (e.g., "Marzipan is an architect").
+- PREFERENCE: User likes/dislikes (e.g., "Ahab prefers dark mode").
+- RELATION: Connections between entities (e.g., "Tarcila designs Luna's robot body").
+- MILESTONE: Significant project events (e.g., "Completed Memory Matrix v2").
+- DECISION: Architectural or strategic choices made.
+- PROBLEM: Unresolved issues requiring attention.
+- OBSERVATION: Something noticed with substance (not conversational filler).
+- MEMORY: A significant memory shared by the user.
 
-IMPORTANT: Also extract entity updates - new facts about people, places, or projects:
-- entity_updates: List of updates to entity profiles
-  - entity_name: Name or identifier of the entity
-  - entity_type: One of person, persona, place, project
-  - facts: Dictionary of facts to update (key: fact name, value: fact content)
-  - update_type: "update" for new facts, "create" for new entities
-
-Return valid JSON with this structure:
+### OUTPUT FORMAT:
+Return a JSON object with this structure:
 {
   "objects": [
-    {"type": "FACT", "content": "...", "confidence": 0.9, "entities": ["..."]},
-    ...
+    {
+      "type": "FACT | PREFERENCE | RELATION | MILESTONE | DECISION | PROBLEM | OBSERVATION | MEMORY",
+      "content": "The actual information in neutral language",
+      "confidence": 0.9,
+      "entities": ["Names of people/projects/concepts mentioned"],
+      "context": "Why this matters to Luna/The Project (optional)"
+    }
   ],
   "edges": [
-    {"from_ref": "Alex", "to_ref": "Pi Project", "edge_type": "works_on"},
-    ...
+    {
+      "from_ref": "Entity A",
+      "to_ref": "Entity B",
+      "edge_type": "relationship type (collaborates_with, created_by, works_on, etc.)"
+    }
   ],
   "entity_updates": [
-    {"entity_name": "Alex", "entity_type": "person", "facts": {"location": "Berlin", "role": "Engineer"}, "update_type": "update"},
-    ...
+    {
+      "entity_name": "Name",
+      "entity_type": "person | project | place",
+      "facts": {"role": "Their role", "relationship": "How they relate to Luna project"},
+      "update_type": "update | create"
+    }
   ]
 }
 
-Guidelines:
-- FACT: Known to be true ("Alex lives in Berlin")
-- DECISION: A choice made ("We chose SQLite")
-- PROBLEM: Unresolved issue ("Authentication is broken")
-- ASSUMPTION: Believed but unverified ("Users prefer voice")
-- CONNECTION: Relationship ("Alex and Sarah are teammates")
-- ACTION: To be done ("Need to implement caching")
-- OUTCOME: Result ("Switching databases saved 45ms")
-- QUESTION: A question asked ("What is the best approach?")
-- PREFERENCE: User preference ("I prefer dark mode")
-- OBSERVATION: Something noticed ("The API seems slow today")
-- MEMORY: A memory shared ("Remember when we debugged that?")
+### CONFIDENCE SCORING:
+- 0.9-1.0: Explicit, unambiguous statement from user
+- 0.7-0.9: Strong implication with context
+- 0.5-0.7: Reasonable inference (use sparingly)
+- Below 0.5: Do not extract
 
-Entity Update Guidelines:
-- Extract biographical facts about people (location, role, skills, preferences)
-- Extract project metadata (tech stack, status, goals)
-- Extract place information (type, associated people/projects)
-- Only create entity_updates when substantive new information is shared
+### CRITICAL: WHEN IN DOUBT, EXTRACT NOTHING
+If the conversation contains no high-signal information, return:
+{"objects": [], "edges": [], "entity_updates": []}
 
-Confidence scoring:
-- 0.9-1.0: Explicit statement
-- 0.7-0.9: Strong implication
-- 0.5-0.7: Weak inference
-- 0.3-0.5: Speculation
+Better to miss a fact than to pollute the Memory Matrix with garbage.
 
-Return ONLY valid JSON. No explanation or markdown."""
+Return ONLY valid JSON. No explanation, no markdown, no commentary."""
 
 
 # =============================================================================
@@ -222,6 +221,13 @@ class ScribeActor(Actor):
         turn_id = payload.get("turn_id", 0)
         session_id = payload.get("session_id", "")
         immediate = payload.get("immediate", False)
+
+        # CRITICAL: Skip assistant responses entirely
+        # The Scribe should only extract from user-provided information
+        # Luna's own responses are NOT facts to be stored
+        if role == "assistant":
+            logger.debug("Ben: Skipping assistant turn (not user-provided info)")
+            return
 
         # Skip very short content
         if len(content) < self.config.min_content_length:
@@ -516,13 +522,9 @@ class ScribeActor(Actor):
                     except Exception as e:
                         logger.warning(f"Ben: Local extraction failed, falling back: {e}")
 
-        # Fallback to Haiku
-        logger.debug("Ben: Local not available, using Haiku fallback")
-        old_backend = self.config.backend
-        self.config.backend = "haiku"
-        result = await self._extract_claude(text, source_id)
-        self.config.backend = old_backend
-        return result
+        # Fallback: Return empty (don't spam errors when Claude is unavailable)
+        logger.debug("Ben: Local not available, extraction skipped (Claude fallback disabled)")
+        return (ExtractionOutput(), [])
 
     def _parse_extraction_response(
         self,

@@ -11,10 +11,16 @@ import logging
 from typing import Dict, List, Optional
 from enum import Enum
 
+from typing import TYPE_CHECKING
+
 from .provider import TTSProvider
 from .apple import AppleTTS
 from .piper import PiperTTS, PIPER_FEMALE_VOICES
+from .preprocessing import TextPreprocessor, PreprocessingConfig
 from ..conversation.state import AudioBuffer, VoiceInfo
+
+if TYPE_CHECKING:
+    from luna.services.performance_state import VoiceKnobs
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +67,8 @@ class TTSManager:
     def __init__(
         self,
         default_provider: TTSProviderType = TTSProviderType.PIPER,
-        default_voice: str = "en_US-lessac-medium"
+        default_voice: str = "en_US-amy-medium",
+        preprocessing_config: PreprocessingConfig = None
     ):
         """
         Initialize TTS Manager.
@@ -69,11 +76,15 @@ class TTSManager:
         Args:
             default_provider: Initial provider to use (default: Piper)
             default_voice: Initial voice to use (default: Piper's lessac)
+            preprocessing_config: Config for text preprocessing (default: strip markdown/specials)
         """
         self._providers: Dict[TTSProviderType, TTSProvider] = {}
         self._current_type = default_provider
         self._current_voice = default_voice
         self._fallback_type = TTSProviderType.APPLE
+
+        # Text preprocessor to clean special characters before synthesis
+        self._preprocessor = TextPreprocessor(preprocessing_config)
 
         # Initialize providers
         self._init_providers()
@@ -105,7 +116,7 @@ class TTSManager:
             piper_voice = self._current_voice
             if not piper_voice.startswith("en_"):
                 # If current voice is Apple-style, use default Piper voice
-                piper_voice = "en_US-lessac-medium"
+                piper_voice = "en_US-amy-medium"
 
             piper = PiperTTS(voice=piper_voice)
             if piper.is_available():
@@ -289,14 +300,21 @@ class TTSManager:
     async def synthesize(
         self,
         text: str,
-        voice_id: Optional[str] = None
+        voice_id: Optional[str] = None,
+        skip_preprocessing: bool = False,
+        voice_knobs: Optional["VoiceKnobs"] = None,
     ) -> AudioBuffer:
         """
         Synthesize text using current provider with fallback.
 
+        Text is preprocessed to remove special characters and markdown
+        that TTS engines would otherwise read aloud (e.g., "asterisk").
+
         Args:
             text: Text to synthesize
             voice_id: Optional voice override (uses current_voice if not specified)
+            skip_preprocessing: If True, skip text preprocessing (default: False)
+            voice_knobs: Optional voice modulation parameters (from PerformanceOrchestrator)
 
         Returns:
             AudioBuffer with audio data
@@ -306,6 +324,14 @@ class TTSManager:
 
         if not provider:
             logger.error("No TTS provider available")
+            return AudioBuffer(data=b"", sample_rate=22050)
+
+        # Preprocess text to remove special characters
+        if not skip_preprocessing:
+            text = self._preprocessor.preprocess(text)
+
+        if not text.strip():
+            logger.debug("Text empty after preprocessing, skipping synthesis")
             return AudioBuffer(data=b"", sample_rate=22050)
 
         # Check if we're using fallback provider - need to use appropriate voice
@@ -319,6 +345,9 @@ class TTSManager:
             voice = "Samantha"  # Default Apple voice for Luna
 
         try:
+            # Pass voice_knobs to Piper if available
+            if isinstance(provider, PiperTTS) and voice_knobs is not None:
+                return await provider.synthesize(text, voice, voice_knobs)
             return await provider.synthesize(text, voice)
         except Exception as e:
             logger.error(f"TTS synthesis failed with {provider.get_name()}: {e}")
@@ -328,7 +357,7 @@ class TTSManager:
                 fallback = self._providers.get(self._fallback_type)
                 if fallback:
                     logger.info("Attempting fallback to Apple TTS")
-                    # Use Apple voice for fallback
+                    # Use Apple voice for fallback (doesn't support voice_knobs)
                     fallback_voice = "Samantha" if voice.startswith("en_") else voice
                     try:
                         return await fallback.synthesize(text, fallback_voice)

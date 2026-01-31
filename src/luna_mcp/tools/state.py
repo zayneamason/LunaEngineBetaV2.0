@@ -212,5 +212,21 @@ async def luna_set_app_context(app: str, app_state: str) -> str:
     Returns:
         Confirmation message
     """
-    # TODO: Implement via engine API when endpoint is ready
-    return f"App context set: {app} / {app_state}"
+    try:
+        response = await _call_api(
+            "POST",
+            "/state/set-app-context",
+            json={
+                "app": app,
+                "app_state": app_state,
+            }
+        )
+
+        if response.get('success'):
+            return f"✓ App context set: {app} / {app_state}"
+        else:
+            return f"Failed to set app context"
+    except httpx.ConnectError:
+        return f"Error: MCP API not reachable at {get_api_url()}"
+    except Exception as e:
+        return f"Error setting app context: {str(e)}"

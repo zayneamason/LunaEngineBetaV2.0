@@ -45,9 +45,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 FALLBACK_MODEL = "mlx-community/Qwen2.5-3B-Instruct-4bit"
 
+# Local model paths (preferred over downloading from HuggingFace)
+_MODELS_DIR = Path(__file__).parent.parent.parent.parent / "models"
+LOCAL_MODEL_PATH = _MODELS_DIR / "Qwen2.5-3B-Instruct-MLX-4bit"
 
 # Luna LoRA adapter path (trained personality) - MLX format
-LUNA_LORA_PATH = Path(__file__).parent.parent.parent.parent / "models/luna_lora_mlx"
+LUNA_LORA_PATH = _MODELS_DIR / "luna_lora_mlx"
 
 
 @dataclass
@@ -146,16 +149,28 @@ class LocalInference:
 
             model_id = self.config.model_id
 
-            # Use 4-bit quantized version for speed if configured
-            if self.config.use_4bit and "4bit" not in model_id:
-                # Try the MLX community quantized version
-                model_id = FALLBACK_MODEL
-
-            # Check for Luna LoRA adapter
+            # Check for Luna LoRA adapter FIRST (before deciding on model)
             adapter_path = self.config.adapter_path
             if adapter_path is None and LUNA_LORA_PATH.exists():
                 adapter_path = LUNA_LORA_PATH
-                logger.info(f"Using Luna LoRA adapter: {adapter_path}")
+                logger.info(f"Found Luna LoRA adapter: {adapter_path}")
+
+            # Prefer local model if available (faster startup, no download needed)
+            # The Luna LoRA adapter is compatible with the 4-bit quantized model
+            if LOCAL_MODEL_PATH.exists() and (LOCAL_MODEL_PATH / "model.safetensors").exists():
+                model_id = str(LOCAL_MODEL_PATH)
+                logger.info(f"Using local model: {model_id}")
+            elif adapter_path is not None:
+                # Fallback: download full-precision model for LoRA compatibility
+                if "4bit" in model_id or model_id == FALLBACK_MODEL:
+                    model_id = DEFAULT_MODEL
+                    logger.info(f"LoRA adapter detected - using full-precision model: {model_id}")
+                else:
+                    logger.info(f"Using model with LoRA adapter: {model_id}")
+            elif self.config.use_4bit and "4bit" not in model_id:
+                # No local model or LoRA - use 4-bit quantized version
+                model_id = FALLBACK_MODEL
+                logger.info(f"No local model - downloading 4-bit quantized: {model_id}")
 
             logger.info(f"Loading model: {model_id}")
             start = time.perf_counter()
@@ -164,6 +179,10 @@ class LocalInference:
             # Run in executor to not block event loop
             loop = asyncio.get_event_loop()
             adapter_str = str(adapter_path) if adapter_path else None
+
+            # FIX: Log the exact parameters being passed to MLX load()
+            logger.info(f"MLX load() params: model_id={model_id}, adapter_path={adapter_str}")
+
             self._model, self._tokenizer = await loop.run_in_executor(
                 None,
                 lambda: load(model_id, adapter_path=adapter_str)
@@ -172,6 +191,10 @@ class LocalInference:
             load_time = (time.perf_counter() - start) * 1000
             lora_str = " + Luna LoRA" if adapter_path else ""
             logger.info(f"Model{lora_str} loaded in {load_time:.0f}ms")
+
+            # FIX: Additional verification that adapter was applied
+            if adapter_path:
+                logger.info(f"Luna personality LoRA applied from: {adapter_path}")
 
             self._loaded = True
             self._adapter_loaded = adapter_path is not None
@@ -262,10 +285,16 @@ class LocalInference:
         loop = asyncio.get_event_loop()
 
         # Create sampler with temperature settings
-        from mlx_lm.sample_utils import make_sampler
+        from mlx_lm.sample_utils import make_sampler, make_repetition_penalty
         sampler = make_sampler(
             temp=self.config.temperature,
             top_p=self.config.top_p,
+        )
+
+        # Create repetition penalty processor to prevent loops
+        rep_penalty = make_repetition_penalty(
+            penalty=self.config.repetition_penalty,
+            context_size=50  # Look back 50 tokens for repetition
         )
 
         response = await loop.run_in_executor(
@@ -276,6 +305,7 @@ class LocalInference:
                 prompt=prompt,
                 max_tokens=max_toks,
                 sampler=sampler,
+                logits_processors=[rep_penalty],
             )
         )
 
@@ -339,10 +369,16 @@ class LocalInference:
             """Run generation in thread and push tokens to queue."""
             try:
                 # Create sampler
-                from mlx_lm.sample_utils import make_sampler
+                from mlx_lm.sample_utils import make_sampler, make_repetition_penalty
                 sampler = make_sampler(
                     temp=self.config.temperature,
                     top_p=self.config.top_p,
+                )
+
+                # Create repetition penalty processor to prevent loops
+                rep_penalty = make_repetition_penalty(
+                    penalty=self.config.repetition_penalty,
+                    context_size=50  # Look back 50 tokens for repetition
                 )
 
                 for response in stream_generate(
@@ -351,6 +387,7 @@ class LocalInference:
                     prompt=prompt,
                     max_tokens=max_toks,
                     sampler=sampler,
+                    logits_processors=[rep_penalty],
                 ):
                     token = response.text
                     # Put token in queue (thread-safe)

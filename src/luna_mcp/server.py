@@ -46,7 +46,7 @@ os.environ.setdefault("LUNA_MCP_API_URL", "http://localhost:8742")
 from mcp.server.fastmcp import FastMCP
 
 # Import tool modules
-from luna_mcp.tools import filesystem, memory, state, git
+from luna_mcp.tools import filesystem, memory, state, git, forge
 
 # Import auto-session functions
 from luna_mcp.tools.memory import (
@@ -472,6 +472,170 @@ async def luna_git_status() -> str:
         Formatted git status
     """
     return await git.luna_git_status()
+
+
+# ==============================================================================
+# Persona Forge Tools - Dataset
+# ==============================================================================
+
+@mcp.tool()
+async def forge_load(path: str) -> dict:
+    """Load training data from JSONL file."""
+    return await forge.forge_load(path)
+
+
+@mcp.tool()
+async def forge_assay() -> dict:
+    """Analyze current dataset quality and coverage."""
+    return await forge.forge_assay()
+
+
+@mcp.tool()
+async def forge_gaps() -> dict:
+    """Show coverage gaps needing synthesis."""
+    return await forge.forge_gaps()
+
+
+@mcp.tool()
+async def forge_mint(interaction_type: str, count: int = 10) -> dict:
+    """Generate synthetic training examples."""
+    return await forge.forge_mint(interaction_type, count)
+
+
+@mcp.tool()
+async def forge_export(output_path: str, train_split: float = 0.9) -> dict:
+    """Export training data to JSONL."""
+    return await forge.forge_export(output_path, train_split)
+
+
+@mcp.tool()
+async def forge_status() -> dict:
+    """Get current Forge session state."""
+    return await forge.forge_status()
+
+
+# ==============================================================================
+# Persona Forge Tools - Ingestion
+# ==============================================================================
+
+@mcp.tool()
+async def forge_list_sources(directory: str, pattern: str = "*") -> dict:
+    """List available source files for ingestion."""
+    return await forge.forge_list_sources(directory, pattern)
+
+
+@mcp.tool()
+async def forge_read_raw(path: str, max_chars: int = 50000, offset: int = 0) -> dict:
+    """Read raw file content for LLM-assisted extraction."""
+    return await forge.forge_read_raw(path, max_chars, offset)
+
+
+@mcp.tool()
+async def forge_add_example(
+    user_message: str,
+    assistant_response: str,
+    interaction_type: str = "short_exchange",
+    source_file: str = None,
+    source_type: str = "manual",
+    confidence: float = 1.0,
+    tags: list = None,
+    context: str = None
+) -> dict:
+    """Add a single training example (Claude-extracted)."""
+    return await forge.forge_add_example(
+        user_message, assistant_response, interaction_type,
+        source_file, source_type, confidence, tags, context
+    )
+
+
+@mcp.tool()
+async def forge_add_batch(examples: list) -> dict:
+    """Add multiple training examples at once."""
+    return await forge.forge_add_batch(examples)
+
+
+@mcp.tool()
+async def forge_search(query: str, field: str = "all", limit: int = 10) -> dict:
+    """Search existing examples for deduplication."""
+    return await forge.forge_search(query, field, limit)
+
+
+@mcp.tool()
+async def forge_read_matrix(
+    db_path: str,
+    node_types: list = None,
+    limit: int = 100,
+    offset: int = 0
+) -> dict:
+    """Read memory nodes from Memory Matrix database."""
+    return await forge.forge_read_matrix(db_path, node_types, limit, offset)
+
+
+@mcp.tool()
+async def forge_read_turns(
+    db_path: str,
+    session_id: str = None,
+    limit: int = 100,
+    offset: int = 0
+) -> dict:
+    """Read conversation turns from database (GOLD quality)."""
+    return await forge.forge_read_turns(db_path, session_id, limit, offset)
+
+
+# ==============================================================================
+# Persona Forge Tools - Character
+# ==============================================================================
+
+@mcp.tool()
+async def character_list() -> dict:
+    """List available personality profiles."""
+    return await forge.character_list()
+
+
+@mcp.tool()
+async def character_load(profile_name: str) -> dict:
+    """Load a personality profile."""
+    return await forge.character_load(profile_name)
+
+
+@mcp.tool()
+async def character_modulate(trait_name: str, delta: float) -> dict:
+    """Adjust a trait in the current profile."""
+    return await forge.character_modulate(trait_name, delta)
+
+
+@mcp.tool()
+async def character_save(path: str = None) -> dict:
+    """Save current profile to disk."""
+    return await forge.character_save(path)
+
+
+@mcp.tool()
+async def character_show() -> dict:
+    """Get detailed info about current profile."""
+    return await forge.character_show()
+
+
+# ==============================================================================
+# Persona Forge Tools - Voight-Kampff
+# ==============================================================================
+
+@mcp.tool()
+async def vk_run(model_id: str, suite_name: str = "luna", verbose: bool = False) -> dict:
+    """Run a Voight-Kampff test suite against a model."""
+    return await forge.vk_run(model_id, suite_name, verbose)
+
+
+@mcp.tool()
+async def vk_list() -> dict:
+    """List available Voight-Kampff test suites."""
+    return await forge.vk_list()
+
+
+@mcp.tool()
+async def vk_probes(suite_name: str) -> dict:
+    """Get the list of probes in a test suite."""
+    return await forge.vk_probes(suite_name)
 
 
 # ==============================================================================

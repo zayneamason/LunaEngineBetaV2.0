@@ -22,6 +22,13 @@ import os
 
 from .base import Actor, Message
 
+# LLM Provider Registry (hot-swappable providers)
+try:
+    from luna.llm import get_registry, get_provider, init_providers, Message as LLMMessage
+    LLM_REGISTRY_AVAILABLE = True
+except ImportError:
+    LLM_REGISTRY_AVAILABLE = False
+
 # Entity context for identity and relationship awareness
 try:
     from luna.entities.context import EntityContext, IdentityBuffer
@@ -149,6 +156,19 @@ class DirectorActor(Actor):
     async def on_start(self) -> None:
         """Initialize on start."""
         logger.info(f"Director actor starting with model: {self._model}")
+
+        # Initialize LLM provider registry if available
+        if LLM_REGISTRY_AVAILABLE:
+            try:
+                init_providers()
+                registry = get_registry()
+                current = registry.get_current()
+                if current:
+                    logger.info(f"LLM Registry initialized: {current.name} (current)")
+                else:
+                    logger.warning("LLM Registry: No provider available")
+            except Exception as e:
+                logger.warning(f"LLM Registry init failed: {e}")
 
         # Initialize local inference if enabled
         if self._enable_local:
@@ -620,23 +640,58 @@ class DirectorActor(Actor):
         elif self.local_available:
             route_decision = "local"
             route_reason = "simple query"
+            used_retrieval = False
 
-            # Build system prompt with framed context
-            system_prompt = "You are Luna, a sovereign AI companion.\n\n"
+            # ================================================================
+            # FIX: Use unified ContextPipeline for local path (same as delegation)
+            # This ensures local inference gets entity detection, temporal framing,
+            # and memory retrieval - not just raw text parsing.
+            # ================================================================
+            if self._context_pipeline is not None:
+                try:
+                    # Populate ring from context_window if empty (bridge Engine→Director gap)
+                    if len(self._context_pipeline._ring) == 0 and context_window:
+                        logger.info("[PROCESS-LOCAL-PIPELINE] Ring empty, populating from context_window")
+                        self._populate_ring_from_context(
+                            self._context_pipeline._ring,
+                            context_window
+                        )
 
-            if framed_context:
-                system_prompt += framed_context
+                    packet = await self._context_pipeline.build(message)
+                    system_prompt = packet.system_prompt
+                    used_retrieval = packet.used_retrieval
+                    logger.info(f"[PROCESS-LOCAL-PIPELINE] Using unified context: {packet}")
+                    logger.info(f"[PROCESS-LOCAL-PIPELINE] used_retrieval={used_retrieval}")
+                except Exception as e:
+                    logger.warning(f"[PROCESS-LOCAL] Context pipeline failed, using fallback: {e}")
+                    # Fallback to framed_context if pipeline fails
+                    system_prompt = "You are Luna, a sovereign AI companion.\n\n"
+                    if framed_context:
+                        system_prompt += framed_context
+                    else:
+                        identity_context = await self._load_emergent_prompt(
+                            query=message,
+                            conversation_history=conversation_history
+                        )
+                        if identity_context:
+                            system_prompt += identity_context
+                        if context_window:
+                            system_prompt += f"\n\n## Recent Conversation\n{context_window}\n\nContinue naturally."
             else:
-                # Fallback
-                identity_context = await self._load_emergent_prompt(
-                    query=message,
-                    conversation_history=conversation_history
-                )
-                if identity_context:
-                    system_prompt += identity_context
-
-                if context_window:
-                    system_prompt += f"\n\n## Recent Conversation\n{context_window}\n\nContinue naturally."
+                # No pipeline available - use legacy framed_context
+                logger.debug("[PROCESS-LOCAL] No context pipeline, using framed_context")
+                system_prompt = "You are Luna, a sovereign AI companion.\n\n"
+                if framed_context:
+                    system_prompt += framed_context
+                else:
+                    identity_context = await self._load_emergent_prompt(
+                        query=message,
+                        conversation_history=conversation_history
+                    )
+                    if identity_context:
+                        system_prompt += identity_context
+                    if context_window:
+                        system_prompt += f"\n\n## Recent Conversation\n{context_window}\n\nContinue naturally."
 
             system_prompt_tokens = len(system_prompt) // 4
 
@@ -648,6 +703,7 @@ class DirectorActor(Actor):
                 )
                 response_text = result.text if hasattr(result, 'text') else str(result)
                 self._local_generations += 1
+                logger.info(f"[PROCESS-LOCAL] Generation complete, used_retrieval={used_retrieval}")
             except Exception as e:
                 logger.error(f"Director.process local failed: {e}")
                 response_text = "I'm having trouble with that."
@@ -687,12 +743,17 @@ class DirectorActor(Actor):
             self._active_ring.add_assistant(response_text)
             logger.debug("[PROCESS-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 
+        # Capture used_retrieval from local path (for debugging)
+        # Default to True for delegated path (delegation always fetches memory)
+        final_used_retrieval = locals().get('used_retrieval', route_decision == "delegated")
+
         return {
             "response": response_text,
             "route_decision": route_decision,
             "route_reason": route_reason,
             "system_prompt_tokens": system_prompt_tokens,
             "latency_ms": elapsed_ms,
+            "used_retrieval": final_used_retrieval,
         }
 
     def on_stream(self, callback: Callable[[str], None]) -> None:
@@ -1070,6 +1131,20 @@ class DirectorActor(Actor):
 
 {identity_context}"""
 
+        # CRITICAL: Fetch memory context for local generation too!
+        # This enables Luna to remember people, places, and past conversations
+        memory_context = await self._fetch_memory_context(user_message, max_tokens=1000)
+        if memory_context:
+            print(f"✓ [LOCAL] Memory context loaded ({len(memory_context)} chars)")
+            full_system_prompt = f"""{full_system_prompt}
+
+## Your Memories
+The following are relevant memories from your memory matrix. Use these to provide personal, grounded responses:
+
+{memory_context}
+
+Reference these memories naturally as your own experiences and knowledge."""
+
         # Add conversation context from ring buffer (or text fallback)
         if ring_history:
             full_system_prompt = f"""{full_system_prompt}
@@ -1082,7 +1157,12 @@ Continue the conversation naturally, maintaining context from above."""
         return full_system_prompt
 
     async def _fetch_memory_context(self, query: str, max_tokens: int = 1500) -> str:
-        """Fetch relevant memory context for a query."""
+        """
+        Fetch relevant memory context for a query.
+
+        UPDATED: Uses Memory Economy constellation assembly when available for
+        cluster-aware retrieval with lock-in prioritization.
+        """
         if not self.engine:
             logger.debug("Memory fetch: No engine available")
             return ""
@@ -1099,6 +1179,11 @@ Continue the conversation naturally, maintaining context from above."""
         logger.debug(f"Memory fetch: Searching for query '{query[:50]}...'")
 
         try:
+            # Try Memory Economy constellation assembly first (cluster-aware retrieval)
+            constellation_context = await self._fetch_constellation_context(query, max_tokens, matrix)
+            if constellation_context:
+                return constellation_context
+
             # Try get_context if available
             if hasattr(matrix, 'get_context'):
                 logger.debug("Memory fetch: Using matrix.get_context()")
@@ -1110,42 +1195,144 @@ Continue the conversation naturally, maintaining context from above."""
                     logger.debug("Memory fetch: get_context returned empty")
 
             # Fallback to direct search
-            if matrix._matrix:
-                logger.debug("Memory fetch: Falling back to direct search_nodes()")
-                nodes = await matrix._matrix.search_nodes(query=query, limit=10)
-                logger.debug(f"Memory fetch: search_nodes returned {len(nodes) if nodes else 0} nodes")
+            return await self._fetch_basic_memory_context(query, max_tokens, matrix)
 
-                if nodes:
-                    # Filter out potentially confusing identity nodes about other people
-                    filtered_nodes = []
-                    for node in nodes:
-                        content_lower = node.content.lower()
-                        # Skip nodes that seem to be about other people's identities
-                        if "my name is" in content_lower and "ahab" not in content_lower and "zayne" not in content_lower:
-                            logger.debug(f"Memory fetch: Filtering out node {node.id}")
-                            continue
-                        filtered_nodes.append(node)
-
-                    nodes = filtered_nodes or nodes  # Fallback to all if filter removes everything
-                    logger.debug(f"Memory fetch: After filtering, {len(nodes)} nodes")
-
-                    context_parts = []
-                    for node in nodes:
-                        age = self._humanize_age(node.created_at) if hasattr(node, 'created_at') else "unknown"
-                        context_parts.append(f"<memory type='{node.node_type}' age='{age}'>\n{node.content}\n</memory>")
-                    result = "\n\n".join(context_parts)
-                    logger.info(f"Memory fetch: Returning {len(context_parts)} memory nodes ({len(result)} chars)")
-                    return result
-            else:
-                logger.warning("Memory fetch: matrix._matrix is None")
-
-            logger.debug("Memory fetch: No results found")
-            return ""
         except Exception as e:
             logger.error(f"Memory fetch failed: {type(e).__name__}: {e}")
             import traceback
             logger.error(f"Memory fetch traceback: {traceback.format_exc()}")
             return ""
+
+    async def _fetch_constellation_context(
+        self,
+        query: str,
+        max_tokens: int,
+        matrix
+    ) -> str:
+        """
+        Fetch context using Memory Economy constellation assembly.
+
+        This provides cluster-aware retrieval with:
+        - Relevant clusters activated together
+        - Lock-in prioritized node selection
+        - Token-budgeted assembly
+        """
+        try:
+            from luna.librarian.cluster_retrieval import ClusterRetrieval
+            from luna.memory.constellation import ConstellationAssembler
+
+            db_path = matrix._matrix.db_path
+            if not db_path:
+                logger.debug("Constellation fetch: No db_path available")
+                return ""
+
+            # Step 1: Get relevant nodes
+            nodes = await matrix._matrix.search_nodes(query=query, limit=20)
+            node_ids = [n.id for n in nodes] if nodes else []
+
+            if not node_ids:
+                logger.debug("Constellation fetch: No nodes found")
+                return ""
+
+            # Step 2: Find relevant clusters
+            retrieval = ClusterRetrieval(db_path)
+            cluster_results = retrieval.find_relevant_clusters(node_ids=node_ids, top_k=5)
+
+            # Also include auto-activated clusters (high lock-in)
+            auto_clusters = retrieval.get_auto_activated_clusters()
+            seen_ids = {c.cluster_id for c, _ in cluster_results}
+            for cluster in auto_clusters:
+                if cluster.cluster_id not in seen_ids:
+                    cluster_results.append((cluster, cluster.lock_in))
+
+            # Step 3: Assemble constellation
+            assembler = ConstellationAssembler(max_tokens=max_tokens)
+
+            cluster_dicts = [{"cluster": c, "score": score} for c, score in cluster_results]
+            node_dicts = [
+                {"node_id": n.id, "content": n.content, "node_type": n.node_type, "lock_in": getattr(n, 'lock_in', 0.5)}
+                for n in nodes
+            ]
+
+            constellation = assembler.assemble(
+                clusters=cluster_dicts,
+                nodes=node_dicts,
+                prioritize_clusters=True
+            )
+
+            # Step 4: Format for prompt
+            context_parts = []
+
+            # Add cluster context section if clusters were activated
+            if constellation.clusters:
+                context_parts.append("=== ACTIVE MEMORY CLUSTERS ===")
+                for cluster_data in constellation.clusters:
+                    cluster = cluster_data.get("cluster") or cluster_data
+                    name = getattr(cluster, 'name', None) or cluster.get('name', 'Unknown')
+                    state = getattr(cluster, 'state', None) or cluster.get('state', 'unknown')
+                    lock_in_val = getattr(cluster, 'lock_in', None) or cluster.get('lock_in', 0)
+                    context_parts.append(f"<cluster name='{name}' state='{state}' lock_in='{lock_in_val:.2f}'/>")
+                context_parts.append("")
+
+            # Add node context
+            for node_data in constellation.nodes:
+                node_type = node_data.get("node_type", "memory")
+                content = node_data.get("content", "")
+                lock_in_val = node_data.get("lock_in", 0.5)
+                context_parts.append(
+                    f"<memory type='{node_type}' lock_in='{lock_in_val:.2f}'>\n{content}\n</memory>"
+                )
+
+            result = "\n\n".join(context_parts)
+            logger.info(
+                f"Constellation context: {len(constellation.clusters)} clusters, "
+                f"{len(constellation.nodes)} nodes, ~{constellation.total_tokens} tokens"
+            )
+
+            return result
+
+        except ImportError:
+            logger.debug("Memory Economy not available, skipping constellation fetch")
+            return ""
+        except Exception as e:
+            logger.debug(f"Constellation fetch failed: {e}")
+            return ""
+
+    async def _fetch_basic_memory_context(self, query: str, max_tokens: int, matrix) -> str:
+        """Basic node-only retrieval (fallback when Memory Economy unavailable)."""
+        if not matrix._matrix:
+            logger.warning("Memory fetch: matrix._matrix is None")
+            return ""
+
+        logger.debug("Memory fetch: Falling back to direct search_nodes()")
+        nodes = await matrix._matrix.search_nodes(query=query, limit=10)
+        logger.debug(f"Memory fetch: search_nodes returned {len(nodes) if nodes else 0} nodes")
+
+        if not nodes:
+            logger.debug("Memory fetch: No results found")
+            return ""
+
+        # Filter out potentially confusing identity nodes about other people
+        filtered_nodes = []
+        for node in nodes:
+            content_lower = node.content.lower()
+            # Skip nodes that seem to be about other people's identities
+            if "my name is" in content_lower and "ahab" not in content_lower and "zayne" not in content_lower:
+                logger.debug(f"Memory fetch: Filtering out node {node.id}")
+                continue
+            filtered_nodes.append(node)
+
+        nodes = filtered_nodes or nodes  # Fallback to all if filter removes everything
+        logger.debug(f"Memory fetch: After filtering, {len(nodes)} nodes")
+
+        context_parts = []
+        for node in nodes:
+            age = self._humanize_age(node.created_at) if hasattr(node, 'created_at') else "unknown"
+            context_parts.append(f"<memory type='{node.node_type}' age='{age}'>\n{node.content}\n</memory>")
+
+        result = "\n\n".join(context_parts)
+        logger.info(f"Memory fetch: Returning {len(context_parts)} memory nodes ({len(result)} chars)")
+        return result
 
     def _humanize_age(self, timestamp) -> str:
         """Convert timestamp to human-readable age."""
@@ -1338,16 +1525,35 @@ Keep your response focused and conversational."""
             # Add current message
             messages.append({"role": "user", "content": luna_prompt})
 
-            with self.client.messages.stream(
-                model=self._claude_model,
-                max_tokens=max_tokens,
-                system=enhanced_system_prompt,
-                messages=messages,
-            ) as stream:
-                print(f"✓ [DELEGATION] Stream opened, receiving tokens...")
-                response_text = ""
-                token_count = 0
-                for text in stream.text_stream:
+            # Try LLM registry streaming first
+            provider = None
+            provider_name = "claude"
+            if LLM_REGISTRY_AVAILABLE:
+                try:
+                    provider = get_provider()
+                    if provider and provider.is_available:
+                        provider_name = provider.name
+                except Exception as e:
+                    logger.warning(f"LLM registry not available: {e}")
+                    provider = None
+
+            response_text = ""
+            token_count = 0
+
+            if provider and provider_name != "claude":
+                # Use registry provider streaming
+                print(f"✓ [DELEGATION] Using {provider_name} provider...")
+                llm_messages = [
+                    LLMMessage("system", enhanced_system_prompt),
+                ]
+                for m in messages:
+                    llm_messages.append(LLMMessage(m["role"], m["content"]))
+
+                async for text in provider.stream(
+                    messages=llm_messages,
+                    temperature=0.7,
+                    max_tokens=max_tokens,
+                ):
                     if self._abort_requested:
                         print(f"⚠ [DELEGATION] Aborted!")
                         break
@@ -1355,24 +1561,45 @@ Keep your response focused and conversational."""
                     token_count += 1
                     await self._stream_to_callbacks(text)
 
-                final = stream.get_final_message()
                 elapsed_ms = (time.time() - start_time) * 1000
-                print(f"✓ [DELEGATION] Complete: {final.usage.output_tokens} tokens in {elapsed_ms:.0f}ms")
+                print(f"✓ [DELEGATION] Complete: {token_count} chunks via {provider_name} in {elapsed_ms:.0f}ms")
 
-                # Record response in ring buffer (CRITICAL for history)
-                if response_text:
-                    self._active_ring.add_assistant(response_text)
-                    logger.debug("[DELEGATION-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
+            else:
+                # Fallback to direct Claude streaming
+                with self.client.messages.stream(
+                    model=self._claude_model,
+                    max_tokens=max_tokens,
+                    system=enhanced_system_prompt,
+                    messages=messages,
+                ) as stream:
+                    print(f"✓ [DELEGATION] Stream opened, receiving tokens...")
+                    for text in stream.text_stream:
+                        if self._abort_requested:
+                            print(f"⚠ [DELEGATION] Aborted!")
+                            break
+                        response_text += text
+                        token_count += 1
+                        await self._stream_to_callbacks(text)
 
-                await self.send_to_engine("generation_complete", {
-                    "text": acknowledgment + "\n\n" + response_text,
-                    "correlation_id": correlation_id,
-                    "model": "claude (delegated)",
-                    "output_tokens": final.usage.output_tokens,
-                    "latency_ms": elapsed_ms,
-                    "delegated": True,
-                    "planned": True,
-                })
+                    final = stream.get_final_message()
+                    token_count = final.usage.output_tokens
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    print(f"✓ [DELEGATION] Complete: {token_count} tokens in {elapsed_ms:.0f}ms")
+
+            # Record response in ring buffer (CRITICAL for history)
+            if response_text:
+                self._active_ring.add_assistant(response_text)
+                logger.debug("[DELEGATION-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
+
+            await self.send_to_engine("generation_complete", {
+                "text": acknowledgment + "\n\n" + response_text,
+                "correlation_id": correlation_id,
+                "model": f"{provider_name} (delegated)",
+                "output_tokens": token_count,
+                "latency_ms": elapsed_ms,
+                "delegated": True,
+                "planned": True,
+            })
 
         except Exception as e:
             print(f"❌ [DELEGATION] Failed: {e}")
@@ -1584,13 +1811,13 @@ just tell them what they wanted to know as if you knew it. Be warm, be Luna."""
         start_time: float,
         context_window: str = "",
     ) -> None:
-        """Fallback: Generate directly via Claude when local not available."""
+        """Fallback: Generate via LLM registry (or Claude) when local not available."""
         # Record user message to ring buffer (CRITICAL for history)
         self._active_ring.add_user(user_message)
         logger.debug("[FALLBACK-RING] Recorded user message to ring buffer (size: %d)", len(self._active_ring))
 
         try:
-            # Load identity buffer for direct Claude generation
+            # Load identity buffer for generation
             identity_context = await self._load_identity_buffer()
 
             # Build enhanced system prompt with identity context
@@ -1615,39 +1842,76 @@ just tell them what they wanted to know as if you knew it. Be warm, be Luna."""
             # Add current message
             messages.append({"role": "user", "content": user_message})
 
-            with self.client.messages.stream(
-                model=self._claude_model,
-                max_tokens=max_tokens,
-                system=enhanced_system_prompt,
-                messages=messages,
-            ) as stream:
-                response_text = ""
-                for text in stream.text_stream:
+            # Try LLM registry first
+            provider = None
+            provider_name = "claude"
+            if LLM_REGISTRY_AVAILABLE:
+                try:
+                    provider = get_provider()
+                    if provider and provider.is_available:
+                        provider_name = provider.name
+                except Exception as e:
+                    logger.warning(f"LLM registry not available: {e}")
+                    provider = None
+
+            response_text = ""
+            token_count = 0
+
+            if provider and provider_name != "claude":
+                # Use registry provider streaming
+                llm_messages = [LLMMessage("system", enhanced_system_prompt)]
+                for m in messages:
+                    llm_messages.append(LLMMessage(m["role"], m["content"]))
+
+                async for text in provider.stream(
+                    messages=llm_messages,
+                    temperature=0.7,
+                    max_tokens=max_tokens,
+                ):
                     if self._abort_requested:
                         break
                     response_text += text
+                    token_count += 1
                     await self._stream_to_callbacks(text)
 
-                final = stream.get_final_message()
                 elapsed_ms = (time.time() - start_time) * 1000
                 self._delegated_generations += 1
 
-                # Record response in ring buffer (CRITICAL for history)
-                if response_text:
-                    self._active_ring.add_assistant(response_text)
-                    logger.debug("[FALLBACK-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
+            else:
+                # Fallback to direct Claude streaming
+                with self.client.messages.stream(
+                    model=self._claude_model,
+                    max_tokens=max_tokens,
+                    system=enhanced_system_prompt,
+                    messages=messages,
+                ) as stream:
+                    for text in stream.text_stream:
+                        if self._abort_requested:
+                            break
+                        response_text += text
+                        await self._stream_to_callbacks(text)
 
-                await self.send_to_engine("generation_complete", {
-                    "text": response_text,
-                    "correlation_id": correlation_id,
-                    "model": self._claude_model,
-                    "output_tokens": final.usage.output_tokens,
-                    "latency_ms": elapsed_ms,
-                    "fallback": True,  # Local not available, using Claude direct
-                })
+                    final = stream.get_final_message()
+                    token_count = final.usage.output_tokens
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    self._delegated_generations += 1
+
+            # Record response in ring buffer (CRITICAL for history)
+            if response_text:
+                self._active_ring.add_assistant(response_text)
+                logger.debug("[FALLBACK-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
+
+            await self.send_to_engine("generation_complete", {
+                "text": response_text,
+                "correlation_id": correlation_id,
+                "model": f"{provider_name} (fallback)",
+                "output_tokens": token_count,
+                "latency_ms": elapsed_ms,
+                "fallback": True,  # Local not available
+            })
 
         except Exception as e:
-            logger.error(f"Claude direct generation failed: {e}")
+            logger.error(f"Fallback generation failed: {e}")
             await self.send_to_engine("generation_error", {
                 "error": str(e),
                 "correlation_id": correlation_id,
@@ -1858,7 +2122,28 @@ just tell them what they wanted to know as if you knew it. Be warm, be Luna."""
         max_tokens: int = 1000,
         temperature: float = 0.7,
     ) -> str:
-        """Generate using Claude API (synchronous, not streaming)."""
+        """Generate using LLM registry provider (or Claude fallback)."""
+        # Try LLM registry first
+        if LLM_REGISTRY_AVAILABLE:
+            try:
+                provider = get_provider()
+                if provider and provider.is_available:
+                    messages = [
+                        LLMMessage("system", system or "You are Luna, a helpful AI assistant."),
+                        LLMMessage("user", prompt),
+                    ]
+                    result = await provider.complete(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    self._delegated_generations += 1
+                    logger.info(f"Generated via {provider.name}: {result.usage}")
+                    return result.content
+            except Exception as e:
+                logger.warning(f"LLM registry generation failed, falling back to Claude: {e}")
+
+        # Fallback to direct Anthropic client
         if not self._client:
             _ = self.client  # Lazy init
 

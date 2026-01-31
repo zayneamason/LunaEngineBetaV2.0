@@ -1,0 +1,90 @@
+#!/bin/bash
+# ============================================================
+# Luna Engine Pre-Commit Hook
+# ============================================================
+# Prevents commits that could break Luna's critical systems.
+#
+# Install with:
+#   git config core.hooksPath .githooks
+# ============================================================
+
+set -e
+
+echo "🔍 Running Luna pre-commit checks..."
+
+# Protected paths that should NEVER be deleted
+PROTECTED="data/luna_engine.db models/luna_lora_mlx pyproject.toml"
+
+# Check for deletion of protected files
+for file in $PROTECTED; do
+    if git diff --cached --name-only --diff-filter=D | grep -q "$file"; then
+        echo ""
+        echo "❌ BLOCKED: Cannot delete protected file: $file"
+        echo ""
+        echo "This file is critical to Luna's identity/memory."
+        echo "If you really need to delete it, use: git commit --no-verify"
+        echo ""
+        exit 1
+    fi
+done
+
+# Check if pyproject.toml still has critical deps
+if git diff --cached --name-only | grep -q "pyproject.toml"; then
+    echo "📦 Checking pyproject.toml changes..."
+
+    # Check for mlx-lm dependency
+    if ! grep -q "mlx-lm" pyproject.toml 2>/dev/null; then
+        echo ""
+        echo "❌ BLOCKED: pyproject.toml missing mlx-lm dependency!"
+        echo ""
+        echo "Luna requires mlx-lm for local inference."
+        echo "Add it back to [project.optional-dependencies.local]"
+        echo ""
+        exit 1
+    fi
+
+    # Check for mlx dependency
+    if ! grep -q '"mlx>=' pyproject.toml 2>/dev/null; then
+        echo ""
+        echo "❌ BLOCKED: pyproject.toml missing mlx dependency!"
+        echo ""
+        echo "Luna requires mlx for local inference."
+        echo "Add it back to [project.optional-dependencies.local]"
+        echo ""
+        exit 1
+    fi
+
+    echo "✅ pyproject.toml looks good"
+fi
+
+# Check for large binary files being added (>50MB)
+LARGE_FILES=$(git diff --cached --name-only --diff-filter=A | xargs -I{} sh -c 'test -f "{}" && stat -f%z "{}" 2>/dev/null || stat --format=%s "{}" 2>/dev/null' 2>/dev/null | awk '$1 > 52428800 {print $2}')
+if [ -n "$LARGE_FILES" ]; then
+    echo ""
+    echo "⚠️  Warning: Large files being added (>50MB):"
+    echo "$LARGE_FILES"
+    echo ""
+    echo "Consider using git-lfs for large files."
+    # Note: This is a warning, not a block
+fi
+
+# Verify Python syntax of changed .py files
+CHANGED_PY=$(git diff --cached --name-only --diff-filter=AM | grep '\.py$' || true)
+if [ -n "$CHANGED_PY" ]; then
+    echo "🐍 Checking Python syntax..."
+    for file in $CHANGED_PY; do
+        if [ -f "$file" ]; then
+            if ! python3 -m py_compile "$file" 2>/dev/null; then
+                echo ""
+                echo "❌ BLOCKED: Syntax error in $file"
+                echo ""
+                exit 1
+            fi
+        fi
+    done
+    echo "✅ Python syntax OK"
+fi
+
+echo ""
+echo "✅ Pre-commit checks passed"
+echo ""
