@@ -24,7 +24,7 @@ luna-engine/
 │   └── ...
 ├── scripts/
 │   └── run.py              # Entry point
-└── Docs/LUNA ENGINE Bible/ # Full specification
+└── Docs/bible/             # Full specification
 ```
 
 ## Implementation Phases
@@ -60,7 +60,7 @@ luna-engine/
 - 5 engine lifecycle tests (timing/mock issue)
 - 3 naming mismatch tests (`cloud_generations` → `delegated_generations`)
 
-See: `Docs/LUNA ENGINE Bible/Handoffs/CLAUDE-CODE-HANDOFF-TEST-FIXES-2026-01-13.md`
+See: `Docs/bible/Handoffs/CLAUDE-CODE-HANDOFF-TEST-FIXES-2026-01-13.md`
 
 ## Running
 
@@ -106,7 +106,7 @@ This gives Luna:
 
 ## Reference Docs
 
-See `Docs/LUNA ENGINE Bible/` for full specification:
-- `00-FOUNDATIONS.md` — Core insight (LLM as GPU)
-- `07-RUNTIME-ENGINE.md` — Tick loop design
+See `Docs/bible/` for full specification:
+- `chapters/00-FOUNDATIONS.md` — Core insight (LLM as GPU)
+- `chapters/07-RUNTIME-ENGINE.md` — Tick loop design
 - `Handoffs/LUNA-ENGINE-V2-IMPLEMENTATION-SPEC.md` — This implementation
