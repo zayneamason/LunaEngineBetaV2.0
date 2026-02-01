@@ -1383,9 +1383,15 @@ Continue the conversation naturally, maintaining context from above."""
         self._active_ring.add_user(user_message)
         logger.debug("[DELEGATION-RING] Recorded user message to ring buffer (size: %d)", len(self._active_ring))
 
-        # Parse conversation history for mood analysis
+        # Build conversation history from ring buffer (structural guarantee)
+        # Ring buffer is the SINGLE SOURCE OF TRUTH for recent conversation
         conversation_history = []
-        if context_window:
+        if len(self._active_ring) > 0:
+            conversation_history = self._active_ring.get_as_dicts()
+            logger.debug("[DELEGATION] Using ring buffer for history (%d turns)", len(self._active_ring))
+        elif context_window:
+            # Fall back to text parsing only if ring is empty (shouldn't happen)
+            logger.warning("[DELEGATION] Ring buffer empty, falling back to text parsing")
             for line in context_window.split("\n\n"):
                 line = line.strip()
                 if line.startswith("User:"):
@@ -1449,8 +1455,15 @@ When answering, reference these memories naturally as your own experiences and k
             messages = []
 
             # Include recent conversation context as previous messages
-            if context_window:
-                # Parse context window into conversation turns
+            # Use ring buffer as single source of truth
+            if len(self._active_ring) > 0:
+                for turn in self._active_ring.get_as_dicts():
+                    if turn["role"] in ["user", "assistant"] and turn.get("content"):
+                        messages.append(turn)
+                logger.debug("[DELEGATION] Built messages from ring buffer (%d turns)", len(messages))
+            elif context_window:
+                # Fallback to text parsing (shouldn't happen)
+                logger.warning("[DELEGATION] Ring empty for messages, falling back to text parsing")
                 for line in context_window.split("\n\n"):
                     line = line.strip()
                     if line.startswith("User:"):

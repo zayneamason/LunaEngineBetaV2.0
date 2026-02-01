@@ -125,7 +125,7 @@ class ContextPipeline:
             from luna.entities.context import EntityContext
 
             self._entity_resolver = EntityResolver(self._db)
-            self._entity_context = EntityContext(self._db, self._entity_resolver)
+            self._entity_context = EntityContext(self._db)
             logger.info("[PIPELINE] Entity system initialized")
         except Exception as e:
             logger.warning("[PIPELINE] Entity system init failed: %s", e)
