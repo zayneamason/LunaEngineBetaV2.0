@@ -29,6 +29,22 @@ try:
 except ImportError:
     LLM_REGISTRY_AVAILABLE = False
 
+# Fallback Chain (resilient inference with provider cascade)
+try:
+    from luna.llm.fallback import FallbackChain, AllProvidersFailedError, init_fallback_chain
+    from luna.llm.fallback_config import FallbackConfig
+    FALLBACK_CHAIN_AVAILABLE = True
+except ImportError:
+    FALLBACK_CHAIN_AVAILABLE = False
+
+# QA System (live inference validation)
+try:
+    from luna.qa import InferenceContext
+    from luna.qa.validator import get_validator as get_qa_validator
+    QA_AVAILABLE = True
+except ImportError:
+    QA_AVAILABLE = False
+
 # Entity context for identity and relationship awareness
 try:
     from luna.entities.context import EntityContext, IdentityBuffer
@@ -140,6 +156,17 @@ class DirectorActor(Actor):
         # Used when context pipeline is unavailable
         self._standalone_ring = ConversationRing(max_turns=6)
 
+        # [DIAGNOSTIC] Last system prompt sent to LLM (for /prompt command)
+        self._last_system_prompt: Optional[str] = None
+        self._last_route_decision: Optional[str] = None
+
+        # Fallback chain for resilient inference
+        self._fallback_chain: Optional["FallbackChain"] = None
+
+        # QA validator for live inference validation (lazy init)
+        self._qa_validator = None
+        self._qa_enabled = True  # Can be disabled for performance
+
     @property
     def client(self):
         """Lazy init Anthropic client."""
@@ -174,6 +201,10 @@ class DirectorActor(Actor):
         if self._enable_local:
             await self._init_local_inference()
 
+        # Initialize fallback chain for resilient inference
+        if FALLBACK_CHAIN_AVAILABLE:
+            await self._init_fallback_chain()
+
         # Initialize entity context if available
         if ENTITY_CONTEXT_AVAILABLE:
             await self._init_entity_context()
@@ -186,7 +217,10 @@ class DirectorActor(Actor):
 
         try:
             self._local = LocalInference()
-            self._hybrid = HybridInference(self._local)
+            # BUG-B FIX: Raise threshold to 0.35 so simple questions stay local
+            # Old threshold (0.15) caused any "?" query to delegate
+            # New threshold keeps simple questions local while still delegating complex queries
+            self._hybrid = HybridInference(self._local, complexity_threshold=0.35)
 
             # Try to load model (async, may take a few seconds first time)
             logger.info("Loading local Qwen model...")
@@ -203,6 +237,38 @@ class DirectorActor(Actor):
         except Exception as e:
             logger.warning(f"Local inference init failed: {e}")
             self._enable_local = False
+            return False
+
+    async def _init_fallback_chain(self) -> bool:
+        """Initialize fallback chain for resilient inference."""
+        if not FALLBACK_CHAIN_AVAILABLE:
+            logger.debug("Fallback chain not available")
+            return False
+
+        try:
+            # Load config
+            config = FallbackConfig.load()
+
+            # Get registry if available
+            registry = get_registry() if LLM_REGISTRY_AVAILABLE else None
+
+            # Validate config
+            warnings = config.validate(registry)
+            for warning in warnings:
+                logger.warning(f"[FALLBACK] Config warning: {warning}")
+
+            # Initialize fallback chain with local inference and registry
+            self._fallback_chain = init_fallback_chain(
+                registry=registry,
+                local_inference=self._local,
+                chain=config.chain,
+            )
+
+            logger.info(f"[FALLBACK] Chain initialized: {config.chain}")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Fallback chain init failed: {e}")
             return False
 
     async def _init_entity_context(self) -> bool:
@@ -278,8 +344,15 @@ class DirectorActor(Actor):
                         # Fallback to identity buffer
                         full_personality = await self._load_identity_buffer(user_id="ahab")
                     if not full_personality:
-                        # Last resort fallback
-                        full_personality = "You are Luna, a sovereign AI companion."
+                        # Last resort fallback - include essential voice constraints
+                        full_personality = """You are Luna, a sovereign AI companion.
+
+## Voice
+- Warm, direct, intellectually curious
+- Casual but articulate (use contractions, lowercase interjections)
+- Never output internal reasoning, debugging, or bullet points about context
+- Never use generic chatbot greetings like "How can I help you?"
+- Just respond naturally as yourself"""
                         logger.warning("Pipeline using minimal personality - emergent prompt failed")
                     else:
                         logger.info(f"Pipeline loaded full personality ({len(full_personality)} chars)")
@@ -487,7 +560,9 @@ class DirectorActor(Actor):
         response_text = ""
         route_decision = "unknown"
         route_reason = "unknown"
+        system_prompt = ""  # Initialize to ensure QA captures it
         system_prompt_tokens = 0
+        narration_applied = False  # Track for QA (BUG-D fix)
 
         # ========================================================================
         # BUILD FRAMED CONTEXT (THE KEY INTEGRATION)
@@ -544,7 +619,11 @@ class DirectorActor(Actor):
             route_reason = "complexity/signals"
 
             # Build system prompt with framed context
-            system_prompt = "You are Luna, a sovereign AI companion.\n\n"
+            system_prompt = """You are Luna, a sovereign AI companion.
+Be warm, direct, and natural. Never output internal reasoning or debugging info.
+Never use generic chatbot greetings like "How can I help you?"
+
+"""
 
             if framed_context:
                 system_prompt += framed_context
@@ -624,18 +703,82 @@ class DirectorActor(Actor):
 
             logger.info("=" * 80)
 
-            try:
-                response = self.client.messages.create(
-                    model=self._claude_model,
-                    max_tokens=512,
-                    system=system_prompt,
-                    messages=messages,
-                )
-                response_text = response.content[0].text if response.content else ""
-                self._delegated_generations += 1
-            except Exception as e:
-                logger.error(f"Director.process delegation failed: {e}")
-                response_text = "I'm having trouble processing that right now."
+            # Store for /prompt command
+            self._last_system_prompt = system_prompt
+            self._last_route_decision = "delegated"
+
+            # Use FallbackChain for resilient inference (if available)
+            if self._fallback_chain is not None:
+                try:
+                    result = await self._fallback_chain.generate(
+                        messages=messages,
+                        system=system_prompt,
+                        max_tokens=512,
+                    )
+                    response_text = result.content
+                    provider_used = result.provider_used
+                    self._delegated_generations += 1
+
+                    # Log if fallback occurred
+                    if len(result.attempts) > 1:
+                        logger.info(f"[FALLBACK] Used {provider_used} after {len(result.attempts)-1} failures")
+
+                except AllProvidersFailedError as e:
+                    logger.error(f"[FALLBACK] All providers failed: {[a.provider + ': ' + (a.error or 'unknown') for a in e.attempts]}")
+                    response_text = "I'm having trouble connecting right now. All inference providers are unavailable."
+                except Exception as e:
+                    logger.error(f"Director.process delegation (fallback chain) failed: {e}")
+                    response_text = "I'm having trouble processing that right now."
+            else:
+                # Legacy direct Claude call (no fallback chain)
+                try:
+                    response = self.client.messages.create(
+                        model=self._claude_model,
+                        max_tokens=512,
+                        system=system_prompt,
+                        messages=messages,
+                    )
+                    response_text = response.content[0].text if response.content else ""
+                    self._delegated_generations += 1
+                except Exception as e:
+                    logger.error(f"Director.process delegation failed: {e}")
+                    response_text = "I'm having trouble processing that right now."
+
+            # ================================================================
+            # BUG-D FIX: Narrate delegated response through Luna's voice
+            # Without this, Claude's response goes through unfiltered
+            # ================================================================
+            if response_text and self._local and self.local_available:
+                try:
+                    logger.info("[NARRATION] Rewriting delegated response in Luna's voice...")
+
+                    # FIXED: Use minimal system prompt for narration to prevent hallucination
+                    # The full system_prompt contains conversation context that Qwen hallucinates from
+                    narration_system = """You are Luna rewriting a response in your voice.
+Output ONLY the rewritten text. Do not add context, memories, or commentary.
+Be warm and natural but stick to the content given."""
+
+                    narration_prompt = f"""Rewrite this in your own words. Keep all facts accurate.
+Output only the rewritten response, nothing else:
+
+{response_text}"""
+
+                    result = await self._local.generate(
+                        narration_prompt,
+                        system_prompt=narration_system,
+                        max_tokens=1024,
+                    )
+                    narrated_text = result.text if hasattr(result, 'text') else str(result)
+
+                    if narrated_text and len(narrated_text.strip()) > 20:
+                        response_text = narrated_text
+                        narration_applied = True
+                        logger.info(f"[NARRATION] Complete ({len(response_text)} chars)")
+                    else:
+                        logger.warning("[NARRATION] Output too short, using raw response")
+
+                except Exception as e:
+                    logger.warning(f"[NARRATION] Failed ({e}), using raw response")
 
         elif self.local_available:
             route_decision = "local"
@@ -665,7 +808,7 @@ class DirectorActor(Actor):
                 except Exception as e:
                     logger.warning(f"[PROCESS-LOCAL] Context pipeline failed, using fallback: {e}")
                     # Fallback to framed_context if pipeline fails
-                    system_prompt = "You are Luna, a sovereign AI companion.\n\n"
+                    system_prompt = "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info.\n\n"
                     if framed_context:
                         system_prompt += framed_context
                     else:
@@ -680,7 +823,7 @@ class DirectorActor(Actor):
             else:
                 # No pipeline available - use legacy framed_context
                 logger.debug("[PROCESS-LOCAL] No context pipeline, using framed_context")
-                system_prompt = "You are Luna, a sovereign AI companion.\n\n"
+                system_prompt = "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info.\n\n"
                 if framed_context:
                     system_prompt += framed_context
                 else:
@@ -694,6 +837,7 @@ class DirectorActor(Actor):
                         system_prompt += f"\n\n## Recent Conversation\n{context_window}\n\nContinue naturally."
 
             system_prompt_tokens = len(system_prompt) // 4
+            self._last_system_prompt = system_prompt  # FIX BUG-A: Track for QA/debugging
 
             try:
                 result = await self._local.generate(
@@ -709,23 +853,64 @@ class DirectorActor(Actor):
                 response_text = "I'm having trouble with that."
 
         else:
-            # Fallback to Claude
+            # Fallback when local unavailable - use FallbackChain for resilience
             route_decision = "delegated"
             route_reason = "local unavailable"
 
             messages = [{"role": "user", "content": message}]
-            try:
-                response = self.client.messages.create(
-                    model=self._claude_model,
-                    max_tokens=512,
-                    system="You are Luna, a sovereign AI companion.",
-                    messages=messages,
+            # FIX BUG-A: Use system_prompt (not fallback_system) so QA captures it
+            system_prompt = "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info."
+
+            # Add framed context if available (same as other paths)
+            if framed_context:
+                system_prompt += "\n\n" + framed_context
+            else:
+                # Try to load emergent prompt
+                identity_context = await self._load_emergent_prompt(
+                    query=message,
+                    conversation_history=conversation_history
                 )
-                response_text = response.content[0].text if response.content else ""
-                self._delegated_generations += 1
-            except Exception as e:
-                logger.error(f"Director.process fallback failed: {e}")
-                response_text = "I'm having trouble right now."
+                if identity_context:
+                    system_prompt += "\n\n" + identity_context
+
+            system_prompt_tokens = len(system_prompt) // 4
+            self._last_system_prompt = system_prompt
+
+            # Use FallbackChain for resilient inference (if available)
+            if self._fallback_chain is not None:
+                try:
+                    result = await self._fallback_chain.generate(
+                        messages=messages,
+                        system=system_prompt,
+                        max_tokens=512,
+                    )
+                    response_text = result.content
+                    provider_used = result.provider_used
+                    self._delegated_generations += 1
+
+                    if len(result.attempts) > 1:
+                        logger.info(f"[FALLBACK] Used {provider_used} after {len(result.attempts)-1} failures")
+
+                except AllProvidersFailedError as e:
+                    logger.error(f"[FALLBACK] All providers failed: {[a.provider + ': ' + (a.error or 'unknown') for a in e.attempts]}")
+                    response_text = "I'm having trouble connecting right now. All inference providers are unavailable."
+                except Exception as e:
+                    logger.error(f"Director.process fallback (chain) failed: {e}")
+                    response_text = "I'm having trouble right now."
+            else:
+                # Legacy direct Claude call (no fallback chain)
+                try:
+                    response = self.client.messages.create(
+                        model=self._claude_model,
+                        max_tokens=512,
+                        system=system_prompt,
+                        messages=messages,
+                    )
+                    response_text = response.content[0].text if response.content else ""
+                    self._delegated_generations += 1
+                except Exception as e:
+                    logger.error(f"Director.process fallback failed: {e}")
+                    response_text = "I'm having trouble right now."
 
         # ========================================================================
         # POST-PROCESSING: SCRIBE EXTRACTION (for future - creates new entities)
@@ -739,13 +924,75 @@ class DirectorActor(Actor):
         logger.info(f"Director.process complete: {route_decision} in {elapsed_ms:.0f}ms")
 
         # RING BUFFER: Record response (structural guarantee against forgetting)
+        # BUG-C FIX: Always add response to prevent orphaned user messages that bleed into next turn
         if response_text:
             self._active_ring.add_assistant(response_text)
             logger.debug("[PROCESS-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
+        else:
+            # Add placeholder to prevent context bleeding from orphaned user message
+            self._active_ring.add_assistant("[No response generated]")
+            logger.warning("[PROCESS-RING] Added placeholder for failed/empty response")
 
         # Capture used_retrieval from local path (for debugging)
         # Default to True for delegated path (delegation always fetches memory)
         final_used_retrieval = locals().get('used_retrieval', route_decision == "delegated")
+
+        # ========================================================================
+        # QA VALIDATION: Run assertions against this inference
+        # ========================================================================
+        qa_report = None
+        if QA_AVAILABLE and self._qa_enabled:
+            try:
+                # Lazy init QA validator
+                if self._qa_validator is None:
+                    self._qa_validator = get_qa_validator()
+
+                # Build inference context with all collected data
+                # FIX BUG-A: Use system_prompt directly (now initialized at top)
+                qa_ctx = InferenceContext(
+                    session_id=session_id or "",
+                    query=message,
+                    route=route_decision.upper() if route_decision else "",
+                    complexity_score=0.0,  # TODO: Add complexity scoring
+                    providers_tried=[route_decision] if route_decision else [],
+                    provider_used=locals().get('provider_used', route_decision or ""),
+                    personality_injected=system_prompt_tokens > 250,  # >1000 chars
+                    personality_length=system_prompt_tokens * 4,
+                    system_prompt=system_prompt,  # Now guaranteed to be set
+                    virtues_loaded=self._identity_buffer is not None,
+                    narration_applied=narration_applied,  # BUG-D fix: now tracked
+                    raw_response=response_text,
+                    final_response=response_text,
+                    latency_ms=elapsed_ms,
+                    input_tokens=len(message) // 4,
+                    output_tokens=len(response_text) // 4,
+                )
+
+                # Add request chain steps
+                qa_ctx.add_step("receive", 0, f"Query received: '{message[:50]}...'")
+                qa_ctx.add_step("route", elapsed_ms * 0.1, f"Route: {route_decision} ({route_reason})")
+                qa_ctx.add_step("generate", elapsed_ms * 0.8, f"{route_decision} returned {len(response_text)} chars")
+                qa_ctx.add_step("output", elapsed_ms, "Response ready")
+
+                # Validate
+                qa_report = self._qa_validator.validate(qa_ctx)
+
+                if not qa_report.passed:
+                    logger.warning(f"[QA] FAILED ({qa_report.failed_count} assertions): {qa_report.diagnosis}")
+                else:
+                    logger.debug(f"[QA] PASSED ({len(qa_report.assertions)} assertions)")
+
+            except Exception as e:
+                logger.warning(f"[QA] Validation error (non-fatal): {e}")
+
+        # ========================================================================
+        # PROMPT ARCHAEOLOGY: Log prompt for forensic analysis
+        # See: HANDOFF_PROMPT_ARCHAEOLOGY.md
+        # ========================================================================
+        try:
+            self.log_prompt_archaeology(message, response_text)
+        except Exception as e:
+            logger.debug(f"[ARCHAEOLOGY] Logging failed (non-fatal): {e}")
 
         return {
             "response": response_text,
@@ -754,6 +1001,8 @@ class DirectorActor(Actor):
             "system_prompt_tokens": system_prompt_tokens,
             "latency_ms": elapsed_ms,
             "used_retrieval": final_used_retrieval,
+            "qa_passed": qa_report.passed if qa_report else None,
+            "qa_failures": qa_report.failed_count if qa_report else 0,
         }
 
     def on_stream(self, callback: Callable[[str], None]) -> None:
@@ -802,7 +1051,7 @@ class DirectorActor(Actor):
         """
         payload = msg.payload
         user_message = payload.get("user_message", "")
-        system_prompt = payload.get("system_prompt", "You are Luna, a sovereign AI companion.")
+        system_prompt = payload.get("system_prompt", "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info.")
         max_tokens = payload.get("max_tokens", 512)
         context_window = payload.get("context_window", "")  # Conversation history
 
@@ -852,30 +1101,23 @@ class DirectorActor(Actor):
 
     async def _should_delegate(self, user_message: str) -> bool:
         """
-        Planning step: Decide if this query should be delegated to Claude.
+        Planning step: Decide if this query should be delegated to fallback chain.
 
-        Uses HybridInference complexity estimation + explicit signal checks.
-        Returns True if query is too complex for local model.
+        CHANGED: Always delegate to fallback chain (groq → local → claude).
+        This ensures Groq is tried first for speed, with local as voice narration.
+        The complexity check is preserved for logging/metrics only.
         """
         query_preview = user_message[:50] + "..." if len(user_message) > 50 else user_message
 
-        # First check explicit delegation signals
-        if self._check_delegation_signals(user_message):
-            logger.info(f"🔀 DELEGATE: Signal detected in '{query_preview}'")
-            return True
-
-        # Then check complexity via HybridInference
+        # Log complexity for metrics (but don't use it for routing)
         if hasattr(self, '_hybrid') and self._hybrid is not None:
             complexity = self._hybrid.estimate_complexity(user_message)
-            print(f"🔍 Complexity: {complexity:.2f} (threshold: {self._hybrid.complexity_threshold})")
-            if complexity >= self._hybrid.complexity_threshold:
-                print(f"🔀 DELEGATE: High complexity ({complexity:.2f}) for '{query_preview}'")
-                return True
+            logger.info(f"🔀 DELEGATE: '{query_preview}' (complexity={complexity:.2f}, always delegating)")
         else:
-            print("⚠️ HybridInference not available")
+            logger.info(f"🔀 DELEGATE: '{query_preview}' (always delegating)")
 
-        print(f"🏠 LOCAL: Handling locally '{query_preview}'")
-        return False
+        # Always delegate - fallback chain handles provider selection
+        return True
 
     def _check_delegation_signals(self, user_message: str) -> bool:
         """
@@ -977,6 +1219,17 @@ class DirectorActor(Actor):
                 packet = await self._context_pipeline.build(user_message)
                 full_system_prompt = packet.system_prompt
                 print(f"✓ [LOCAL] Context pipeline: ring={packet.ring_size}, entities={len(packet.entities)}")
+                # [DIAGNOSTIC] Dump full system prompt for debugging
+                print("=" * 60)
+                print("[SYSTEM-PROMPT-CAPTURE] Full prompt sent to local model:")
+                print("-" * 60)
+                print(full_system_prompt[:2000])  # First 2000 chars
+                if len(full_system_prompt) > 2000:
+                    print(f"... [{len(full_system_prompt) - 2000} more chars]")
+                print("=" * 60)
+                # Store for /prompt command
+                self._last_system_prompt = full_system_prompt
+                self._last_route_decision = "local"
                 logger.info(f"[LOCAL-PIPELINE] Using unified context: {packet}")
             except Exception as e:
                 logger.warning(f"[LOCAL] Context pipeline failed, falling back: {e}")
@@ -1553,9 +1806,11 @@ Keep your response focused and conversational."""
             response_text = ""
             token_count = 0
 
+            # P0 FIX: Collect Claude's response WITHOUT streaming (will narrate through Luna's voice)
+            # See: Docs/HANDOFF_Luna_Voice_Restoration.md
             if provider and provider_name != "claude":
-                # Use registry provider streaming
-                print(f"✓ [DELEGATION] Using {provider_name} provider...")
+                # Use registry provider (non-streaming collection)
+                print(f"✓ [DELEGATION] Using {provider_name} provider (collecting for narration)...")
                 llm_messages = [
                     LLMMessage("system", enhanced_system_prompt),
                 ]
@@ -1572,46 +1827,132 @@ Keep your response focused and conversational."""
                         break
                     response_text += text
                     token_count += 1
-                    await self._stream_to_callbacks(text)
+                    # NOTE: Not streaming to callbacks here - will narrate first
 
                 elapsed_ms = (time.time() - start_time) * 1000
-                print(f"✓ [DELEGATION] Complete: {token_count} chunks via {provider_name} in {elapsed_ms:.0f}ms")
+                print(f"✓ [DELEGATION] Collected: {token_count} chunks via {provider_name} in {elapsed_ms:.0f}ms")
 
             else:
-                # Fallback to direct Claude streaming
-                with self.client.messages.stream(
-                    model=self._claude_model,
-                    max_tokens=max_tokens,
-                    system=enhanced_system_prompt,
-                    messages=messages,
-                ) as stream:
-                    print(f"✓ [DELEGATION] Stream opened, receiving tokens...")
-                    for text in stream.text_stream:
-                        if self._abort_requested:
-                            print(f"⚠ [DELEGATION] Aborted!")
-                            break
-                        response_text += text
-                        token_count += 1
-                        await self._stream_to_callbacks(text)
+                # Use FallbackChain for resilient inference
+                if self._fallback_chain:
+                    print(f"✓ [DELEGATION] Using FallbackChain (collecting for narration)...")
+                    try:
+                        async for text in self._fallback_chain.stream(
+                            messages=messages,
+                            system=enhanced_system_prompt,
+                            max_tokens=max_tokens,
+                            temperature=0.7,
+                        ):
+                            if self._abort_requested:
+                                print(f"⚠ [DELEGATION] Aborted!")
+                                break
+                            response_text += text
+                            token_count += 1
+                            # NOTE: Not streaming to callbacks here - will narrate first
 
-                    final = stream.get_final_message()
-                    token_count = final.usage.output_tokens
-                    elapsed_ms = (time.time() - start_time) * 1000
-                    print(f"✓ [DELEGATION] Complete: {token_count} tokens in {elapsed_ms:.0f}ms")
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        provider_name = "fallback-chain"
+                        print(f"✓ [DELEGATION] Collected via FallbackChain in {elapsed_ms:.0f}ms")
+
+                    except AllProvidersFailedError as e:
+                        logger.error(f"[DELEGATION] All fallback providers failed: {e}")
+                        # Graceful degradation: send error message to user instead of hanging
+                        error_message = "\n\n...sorry, I'm having trouble connecting right now. All my inference providers are unavailable. Try again in a moment?"
+                        await self._stream_to_callbacks(error_message)
+                        return  # Exit gracefully instead of raising
+                else:
+                    # Legacy: direct Claude (non-streaming collection)
+                    with self.client.messages.stream(
+                        model=self._claude_model,
+                        max_tokens=max_tokens,
+                        system=enhanced_system_prompt,
+                        messages=messages,
+                    ) as stream:
+                        print(f"✓ [DELEGATION] Collecting from Claude...")
+                        for text in stream.text_stream:
+                            if self._abort_requested:
+                                print(f"⚠ [DELEGATION] Aborted!")
+                                break
+                            response_text += text
+                            token_count += 1
+                            # NOTE: Not streaming to callbacks here - will narrate first
+
+                        final = stream.get_final_message()
+                        token_count = final.usage.output_tokens
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        print(f"✓ [DELEGATION] Collected: {token_count} tokens in {elapsed_ms:.0f}ms")
+
+            # P0 FIX: Narrate through Luna's voice before sending to user
+            # This ensures FULL_DELEGATION path sounds like Luna, not Claude
+            final_response = response_text
+            if response_text and self._local:
+                try:
+                    print(f"🎭 [NARRATION] Rewriting in Luna's voice...")
+
+                    # FIXED: Use strict system prompt for narration to prevent hallucination
+                    # The Luna LoRA adapter tends to generate creative tangents regardless of context
+                    narration_system = """Rephrase the given text. Rules:
+- Output ONLY the rephrased text
+- Do NOT add memories, stories, or new information
+- Do NOT use asterisks (*action*) or emojis
+- Do NOT say "I remember" or reference past conversations
+- Keep it concise and direct"""
+
+                    narration_prompt = f"""Rephrase this in a warm tone. Output the rephrased text only:
+
+{response_text}"""
+
+                    # Stream the narrated version to callbacks
+                    narrated_text = ""
+                    async for token in self._local.generate_stream(
+                        narration_prompt,
+                        system_prompt=narration_system,
+                        max_tokens=1024,
+                    ):
+                        if self._abort_requested:
+                            print(f"⚠ [NARRATION] Aborted!")
+                            break
+                        narrated_text += token
+                        await self._stream_to_callbacks(token)
+
+                    if narrated_text and len(narrated_text.strip()) > 20:
+                        final_response = narrated_text
+                        narration_elapsed = (time.time() - start_time) * 1000
+                        print(f"✓ [NARRATION] Complete ({len(final_response)} chars) in {narration_elapsed:.0f}ms total")
+                        logger.info("[NARRATION] FULL_DELEGATION response narrated through Luna's voice")
+                    else:
+                        # Narration failed, stream the raw response
+                        print(f"⚠ [NARRATION] Output too short, using raw response")
+                        logger.warning("[NARRATION] Narration returned empty, streaming raw response")
+                        await self._stream_to_callbacks(response_text)
+
+                except Exception as e:
+                    # Narration failed, stream the raw response
+                    print(f"⚠ [NARRATION] Failed: {e}, using raw response")
+                    logger.error(f"[NARRATION] Failed to narrate: {e}, streaming raw response")
+                    await self._stream_to_callbacks(response_text)
+            else:
+                # No local model, stream raw response
+                if not self._local:
+                    print(f"⚠ [NARRATION] Local model unavailable, using raw response")
+                await self._stream_to_callbacks(response_text)
+
+            elapsed_ms = (time.time() - start_time) * 1000
 
             # Record response in ring buffer (CRITICAL for history)
-            if response_text:
-                self._active_ring.add_assistant(response_text)
+            if final_response:
+                self._active_ring.add_assistant(final_response)
                 logger.debug("[DELEGATION-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 
             await self.send_to_engine("generation_complete", {
-                "text": acknowledgment + "\n\n" + response_text,
+                "text": acknowledgment + "\n\n" + final_response,
                 "correlation_id": correlation_id,
-                "model": f"{provider_name} (delegated)",
+                "model": f"{provider_name} (delegated+narrated)" if self._local else f"{provider_name} (delegated)",
                 "output_tokens": token_count,
                 "latency_ms": elapsed_ms,
                 "delegated": True,
                 "planned": True,
+                "narrated": self._local is not None,
             })
 
         except Exception as e:
@@ -1750,6 +2091,7 @@ Keep your response focused and conversational."""
 
         Returns structured facts, NOT personality.
         Claude is a research assistant, not Luna.
+        Uses FallbackChain for resilient inference.
         """
         try:
             prompt = f"""You are a research assistant providing factual information.
@@ -1764,22 +2106,45 @@ Provide:
 
 Be thorough but concise."""
 
-            response = self.client.messages.create(
-                model=self._claude_model,
-                max_tokens=1024,
-                system="You are a factual research assistant. No personality, just facts.",
-                messages=[{"role": "user", "content": prompt}],
-            )
+            system_prompt = "You are a factual research assistant. No personality, just facts."
+            messages = [{"role": "user", "content": prompt}]
 
-            facts_text = ""
-            for block in response.content:
-                if hasattr(block, "text"):
-                    facts_text += block.text
+            # Use FallbackChain for resilient inference
+            if self._fallback_chain:
+                logger.info("[DELEGATE] Using FallbackChain for research...")
+                try:
+                    result = await self._fallback_chain.generate(
+                        messages=messages,
+                        system=system_prompt,
+                        max_tokens=1024,
+                        temperature=0.7,
+                    )
+                    return {
+                        "facts": result.content,
+                        "tokens": len(result.content.split()),  # Approximate
+                        "provider": result.provider_used,
+                    }
+                except AllProvidersFailedError as e:
+                    logger.error(f"[DELEGATE] All fallback providers failed: {e}")
+                    return {"facts": f"I couldn't complete that research: {e}", "error": True}
+            else:
+                # Legacy: direct Claude call
+                response = self.client.messages.create(
+                    model=self._claude_model,
+                    max_tokens=1024,
+                    system=system_prompt,
+                    messages=messages,
+                )
 
-            return {
-                "facts": facts_text,
-                "tokens": response.usage.output_tokens,
-            }
+                facts_text = ""
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        facts_text += block.text
+
+                return {
+                    "facts": facts_text,
+                    "tokens": response.usage.output_tokens,
+                }
 
         except Exception as e:
             logger.error(f"Claude delegation failed: {e}")
@@ -1796,18 +2161,21 @@ Be thorough but concise."""
         if facts.get("error"):
             return facts_text
 
-        narration_prompt = f"""Based on my research, here's what I found:
+        # FIXED: Use minimal system prompt for narration to prevent hallucination
+        narration_system = """You are Luna rewriting a response in your voice.
+Output ONLY the rewritten text. Do not add context, memories, or commentary.
+Be warm and natural but stick to the content given."""
 
-{facts_text}
+        narration_prompt = f"""Rewrite this in your own words. Keep all facts accurate.
+Output only the rewritten response, nothing else:
 
-Now respond naturally in your own voice. Don't say "according to my research" -
-just tell them what they wanted to know as if you knew it. Be warm, be Luna."""
+{facts_text}"""
 
         try:
             # Use local model to narrate in Luna's voice
             result = await self._local.generate(
                 narration_prompt,
-                system_prompt=system_prompt,
+                system_prompt=narration_system,
                 max_tokens=512,
             )
             return result.text
@@ -1891,23 +2259,51 @@ just tell them what they wanted to know as if you knew it. Be warm, be Luna."""
                 self._delegated_generations += 1
 
             else:
-                # Fallback to direct Claude streaming
-                with self.client.messages.stream(
-                    model=self._claude_model,
-                    max_tokens=max_tokens,
-                    system=enhanced_system_prompt,
-                    messages=messages,
-                ) as stream:
-                    for text in stream.text_stream:
-                        if self._abort_requested:
-                            break
-                        response_text += text
-                        await self._stream_to_callbacks(text)
+                # Use FallbackChain for resilient inference
+                if self._fallback_chain:
+                    logger.info("[FALLBACK] Using FallbackChain...")
+                    try:
+                        async for text in self._fallback_chain.stream(
+                            messages=messages,
+                            system=enhanced_system_prompt,
+                            max_tokens=max_tokens,
+                            temperature=0.7,
+                        ):
+                            if self._abort_requested:
+                                break
+                            response_text += text
+                            token_count += 1
+                            await self._stream_to_callbacks(text)
 
-                    final = stream.get_final_message()
-                    token_count = final.usage.output_tokens
-                    elapsed_ms = (time.time() - start_time) * 1000
-                    self._delegated_generations += 1
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        self._delegated_generations += 1
+                        provider_name = "fallback-chain"
+                        logger.info(f"[FALLBACK] Complete via FallbackChain in {elapsed_ms:.0f}ms")
+
+                    except AllProvidersFailedError as e:
+                        logger.error(f"[FALLBACK] All providers failed: {e}")
+                        # Graceful degradation: send error message to user instead of hanging
+                        error_message = "...sorry, I'm having trouble connecting right now. All my inference providers are unavailable."
+                        await self._stream_to_callbacks(error_message)
+                        return  # Exit gracefully
+                else:
+                    # Legacy: direct Claude streaming (no FallbackChain)
+                    with self.client.messages.stream(
+                        model=self._claude_model,
+                        max_tokens=max_tokens,
+                        system=enhanced_system_prompt,
+                        messages=messages,
+                    ) as stream:
+                        for text in stream.text_stream:
+                            if self._abort_requested:
+                                break
+                            response_text += text
+                            await self._stream_to_callbacks(text)
+
+                        final = stream.get_final_message()
+                        token_count = final.usage.output_tokens
+                        elapsed_ms = (time.time() - start_time) * 1000
+                        self._delegated_generations += 1
 
             # Record response in ring buffer (CRITICAL for history)
             if response_text:
@@ -1980,7 +2376,137 @@ just tell them what they wanted to know as if you knew it. Be warm, be Luna."""
         if self._local is not None:
             stats["local_model_stats"] = self._local.get_stats()
 
+        # Add fallback chain stats if available
+        if self._fallback_chain is not None:
+            stats["fallback_chain"] = self._fallback_chain.get_stats()
+
         return stats
+
+    def get_last_system_prompt(self) -> dict:
+        """
+        Get the last system prompt sent to the LLM.
+
+        Used by /prompt slash command for debugging context issues.
+
+        Returns:
+            Dict with system_prompt, route_decision, and truncated preview
+        """
+        if self._last_system_prompt is None:
+            return {
+                "available": False,
+                "message": "No generation has occurred yet. Send a message first.",
+            }
+
+        prompt = self._last_system_prompt
+        return {
+            "available": True,
+            "route_decision": self._last_route_decision or "unknown",
+            "length": len(prompt),
+            "preview": prompt[:500] + "..." if len(prompt) > 500 else prompt,
+            "full_prompt": prompt,
+        }
+
+    def log_prompt_archaeology(self, query: str, response: str = "") -> dict:
+        """
+        Log detailed prompt analysis for archaeology investigation.
+
+        Captures the full prompt with section breakdowns and token estimates.
+        Writes to data/diagnostics/prompt_archaeology.jsonl
+
+        Args:
+            query: The user's query that triggered this prompt
+            response: Optional response text for correlation
+
+        Returns:
+            Dict with full analysis including section breakdown
+        """
+        import json
+        import re
+        from datetime import datetime
+        from pathlib import Path
+
+        if self._last_system_prompt is None:
+            return {"error": "No prompt available"}
+
+        prompt = self._last_system_prompt
+
+        # Section detection patterns
+        section_patterns = [
+            (r"^You are Luna.*?(?=\n##|\n###|$)", "IDENTITY_PREAMBLE"),
+            (r"## Who You Are.*?(?=\n##|$)", "WHO_YOU_ARE"),
+            (r"## Your Voice.*?(?=\n##|$)", "YOUR_VOICE"),
+            (r"## Core Principles.*?(?=\n##|$)", "CORE_PRINCIPLES"),
+            (r"### Core Identity.*?(?=\n###|\n##|$)", "CORE_IDENTITY"),
+            (r"### Base Tone.*?(?=\n###|\n##|$)", "BASE_TONE"),
+            (r"### Default Communication Patterns.*?(?=\n###|\n##|$)", "COMM_PATTERNS"),
+            (r"### Inviolable Principles.*?(?=\n###|\n##|$)", "INVIOLABLE_PRINCIPLES"),
+            (r"### Style Mechanics.*?(?=\n###|\n##|$)", "STYLE_MECHANICS"),
+            (r"### Emoji Usage.*?(?=\n###|\n##|$)", "EMOJI_USAGE"),
+            (r"### Formality.*?(?=\n###|\n##|$)", "FORMALITY"),
+            (r"### Voice Examples.*?(?=\n###|\n##|$)", "VOICE_EXAMPLES"),  # SUSPECT
+            (r"## Your Foundation.*?(?=\n##|$)", "DNA_FOUNDATION"),
+            (r"## Who You've Become.*?(?=\n##|$)", "EXPERIENCE_LAYER"),
+            (r"## Right Now.*?(?=\n##|$)", "MOOD_LAYER"),
+            (r"## THIS SESSION.*?(?=\n##|$)", "THIS_SESSION"),
+            (r"## KNOWN PEOPLE.*?(?=\n##|$)", "KNOWN_PEOPLE"),
+            (r"## RETRIEVED CONTEXT.*?(?=\n##|$)", "RETRIEVED_CONTEXT"),
+            (r"## Memory Context.*?(?=\n##|$)", "MEMORY_CONTEXT"),
+        ]
+
+        # Extract sections
+        sections = {}
+        total_tokens = 0
+
+        for pattern, name in section_patterns:
+            match = re.search(pattern, prompt, re.DOTALL | re.MULTILINE)
+            if match:
+                content = match.group(0)
+                char_count = len(content)
+                token_estimate = char_count // 4
+                sections[name] = {
+                    "chars": char_count,
+                    "tokens_approx": token_estimate,
+                    "preview": content[:200] + "..." if len(content) > 200 else content,
+                }
+                total_tokens += token_estimate
+
+        # Calculate ratios
+        for section in sections.values():
+            if total_tokens > 0:
+                section["percent"] = round(section["tokens_approx"] / total_tokens * 100, 1)
+            else:
+                section["percent"] = 0
+
+        # Flag suspicious sections
+        voice_examples = sections.get("VOICE_EXAMPLES", {})
+        voice_tokens = voice_examples.get("tokens_approx", 0)
+        pollution_warning = None
+        if voice_tokens > 100:
+            pollution_warning = f"VOICE_EXAMPLES is {voice_tokens} tokens ({voice_examples.get('percent', 0)}%) — suspect for copying"
+
+        analysis = {
+            "timestamp": datetime.now().isoformat(),
+            "query": query,
+            "response_preview": response[:200] if response else "",
+            "route": self._last_route_decision or "unknown",
+            "total_chars": len(prompt),
+            "total_tokens_approx": total_tokens,
+            "sections": sections,
+            "pollution_warning": pollution_warning,
+            "full_prompt": prompt,
+        }
+
+        # Write to JSONL file
+        log_path = Path("data/diagnostics/prompt_archaeology.jsonl")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a") as f:
+            f.write(json.dumps(analysis) + "\n")
+
+        logger.info(f"[ARCHAEOLOGY] Logged prompt: {total_tokens} tokens, {len(sections)} sections")
+        if pollution_warning:
+            logger.warning(f"[ARCHAEOLOGY] {pollution_warning}")
+
+        return analysis
 
     # =========================================================================
     # Session Tracking for Reflection Loop
