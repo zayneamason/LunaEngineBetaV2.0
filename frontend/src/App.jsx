@@ -9,9 +9,10 @@ import {
   ThoughtStream,
   ContextDebugPanel,
   ConversationCache,
-  PersonalityMonitorPanel,
-  TuningPanel,
   VoicePanel,
+  LunaQAPanel,
+  VoightKampffPanel,
+  MemoryMonitorPanel,
 } from './components';
 import { useLunaAPI } from './hooks/useLunaAPI';
 import { useChat } from './hooks/useChat';
@@ -46,10 +47,15 @@ const LunaHub = () => {
   // Debug mode state
   const [debugMode, setDebugMode] = useState(false);
   const [debugKeywords, setDebugKeywords] = useState([]);
-  // Personality monitor state
-  const [personalityMode, setPersonalityMode] = useState(false);
-  // Tuning panel state
-  const [tuningMode, setTuningMode] = useState(false);
+  // Memory monitor state
+  const [memoryMode, setMemoryMode] = useState(false);
+  // QA panel state
+  const [qaMode, setQaMode] = useState(false);
+  // Voight-Kampff panel state
+  const [vkMode, setVkMode] = useState(false);
+  // QA status tracking (for visual alerts)
+  const [qaStatus, setQaStatus] = useState({ passed: true, failures: 0, lastId: null });
+  const [qaFlash, setQaFlash] = useState(false); // Flash animation on failure
 
   // Fetch debug context for keywords when debug mode is on
   useEffect(() => {
@@ -108,6 +114,54 @@ const LunaHub = () => {
     }
   }, [isStreaming]);
 
+  // Check QA status after each response (poll /qa/last)
+  useEffect(() => {
+    if (isStreaming || !isConnected) return;
+
+    const checkQA = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/qa/last');
+        if (!res.ok) return;
+
+        const report = await res.json();
+        if (report.error) return;
+
+        // Only alert on new reports
+        if (report.inference_id !== qaStatus.lastId) {
+          setQaStatus({
+            passed: report.passed,
+            failures: report.failed_count || 0,
+            lastId: report.inference_id,
+          });
+
+          // Flash and console warn on failure
+          if (!report.passed) {
+            setQaFlash(true);
+            setTimeout(() => setQaFlash(false), 2000);
+
+            console.warn(
+              '%c🔬 QA FAILED',
+              'background: #ef4444; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold;',
+              `\n${report.failed_count} assertion(s) failed for: "${report.query}"\n`,
+              report.diagnosis || 'No diagnosis available'
+            );
+
+            // Log individual failures
+            report.assertions?.filter(a => !a.passed).forEach(a => {
+              console.warn(`  ❌ [${a.severity}] ${a.name}: ${a.actual}`);
+            });
+          }
+        }
+      } catch (e) {
+        // Silent fail - QA check is non-critical
+      }
+    };
+
+    // Small delay to let QA report be created after response
+    const timeout = setTimeout(checkQA, 500);
+    return () => clearTimeout(timeout);
+  }, [isStreaming, messages.length, isConnected]);
+
   // Combine errors
   const error = chatError || apiError;
 
@@ -149,28 +203,49 @@ const LunaHub = () => {
 
             {/* Connection Status & Debug Toggle */}
             <div className="flex items-center gap-4">
-              {/* Tuning Toggle */}
+              {/* QA Toggle with failure indicator */}
               <button
-                onClick={() => setTuningMode(!tuningMode)}
-                className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
-                  tuningMode
-                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
+                onClick={() => setQaMode(!qaMode)}
+                className={`relative px-3 py-1.5 text-xs rounded-lg border transition-all ${
+                  qaFlash
+                    ? 'bg-red-500/30 border-red-500/70 text-red-300 animate-pulse'
+                    : qaMode
+                    ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
+                    : !qaStatus.passed
+                    ? 'bg-red-500/20 border-red-500/50 text-red-400'
                     : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20'
                 }`}
               >
-                ⚙️ {tuningMode ? 'TUNING' : 'Tuning'}
+                🔬 QA
+                {!qaStatus.passed && qaStatus.failures > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center font-bold">
+                    {qaStatus.failures}
+                  </span>
+                )}
               </button>
 
-              {/* Personality Monitor Toggle */}
+              {/* Voight-Kampff Toggle */}
               <button
-                onClick={() => setPersonalityMode(!personalityMode)}
+                onClick={() => setVkMode(!vkMode)}
                 className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
-                  personalityMode
-                    ? 'bg-violet-500/20 border-violet-500/50 text-violet-400'
+                  vkMode
+                    ? 'bg-pink-500/20 border-pink-500/50 text-pink-400'
                     : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20'
                 }`}
               >
-                🧬 {personalityMode ? 'PERSONALITY' : 'Personality'}
+                🔬 VK
+              </button>
+
+              {/* Memory Monitor Toggle */}
+              <button
+                onClick={() => setMemoryMode(!memoryMode)}
+                className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
+                  memoryMode
+                    ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
+                    : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20'
+                }`}
+              >
+                🧠 {memoryMode ? 'MEMORY' : 'Memory'}
               </button>
 
               {/* Debug Toggle */}
@@ -254,16 +329,22 @@ const LunaHub = () => {
           onClose={() => setDebugMode(false)}
         />
 
-        {/* Personality Monitor Panel */}
-        <PersonalityMonitorPanel
-          isOpen={personalityMode}
-          onClose={() => setPersonalityMode(false)}
+        {/* Memory Monitor Panel */}
+        <MemoryMonitorPanel
+          isOpen={memoryMode}
+          onClose={() => setMemoryMode(false)}
         />
 
-        {/* Tuning Panel */}
-        <TuningPanel
-          isOpen={tuningMode}
-          onClose={() => setTuningMode(false)}
+        {/* QA Panel */}
+        <LunaQAPanel
+          isOpen={qaMode}
+          onClose={() => setQaMode(false)}
+        />
+
+        {/* Voight-Kampff Panel */}
+        <VoightKampffPanel
+          isOpen={vkMode}
+          onClose={() => setVkMode(false)}
         />
       </div>
     </div>

@@ -58,6 +58,8 @@ from .builder import (
     SuiteBuilder,
     build_luna_suite,
     build_minimal_identity_suite,
+    build_voice_memory_suite,
+    VOICE_MEMORY_CRITICAL_NODES,
 )
 
 
@@ -82,4 +84,6 @@ __all__ = [
     "SuiteBuilder",
     "build_luna_suite",
     "build_minimal_identity_suite",
+    "build_voice_memory_suite",
+    "VOICE_MEMORY_CRITICAL_NODES",
 ]

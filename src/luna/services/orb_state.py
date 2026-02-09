@@ -224,9 +224,26 @@ class OrbStateManager:
         return text
 
     def _strip_gestures(self, text: str) -> str:
-        """Remove gesture markers from text."""
-        # Match *gesture text* patterns
-        return re.sub(r'\*[^*]+\*\s*', '', text)
+        """
+        Remove gesture markers from text cleanly.
+
+        P0 FIX: Properly cleans up whitespace when removing gestures.
+        Before: "Hello *smiles warmly* world" -> "Hello  world" (double space)
+        After:  "Hello *smiles warmly* world" -> "Hello world" (clean)
+
+        See: Docs/HANDOFF_Luna_Voice_Restoration.md
+        """
+        # First pass: Remove gesture patterns with surrounding whitespace normalization
+        # Handles: " *gesture* " -> " " (single space)
+        text = re.sub(r'\s*\*[^*]+\*\s*', ' ', text)
+
+        # Second pass: Clean up any double spaces
+        text = re.sub(r'  +', ' ', text)
+
+        # Third pass: Clean up leading/trailing spaces from lines
+        text = '\n'.join(line.strip() for line in text.split('\n'))
+
+        return text.strip()
 
     def _annotate_gestures(self, text: str) -> str:
         """Add debug annotations to gestures."""

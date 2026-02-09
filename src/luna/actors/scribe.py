@@ -105,6 +105,12 @@ Return a JSON object with this structure:
 - 0.5-0.7: Reasonable inference (use sparingly)
 - Below 0.5: Do not extract
 
+### IMPORTANT — CONTENT vs ENTITIES:
+- "content" is a SENTENCE describing the information
+- "entities" is a LIST OF PROPER NOUNS only (names, places, projects)
+- Never put a sentence in "entities"
+- Never put a proper noun alone in "content" — always describe what about them
+
 ### CRITICAL: WHEN IN DOUBT, EXTRACT NOTHING
 If the conversation contains no high-signal information, return:
 {"objects": [], "edges": [], "entity_updates": []}
@@ -474,7 +480,7 @@ class ScribeActor(Actor):
 
         # Get model from backend config
         backend_config = EXTRACTION_BACKENDS.get(self.config.backend, {})
-        model = backend_config.get("model", "claude-3-haiku-20240307")
+        model = backend_config.get("model", "claude-haiku-4-5-20251001")
 
         try:
             response = self.client.messages.create(
@@ -506,24 +512,34 @@ class ScribeActor(Actor):
         """
         Extract using local model.
 
-        Falls back to Claude if local not available.
+        Returns empty output if local model is unavailable.
+        Does NOT fall back to Claude — sovereignty principle.
+        Logs at WARNING so operators know extraction is being skipped.
         """
-        # Check if Director has local model loaded
         if self.engine:
             director = self.engine.get_actor("director")
             if director and hasattr(director, "_local") and director._local:
                 local = director._local
                 if local.is_loaded:
                     try:
-                        # Use local model
                         prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nExtract from:\n{text}"
                         result = await local.generate(prompt)
                         return self._parse_extraction_response(result.text, source_id)
                     except Exception as e:
-                        logger.warning(f"Ben: Local extraction failed, falling back: {e}")
+                        logger.warning(f"Ben: Local extraction failed: {e}")
+                        return (ExtractionOutput(), [])
+                else:
+                    logger.warning(
+                        "Ben: Local model not loaded — extraction skipped. "
+                        "Load a model or switch backend to 'haiku'."
+                    )
+            else:
+                logger.warning(
+                    "Ben: Director has no local model configured — extraction skipped."
+                )
+        else:
+            logger.warning("Ben: No engine reference — cannot access local model.")
 
-        # Fallback: Return empty (don't spam errors when Claude is unavailable)
-        logger.debug("Ben: Local not available, extraction skipped (Claude fallback disabled)")
         return (ExtractionOutput(), [])
 
     def _parse_extraction_response(
@@ -768,16 +784,18 @@ Compressed:"""
                         logger.debug(f"Ben: Compressed turn locally ({len(content)} -> {len(compressed)} chars)")
                         return compressed
 
-            # Fallback to Claude Haiku
-            if self.client:
+            # Fallback to Claude — use configured backend model
+            if self.config.backend != "disabled" and self.client:
+                backend_config = EXTRACTION_BACKENDS.get(self.config.backend, {})
+                model = backend_config.get("model", "claude-haiku-4-5-20251001")
                 response = self.client.messages.create(
-                    model="claude-3-haiku-20240307",
+                    model=model,
                     max_tokens=80,
                     temperature=0.3,
                     messages=[{"role": "user", "content": compression_prompt}]
                 )
                 compressed = response.content[0].text.strip()
-                logger.debug(f"Ben: Compressed turn via Haiku ({len(content)} -> {len(compressed)} chars)")
+                logger.debug(f"Ben: Compressed turn via {model} ({len(content)} -> {len(compressed)} chars)")
                 return compressed
 
         except Exception as e:

@@ -19,6 +19,7 @@ from typing import Any, Optional, Union, TYPE_CHECKING
 from enum import Enum
 import json
 import logging
+import os
 
 from ..substrate.database import MemoryDatabase
 
@@ -28,6 +29,13 @@ try:
     PERSONALITY_MODELS_AVAILABLE = True
 except ImportError:
     PERSONALITY_MODELS_AVAILABLE = False
+
+# Import Voice Lock for query-based voice tuning
+try:
+    from luna.voice.lock import VoiceLock
+    VOICE_LOCK_AVAILABLE = True
+except ImportError:
+    VOICE_LOCK_AVAILABLE = False
 
 if TYPE_CHECKING:
     from .storage import PersonalityPatchManager
@@ -261,12 +269,13 @@ class IdentityBuffer:
         limit: int = 10
     ) -> Optional["EmergentPrompt"]:
         """
-        Generate an EmergentPrompt with three personality layers.
+        Generate an EmergentPrompt with four personality layers.
 
         This synthesizes Luna's personality from:
         1. DNA layer: Static identity from voice_config
         2. Experience layer: Relevant PersonalityPatch nodes from memory
-        3. Mood layer: Current conversational state
+        3. Mood layer: Current conversational state (where we've been)
+        4. Voice Lock: Query-specific voice tuning (where this response needs to go)
 
         Args:
             query: The user's current message (for semantic patch search)
@@ -275,7 +284,7 @@ class IdentityBuffer:
             limit: Max patches to include in experience layer
 
         Returns:
-            EmergentPrompt with all three layers, or None if models unavailable
+            EmergentPrompt with all four layers, or None if models unavailable
         """
         if not PERSONALITY_MODELS_AVAILABLE:
             logger.debug("Personality models not available, skipping emergent prompt")
@@ -294,10 +303,18 @@ class IdentityBuffer:
         # Layer 3: Mood (Transient from conversation analysis)
         mood_layer = self._build_mood_layer(conversation_history)
 
+        # Layer 4: Voice Lock (Query-specific tuning)
+        voice_lock_layer = ""
+        if VOICE_LOCK_AVAILABLE:
+            voice_lock = VoiceLock.from_query(query)
+            voice_lock_layer = voice_lock.to_prompt_fragment()
+            logger.debug(f"VoiceLock: {voice_lock_layer}")
+
         return EmergentPrompt(
             dna_layer=dna_layer,
             experience_layer=experience_layer,
             mood_layer=mood_layer,
+            voice_lock_layer=voice_lock_layer,
         )
 
     def _build_dna_layer(self) -> str:
@@ -364,18 +381,10 @@ class IdentityBuffer:
                         sections.append(f"- Embrace: {formality['embrace']}")
                     sections.append("")
 
-            # Few-shot examples (how Luna actually sounds)
-            if voice.get('few_shot_examples'):
-                sections.append("### Voice Examples (how Luna sounds)")
-                sections.append("")
-
-                # Limit to 3 examples to manage token budget
-                for example in voice['few_shot_examples'][:3]:
-                    user_msg = example.get('content', '')
-                    luna_msg = example.get('luna', '')
-                    sections.append(f"User: {user_msg}")
-                    sections.append(f"Luna: {luna_msg}")
-                    sections.append("")
+            # NOTE: few_shot_examples REMOVED (2026-02-03)
+            # Voice examples caused copying behavior. The LoRA has Luna's voice
+            # in its weights — showing examples causes pattern-matching instead
+            # of authentic generation. See: PROMPT_COMPOSITION_ANALYSIS.md
 
         return "\n".join(sections)
 

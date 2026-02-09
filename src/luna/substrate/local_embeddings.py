@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 import threading
 
@@ -37,11 +38,13 @@ def get_embeddings() -> "LocalEmbeddings":
     Thread-safe lazy initialization.
     """
     global _instance
-    if _instance is None:
-        with _lock:
-            if _instance is None:
-                _instance = LocalEmbeddings()
-    return _instance
+    with _lock:
+        if _instance is None:
+            logger.warning(f"[EMBED-SINGLETON] CREATING NEW INSTANCE pid={os.getpid()}")
+            _instance = LocalEmbeddings()
+        else:
+            logger.info(f"[EMBED-SINGLETON] REUSING instance pid={os.getpid()}")
+        return _instance
 
 
 class LocalEmbeddings:
@@ -68,15 +71,17 @@ class LocalEmbeddings:
     def _load_model(self) -> None:
         """Load the sentence-transformers model (lazy, thread-safe)."""
         if self._model is not None:
+            logger.info(f"[EMBED-MODEL] MODEL ALREADY LOADED pid={os.getpid()}")
             return
 
         with self._load_lock:
             if self._model is not None:
+                logger.info(f"[EMBED-MODEL] MODEL ALREADY LOADED pid={os.getpid()}")
                 return
 
             try:
                 from sentence_transformers import SentenceTransformer
-                logger.info(f"Loading embedding model: {MODEL_NAME}")
+                logger.warning(f"[EMBED-MODEL] LOADING MODEL pid={os.getpid()} instance_id={id(self)}")
                 self._model = SentenceTransformer(MODEL_NAME)
                 logger.info(f"Embedding model loaded successfully ({EMBEDDING_DIM} dimensions)")
             except ImportError:

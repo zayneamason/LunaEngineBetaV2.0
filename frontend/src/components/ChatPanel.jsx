@@ -4,6 +4,8 @@ import { LunaOrb } from './LunaOrb';
 import { useOrbState } from '../hooks/useOrbState';
 import { VoiceTuningPanel } from './VoiceTuningPanel';
 import { OrbSettingsPanel } from './OrbSettingsPanel';
+import { FallbackChainPanel } from './FallbackChainPanel';
+import { ServerMonitorPanel } from './ServerMonitorPanel';
 
 // Highlight keywords in text for debug mode
 const highlightKeywords = (text, keywords) => {
@@ -40,6 +42,8 @@ const SLASH_COMMANDS = [
   { command: '/orb-test', description: 'Cycle through all animations', icon: '🎬' },
   { command: '/voice-tuning', description: 'Voice tuning panel', icon: '🎤', isPanel: true },
   { command: '/orb-settings', description: 'Orb visual settings', icon: '🟣', isPanel: true },
+  { command: '/fallback-chain', description: 'Configure inference fallback order', icon: '⛓️', isPanel: true },
+  { command: '/server', description: 'Server monitor & management', icon: '🖥️', isPanel: true },
   { command: '/performance', description: 'Show performance state', icon: '📈' },
   { command: '/emotion', description: 'Set emotion preset', icon: '💜', placeholder: '<name>' },
   { command: '/reset-performance', description: 'Reset to auto-detect', icon: '🔄' },
@@ -48,6 +52,7 @@ const SLASH_COMMANDS = [
   { command: '/help', description: 'List all commands', icon: '❓' },
   { command: '/vk', description: 'Run Voight-Kampff identity test', icon: '🧠' },
   { command: '/voight-kampff', description: 'Run full identity verification', icon: '🧠' },
+  { command: '/prompt', description: 'Show last system prompt sent to LLM', icon: '📋' },
 ];
 
 const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => {
@@ -130,10 +135,13 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
-    const trimmedInput = input.trim().toLowerCase();
+    // P0 FIX: Preserve capitalization for messages
+    // See: Docs/HANDOFF_Luna_Voice_Restoration.md
+    const trimmedInput = input.trim();  // Preserves case for messages
+    const commandInput = trimmedInput.toLowerCase();  // Lowercase only for command detection
 
     // Handle local orb commands
-    if (trimmedInput === '/animate') {
+    if (commandInput === '/animate') {
       const result = await onSend('/animate');
       if (result?.animation) {
         setAnimationOverride(result.animation);
@@ -145,7 +153,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
       return;
     }
 
-    if (trimmedInput === '/orb') {
+    if (commandInput === '/orb') {
       // Pass current orb state to useChat for the status message
       const orbInfo = {
         isConnected,
@@ -160,7 +168,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
       return;
     }
 
-    if (trimmedInput === '/orb-test') {
+    if (commandInput === '/orb-test') {
       const result = await onSend('/orb-test');
       if (result?.animations) {
         // Cycle through each animation
@@ -183,21 +191,36 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
     }
 
     // Handle panel commands
-    if (trimmedInput === '/voice-tuning') {
+    if (commandInput === '/voice-tuning') {
       await openPanel('voice-tuning');
       setInput('');
       setShowCommands(false);
       return;
     }
 
-    if (trimmedInput === '/orb-settings') {
+    if (commandInput === '/orb-settings') {
       await openPanel('orb-settings');
       setInput('');
       setShowCommands(false);
       return;
     }
 
-    onSend(input.trim());
+    if (commandInput === '/fallback-chain') {
+      setActivePanel('fallback-chain');
+      setInput('');
+      setShowCommands(false);
+      return;
+    }
+
+    if (commandInput === '/server') {
+      setActivePanel('server');
+      setInput('');
+      setShowCommands(false);
+      return;
+    }
+
+    // Send message with original capitalization preserved
+    onSend(trimmedInput);
     setInput('');
     setShowCommands(false);
   };
@@ -398,6 +421,34 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
           <OrbSettingsPanel
             data={panelData}
             onUpdate={handleOrbUpdate}
+            onClose={() => setActivePanel(null)}
+          />
+        </div>
+      )}
+
+      {activePanel === 'fallback-chain' && (
+        <div style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 1000
+        }}>
+          <FallbackChainPanel
+            onClose={() => setActivePanel(null)}
+          />
+        </div>
+      )}
+
+      {activePanel === 'server' && (
+        <div style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 1000
+        }}>
+          <ServerMonitorPanel
             onClose={() => setActivePanel(null)}
           />
         </div>

@@ -46,7 +46,7 @@ os.environ.setdefault("LUNA_MCP_API_URL", "http://localhost:8742")
 from mcp.server.fastmcp import FastMCP
 
 # Import tool modules
-from luna_mcp.tools import filesystem, memory, state, git, forge
+from luna_mcp.tools import filesystem, memory, state, git, forge, qa
 
 # Import auto-session functions
 from luna_mcp.tools.memory import (
@@ -636,6 +636,192 @@ async def vk_list() -> dict:
 async def vk_probes(suite_name: str) -> dict:
     """Get the list of probes in a test suite."""
     return await forge.vk_probes(suite_name)
+
+
+# ==============================================================================
+# QA Tools — Luna's Self-Diagnosis
+# ==============================================================================
+
+@mcp.tool()
+async def qa_get_last_report() -> str:
+    """
+    Get the QA report for Luna's most recent inference.
+
+    Returns assertion results, diagnosis, and debugging info.
+    Use this to understand why the last response may have failed QA.
+    """
+    return await qa.qa_get_last_report()
+
+
+@mcp.tool()
+async def qa_get_health() -> str:
+    """
+    Get Luna's current QA health status.
+
+    Returns pass_rate (0-1), recent_failures, and failing_bugs count.
+    """
+    return await qa.qa_get_health()
+
+
+@mcp.tool()
+async def qa_search_reports(
+    query: str = None,
+    route: str = None,
+    passed: bool = None,
+    limit: int = 10
+) -> str:
+    """
+    Search QA report history.
+
+    Args:
+        query: Filter by query text
+        route: Filter by route (LOCAL_ONLY, DELEGATION_DETECTION, FULL_DELEGATION)
+        passed: Filter by pass/fail status
+        limit: Max results (default 10)
+    """
+    return await qa.qa_search_reports(query, route, passed, limit)
+
+
+@mcp.tool()
+async def qa_get_stats(time_range: str = "24h") -> str:
+    """
+    Get QA statistics for a time range.
+
+    Args:
+        time_range: "1h", "24h", "7d", "30d"
+    """
+    return await qa.qa_get_stats(time_range)
+
+
+@mcp.tool()
+async def qa_get_assertions() -> str:
+    """Get all configured QA assertions."""
+    return await qa.qa_get_assertions()
+
+
+@mcp.tool()
+async def qa_add_assertion(
+    name: str,
+    category: str,
+    severity: str,
+    target: str,
+    condition: str,
+    pattern: str,
+    case_sensitive: bool = False
+) -> str:
+    """
+    Add a new pattern-based assertion to the QA system.
+
+    Args:
+        name: Human-readable name
+        category: structural, voice, personality, flow
+        severity: critical, high, medium, low
+        target: response, raw_response, system_prompt, query
+        condition: contains, not_contains, regex, length_gt, length_lt
+        pattern: The pattern to match
+        case_sensitive: Whether match is case-sensitive
+    """
+    return await qa.qa_add_assertion(
+        name, category, severity, target, condition, pattern, case_sensitive
+    )
+
+
+@mcp.tool()
+async def qa_toggle_assertion(assertion_id: str, enabled: bool) -> str:
+    """Enable or disable a QA assertion."""
+    return await qa.qa_toggle_assertion(assertion_id, enabled)
+
+
+@mcp.tool()
+async def qa_delete_assertion(assertion_id: str) -> str:
+    """Delete a custom QA assertion (built-in assertions cannot be deleted)."""
+    return await qa.qa_delete_assertion(assertion_id)
+
+
+@mcp.tool()
+async def qa_add_bug(
+    name: str,
+    query: str,
+    expected_behavior: str,
+    actual_behavior: str,
+    severity: str = "high"
+) -> str:
+    """
+    Add a known bug to the regression database.
+
+    This bug will be tested every time the regression suite runs.
+
+    Args:
+        name: Bug name/title
+        query: The query that triggers the bug
+        expected_behavior: What should happen
+        actual_behavior: What actually happens
+        severity: critical, high, medium, low
+    """
+    return await qa.qa_add_bug(name, query, expected_behavior, actual_behavior, severity)
+
+
+@mcp.tool()
+async def qa_add_bug_from_last(name: str, expected_behavior: str) -> str:
+    """
+    Create a bug from the last failed QA report.
+
+    Auto-populates query, actual behavior, and affected assertions.
+
+    Args:
+        name: Bug name/title
+        expected_behavior: What should happen
+    """
+    return await qa.qa_add_bug_from_last(name, expected_behavior)
+
+
+@mcp.tool()
+async def qa_list_bugs(status: str = None) -> str:
+    """
+    List known bugs.
+
+    Args:
+        status: Filter by status (open, failing, fixed, wontfix)
+    """
+    return await qa.qa_list_bugs(status)
+
+
+@mcp.tool()
+async def qa_update_bug_status(bug_id: str, status: str) -> str:
+    """
+    Update a bug's status.
+
+    Args:
+        bug_id: The bug ID
+        status: New status (open, failing, fixed, wontfix)
+    """
+    return await qa.qa_update_bug_status(bug_id, status)
+
+
+@mcp.tool()
+async def qa_get_bug(bug_id: str) -> str:
+    """Get details for a specific bug by ID."""
+    return await qa.qa_get_bug(bug_id)
+
+
+@mcp.tool()
+async def qa_diagnose_last() -> str:
+    """
+    Get a detailed diagnosis of the last QA failure.
+
+    Returns failures by category, diagnosis text, and response preview.
+    """
+    return await qa.qa_diagnose_last()
+
+
+@mcp.tool()
+async def qa_check_personality() -> str:
+    """
+    Check if Luna's personality is properly configured.
+
+    Returns status of P1, P2, P3 assertions and personality injection state.
+    """
+    return await qa.qa_check_personality()
 
 
 # ==============================================================================

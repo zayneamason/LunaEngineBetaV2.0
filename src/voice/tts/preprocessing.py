@@ -224,6 +224,14 @@ class TextPreprocessor:
     def _special_char_rules(self) -> List[PreprocessingRule]:
         """Rules for special characters TTS would read aloud."""
         return [
+            # Trailing tilde (Luna's softening style: "hey~", "hmm~")
+            # TTS would say "tilde" which breaks immersion
+            PreprocessingRule(
+                name="trailing_tilde",
+                pattern=re.compile(r'(\w)~(?=\s|$|[.,!?])'),
+                replacement=r'\1',
+                description="Remove trailing tilde (voice softener)"
+            ),
             # Single tilde emphasis ~text~ (not double strikethrough)
             PreprocessingRule(
                 name="single_tilde",

@@ -96,6 +96,9 @@ class MatrixActor(Actor):
         self._graph = MemoryGraph(self._db)
         await self._graph.load_from_db()
 
+        # Wire graph into matrix for spreading activation in get_context()
+        self._matrix.graph = self._graph
+
         self._initialized = True
 
         stats = await self._matrix.get_stats()

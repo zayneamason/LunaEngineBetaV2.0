@@ -167,8 +167,8 @@ async def main():
     )
     parser.add_argument(
         "--db-path",
-        default="data/luna_memory.db",
-        help="Path to the SQLite database (default: data/luna_memory.db)"
+        default="data/luna_engine.db",
+        help="Path to the SQLite database (default: data/luna_engine.db)"
     )
     parser.add_argument(
         "--batch-size",

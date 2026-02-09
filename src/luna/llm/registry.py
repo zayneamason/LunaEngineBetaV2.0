@@ -51,6 +51,15 @@ class ProviderRegistry:
         """Get a provider by name."""
         return self._providers.get(name)
 
+    def get_by_name(self, name: str) -> Optional[LLMProvider]:
+        """Get provider by name (alias for get())."""
+        return self._providers.get(name)
+
+    def is_available(self, name: str) -> bool:
+        """Check if provider exists and is available."""
+        provider = self._providers.get(name)
+        return provider is not None and provider.is_available
+
     def get_current(self) -> Optional[LLMProvider]:
         """Get the currently selected provider."""
         config = get_config()

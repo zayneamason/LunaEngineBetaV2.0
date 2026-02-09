@@ -95,6 +95,9 @@ class LibrarianActor(Actor):
         self._nodes_created = 0
         self._nodes_merged = 0
         self._edges_created = 0
+        self._edges_failed = 0
+        self._edges_skipped_duplicate = 0
+        self._entity_resolve_failures = 0
         self._context_retrievals = 0
         self._entity_updates_filed = 0
         self._entity_versions_created = 0
@@ -374,12 +377,23 @@ class LibrarianActor(Actor):
                 return existing
 
         # 3. Create new node
-        node_id = await self._create_node(name, entity_type, source_id)
-        self.alias_cache[name_lower] = node_id
-        self._nodes_created += 1
-
-        logger.debug(f"The Dude: Created new node for '{name}' -> {node_id}")
-        return node_id
+        try:
+            node_id = await self._create_node(name, entity_type, source_id)
+            self.alias_cache[name_lower] = node_id
+            self._nodes_created += 1
+            logger.debug(f"ENTITY_NEW: '{name}' -> {node_id} (type={entity_type})")
+            return node_id
+        except Exception as e:
+            logger.error(
+                f"ENTITY_FAIL: Could not create node for '{name}' | "
+                f"type={entity_type} source={source_id} | error={e}"
+            )
+            self._entity_resolve_failures += 1
+            # Return a fallback ID so edge creation can still attempt
+            import uuid
+            fallback_id = f"unresolved_{uuid.uuid4().hex[:8]}"
+            logger.warning(f"ENTITY_FALLBACK: Using {fallback_id} for '{name}'")
+            return fallback_id
 
     async def _find_existing_node(
         self,
@@ -705,26 +719,41 @@ class LibrarianActor(Actor):
 
         result = FilingResult()
 
-        # 1. Process objects - create/resolve nodes
+        # 1. Process objects - store as memory nodes, resolve mentioned entities
+        matrix = await self._get_matrix()
+
         for obj in extraction.objects:
-            node_id = await self._resolve_entity(
-                name=obj.content,
-                entity_type=obj.type.value if hasattr(obj.type, 'value') else str(obj.type),
-                source_id=extraction.source_id,
-            )
+            node_type = obj.type.value if hasattr(obj.type, 'value') else str(obj.type)
 
-            # Track if created or merged
-            if self._nodes_created > len(result.nodes_created) + len(result.nodes_merged):
+            # Store the extracted object as a memory node (not as an entity)
+            if matrix:
+                node_id = await matrix.add_node(
+                    node_type=node_type,
+                    content=obj.content,
+                    source=extraction.source_id,
+                    confidence=obj.confidence,
+                    metadata=obj.metadata if hasattr(obj, 'metadata') else None,
+                )
                 result.nodes_created.append(node_id)
+                self._nodes_created += 1
             else:
-                result.nodes_merged.append((obj.content, node_id))
+                import uuid
+                node_id = str(uuid.uuid4())[:12]
+                result.nodes_created.append(node_id)
 
-            # Also resolve any mentioned entities
-            for entity in obj.entities:
-                await self._resolve_entity(
-                    name=entity,
+            # Resolve mentioned entities (these ARE entity names)
+            for entity_name in obj.entities:
+                entity_id = await self._resolve_entity(
+                    name=entity_name,
                     entity_type="ENTITY",
                     source_id=extraction.source_id,
+                )
+                # Create MENTIONS edge from the memory node to the entity
+                await self._create_edge(
+                    from_id=node_id,
+                    to_id=entity_id,
+                    edge_type="MENTIONS",
+                    confidence=obj.confidence,
                 )
 
         # 2. Create edges
@@ -758,8 +787,13 @@ class LibrarianActor(Actor):
                     )
 
             except Exception as e:
-                logger.warning(f"The Dude: Failed to create edge: {e}")
-                result.edges_skipped.append(f"error: {e}")
+                logger.error(
+                    f"EDGE_WIRE_FAIL: Exception in edge wiring | "
+                    f"from_ref={edge.from_ref} to_ref={edge.to_ref} "
+                    f"type={edge.edge_type} | error={type(e).__name__}: {e}"
+                )
+                self._edges_failed += 1
+                result.edges_skipped.append(f"error: {type(e).__name__}: {e}")
 
         # Update stats
         filing_time_ms = int((time.monotonic() - start_time) * 1000)
@@ -780,33 +814,76 @@ class LibrarianActor(Actor):
         Create edge between nodes.
 
         Returns True if created, False if duplicate.
+        Logs all failures with full context for debugging.
         """
         # Get matrix actor to access graph
         if not self.engine:
+            logger.error(
+                "EDGE_FAIL: No engine reference | "
+                f"from={from_id} to={to_id} type={edge_type}"
+            )
+            self._edges_failed += 1
             return False
 
         matrix_actor = self.engine.get_actor("matrix")
         if not matrix_actor:
+            logger.error(
+                "EDGE_FAIL: Matrix actor not found | "
+                f"from={from_id} to={to_id} type={edge_type}"
+            )
+            self._edges_failed += 1
             return False
 
         # Use matrix actor's graph if available
-        if hasattr(matrix_actor, "_graph") and matrix_actor._graph:
-            graph = matrix_actor._graph
+        if not hasattr(matrix_actor, "_graph") or not matrix_actor._graph:
+            logger.error(
+                "EDGE_FAIL: Matrix actor has no graph | "
+                f"from={from_id} to={to_id} type={edge_type} "
+                f"has_attr={hasattr(matrix_actor, '_graph')} "
+                f"graph_val={getattr(matrix_actor, '_graph', 'MISSING')}"
+            )
+            self._edges_failed += 1
+            return False
 
-            # Check if edge already exists
-            if graph.has_edge(from_id, to_id, edge_type):
-                return False
+        graph = matrix_actor._graph
 
-            # Create edge
-            graph.add_edge(
+        # Check if edge already exists
+        if graph.has_edge(from_id, to_id):
+            logger.debug(
+                f"EDGE_SKIP: Duplicate | from={from_id} to={to_id} type={edge_type}"
+            )
+            self._edges_skipped_duplicate += 1
+            return False
+
+        # Create the edge
+        try:
+            await graph.add_edge(
                 from_id=from_id,
                 to_id=to_id,
-                edge_type=edge_type,
-                weight=confidence,
+                relationship=edge_type,
+                strength=confidence,
+            )
+            logger.info(
+                f"EDGE_OK: {from_id} --[{edge_type} @ {confidence:.2f}]--> {to_id}"
             )
             return True
-
-        return False
+        except TypeError as e:
+            # This is the exact error class that killed edges before.
+            logger.critical(
+                f"EDGE_CRITICAL: TypeError in graph.add_edge — API CONTRACT VIOLATION | "
+                f"from={from_id} to={to_id} type={edge_type} confidence={confidence} | "
+                f"error={e}"
+            )
+            self._edges_failed += 1
+            return False
+        except Exception as e:
+            logger.error(
+                f"EDGE_FAIL: Unexpected error in graph.add_edge | "
+                f"from={from_id} to={to_id} type={edge_type} | "
+                f"error_type={type(e).__name__} error={e}"
+            )
+            self._edges_failed += 1
+            return False
 
     # =========================================================================
     # CONTEXT RETRIEVAL
@@ -867,29 +944,37 @@ class LibrarianActor(Actor):
         if not graph:
             return result
 
-        # Get all edges and filter
-        all_edges = graph.get_all_edges()
+        # Iterate NetworkX edges via graph.graph property
         cutoff = datetime.now().timestamp() - (age_days * 24 * 3600)
+        edges_to_prune = []
 
-        for edge in all_edges:
-            # Skip high-confidence edges
-            if edge.get("weight", 1.0) >= confidence_threshold:
+        for u, v, data in graph.graph.edges(data=True):
+            strength = data.get("strength", 1.0)
+            # created_at is stored as ISO string by add_edge, parse it
+            created_raw = data.get("created_at")
+            if isinstance(created_raw, str):
+                try:
+                    created = datetime.fromisoformat(created_raw).timestamp()
+                except ValueError:
+                    created = datetime.now().timestamp()
+            elif isinstance(created_raw, (int, float)):
+                created = float(created_raw)
+            else:
+                created = datetime.now().timestamp()
+
+            if strength >= confidence_threshold:
                 result["preserved"] += 1
                 continue
 
-            # Skip recent edges
-            created = edge.get("created_at", datetime.now().timestamp())
             if created > cutoff:
                 result["preserved"] += 1
                 continue
 
-            # Prune this edge
+            edges_to_prune.append((u, v, data.get("relationship")))
+
+        for from_id, to_id, relationship in edges_to_prune:
             try:
-                graph.remove_edge(
-                    edge["from_id"],
-                    edge["to_id"],
-                    edge.get("edge_type"),
-                )
+                await graph.remove_edge(from_id, to_id, relationship)
                 result["pruned"] += 1
             except Exception:
                 result["preserved"] += 1
@@ -1000,6 +1085,9 @@ class LibrarianActor(Actor):
             "nodes_created": self._nodes_created,
             "nodes_merged": self._nodes_merged,
             "edges_created": self._edges_created,
+            "edges_failed": self._edges_failed,
+            "edges_skipped_duplicate": self._edges_skipped_duplicate,
+            "entity_resolve_failures": self._entity_resolve_failures,
             "context_retrievals": self._context_retrievals,
             "entity_updates_filed": self._entity_updates_filed,
             "entity_versions_created": self._entity_versions_created,
@@ -1017,12 +1105,46 @@ class LibrarianActor(Actor):
         })
         return base
 
+    def _load_alias_cache(self) -> None:
+        """Load alias cache from disk."""
+        import json
+        import os
+        cache_path = os.path.join(
+            os.environ.get("LUNA_BASE_PATH", ""),
+            "data", "alias_cache.json"
+        )
+        try:
+            if os.path.exists(cache_path):
+                with open(cache_path, "r") as f:
+                    self.alias_cache = json.load(f)
+                logger.info(f"The Dude: Loaded {len(self.alias_cache)} alias cache entries")
+        except Exception as e:
+            logger.warning(f"The Dude: Failed to load alias cache: {e}")
+
+    def _save_alias_cache(self) -> None:
+        """Save alias cache to disk."""
+        import json
+        import os
+        cache_path = os.path.join(
+            os.environ.get("LUNA_BASE_PATH", ""),
+            "data", "alias_cache.json"
+        )
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, "w") as f:
+                json.dump(self.alias_cache, f)
+            logger.debug(f"The Dude: Saved {len(self.alias_cache)} alias cache entries")
+        except Exception as e:
+            logger.warning(f"The Dude: Failed to save alias cache: {e}")
+
     async def on_start(self) -> None:
         """Initialize on start."""
+        self._load_alias_cache()
         logger.info("The Dude: Yeah, well, you know, that's just like, my opinion, man.")
 
     async def on_stop(self) -> None:
         """Cleanup on stop."""
+        self._save_alias_cache()
         # Process any remaining inference queue
         if self.inference_queue:
             logger.info(f"The Dude: {len(self.inference_queue)} items in inference queue at shutdown")

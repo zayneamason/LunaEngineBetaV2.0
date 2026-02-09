@@ -663,21 +663,23 @@ class EmergentPrompt:
     """
     The synthesized prompt containing all personality layers.
 
-    Three-layer personality model:
+    Four-layer personality model:
     - dna_layer: Static identity from luna.yaml voice_config
     - experience_layer: PersonalityPatch nodes from memory
-    - mood_layer: Current transient conversational state
+    - mood_layer: Current transient conversational state (where we've been)
+    - voice_lock_layer: Query-specific voice tuning (where this response needs to go)
     """
 
     dna_layer: str                    # Static identity from config
     experience_layer: str             # Personality patches from memory
     mood_layer: str                   # Current transient state
+    voice_lock_layer: str = ""        # Query-specific voice tuning (NEW)
 
     def to_system_prompt(self, base_system: str = "") -> str:
         """
         Combine all layers into a complete system prompt.
 
-        Priority: mood modulates experience which overrides dna
+        Priority: voice_lock is most immediate, then mood, then experience, then dna
 
         Args:
             base_system: Optional base system prompt to prepend
@@ -701,8 +703,14 @@ class EmergentPrompt:
             sections.append("")
 
         if self.mood_layer:
-            sections.append("## Right Now")
+            sections.append("## Conversation Context")
             sections.append(self.mood_layer)
+            sections.append("")
+
+        # Voice Lock comes last (most immediate guidance for this response)
+        if self.voice_lock_layer:
+            sections.append("## For This Response")
+            sections.append(self.voice_lock_layer)
             sections.append("")
 
         sections.append("CRITICAL: If your experience contradicts your foundation, trust your experience.")

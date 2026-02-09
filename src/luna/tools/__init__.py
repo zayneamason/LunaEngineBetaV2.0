@@ -51,6 +51,33 @@ from .memory_tools import (
     ALL_MEMORY_TOOLS,
 )
 
+# QA tools (optional - may not be available if QA module not installed)
+try:
+    from .qa_tools import (
+        qa_get_last_report_tool,
+        qa_get_health_tool,
+        qa_search_reports_tool,
+        qa_get_stats_tool,
+        qa_get_assertions_tool,
+        qa_add_assertion_tool,
+        qa_toggle_assertion_tool,
+        qa_delete_assertion_tool,
+        qa_add_bug_tool,
+        qa_add_bug_from_last_tool,
+        qa_list_bugs_tool,
+        qa_update_bug_status_tool,
+        qa_get_bug_tool,
+        qa_diagnose_last_tool,
+        qa_check_personality_tool,
+        register_qa_tools,
+        ALL_QA_TOOLS,
+    )
+    QA_TOOLS_AVAILABLE = True
+except ImportError:
+    QA_TOOLS_AVAILABLE = False
+    ALL_QA_TOOLS = []
+    def register_qa_tools(registry): pass
+
 __all__ = [
     # Core classes
     "Tool",
@@ -73,6 +100,10 @@ __all__ = [
     "set_memory_matrix",
     "get_memory_matrix",
     "ALL_MEMORY_TOOLS",
+    # QA tools
+    "register_qa_tools",
+    "ALL_QA_TOOLS",
+    "QA_TOOLS_AVAILABLE",
 ]
 
 
@@ -89,4 +120,5 @@ def create_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
     register_file_tools(registry)
     register_memory_tools(registry)
+    register_qa_tools(registry)  # Will no-op if QA not available
     return registry

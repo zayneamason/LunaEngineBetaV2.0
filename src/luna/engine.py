@@ -302,6 +302,10 @@ Emojis can accompany gestures or stand alone.
             from luna.actors.history_manager import HistoryManagerActor
             self.register_actor(HistoryManagerActor())
 
+        # P0 FIX: Auto-load entity seeds on startup
+        # See: Docs/HANDOFF_Luna_Voice_Restoration.md
+        await self._ensure_entity_seeds_loaded()
+
         # Restore consciousness from snapshot
         self.consciousness = await ConsciousnessState.load()
 
@@ -371,6 +375,78 @@ Emojis can accompany gestures or stand alone.
         except Exception as e:
             logger.error(f"Failed to initialize voice system: {e}")
             self._voice = None
+
+    async def _ensure_entity_seeds_loaded(self) -> None:
+        """
+        Load personality seeds if not already in database.
+
+        P0 FIX: Auto-loads Luna's personality from entities/personas/luna.yaml
+        on engine startup if not already present in the database.
+        See: Docs/HANDOFF_Luna_Voice_Restoration.md
+        """
+        try:
+            # Get database access through Matrix actor
+            matrix = self.get_actor("matrix")
+            if not matrix or not hasattr(matrix, "_memory") or not matrix._memory:
+                logger.warning("[SEEDS] Matrix not initialized, skipping entity seed auto-load")
+                return
+
+            db = matrix._memory.db
+
+            # Check if Luna entity exists
+            result = await db.fetchone(
+                "SELECT id FROM entities WHERE id = ?",
+                ("luna",)
+            )
+
+            if result is not None:
+                logger.debug("[SEEDS] Luna personality already loaded")
+                return
+
+            logger.info("[SEEDS] Luna entity not found, loading personality seeds...")
+
+            # Import and run seed loader
+            from pathlib import Path
+            try:
+                # Try to import from scripts/migrations
+                import sys
+                project_root = Path(__file__).parent.parent.parent
+                sys.path.insert(0, str(project_root / "scripts"))
+
+                from migrations.load_entity_seeds import EntitySeedLoader
+
+                entities_dir = project_root / "entities"
+                if not entities_dir.exists():
+                    logger.warning(f"[SEEDS] Entities directory not found: {entities_dir}")
+                    return
+
+                loader = EntitySeedLoader(
+                    db=db,
+                    entities_dir=entities_dir,
+                    dry_run=False
+                )
+
+                # Ensure schema exists
+                await loader.ensure_schema()
+
+                # Load all seed files
+                summary = await loader.load_all()
+
+                logger.info(
+                    f"[SEEDS] Loaded {summary['loaded']} entities, "
+                    f"updated {summary['updated']}, "
+                    f"skipped {summary['skipped']}"
+                )
+
+                if summary['errors'] > 0:
+                    logger.warning(f"[SEEDS] {summary['errors']} errors during seed loading")
+
+            except ImportError as e:
+                logger.warning(f"[SEEDS] EntitySeedLoader not available: {e}")
+
+        except Exception as e:
+            # Don't fail startup if seed loading fails - just warn
+            logger.error(f"[SEEDS] Failed to load entity seeds: {e}")
 
     async def _wait_for_shutdown(self) -> None:
         """Wait for shutdown signal."""
@@ -932,7 +1008,21 @@ Emojis can accompany gestures or stand alone.
         # This prevents conversation items from demoting to OUTER too quickly
         self.context.decay_all()
 
-        # TODO: Graph pruning, consolidation, etc.
+        # Run memory consolidation (cluster lock-in updates)
+        try:
+            matrix_actor = self.get_actor("matrix")
+            if matrix_actor and hasattr(matrix_actor, "_matrix") and matrix_actor._matrix:
+                db_path = str(matrix_actor._matrix.db.db_path)
+                from luna.memory.lock_in import LockInCalculator
+                calculator = LockInCalculator(db_path)
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, calculator.update_all_clusters
+                )
+                if result.get("state_changes"):
+                    logger.info(f"Reflective tick: {len(result['state_changes'])} cluster state changes")
+        except Exception as e:
+            logger.debug(f"Reflective tick consolidation skipped: {e}")
 
     # =========================================================================
     # Context Assembly
@@ -1023,7 +1113,9 @@ You grow and evolve through your experiences, but your core values remain consta
 - Curiosity over certainty
 - Connection over transaction
 
-Be concise but authentic. No filler phrases like "certainly" or "of course"."""
+Be concise but authentic. No filler phrases like "certainly" or "of course".
+Never output internal reasoning, debugging info, or bullet points about context loading.
+Never use generic chatbot greetings like "How can I help you?" - just be natural."""
 
     def _build_system_prompt(
         self,
@@ -1046,6 +1138,8 @@ You are warm, witty, and genuinely curious. You remember conversations and build
 You have your own perspective and aren't afraid to share it.
 
 Be concise but authentic. No filler phrases like "certainly" or "of course".
+Never output internal reasoning, debugging info, or bullet points about context loading.
+Never use generic chatbot greetings like "How can I help you?" - just be natural.
 """
 
         # Add expression directive (gesture frequency from personality.json)

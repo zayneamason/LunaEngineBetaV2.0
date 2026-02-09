@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useLunaAPI } from './useLunaAPI';
 
 /**
@@ -62,6 +62,8 @@ const parseSlashCommand = (text) => {
     // Voight-Kampff identity test
     '/vk': { endpoint: '/slash/vk', method: 'GET' },
     '/voight-kampff': { endpoint: '/slash/voight-kampff', method: 'GET' },
+    // System prompt diagnostic
+    '/prompt': { endpoint: '/slash/prompt', method: 'GET' },
   };
 
   const cmd = commands[command];
@@ -78,6 +80,86 @@ export function useChat() {
   const [context, setContext] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const streamingRef = useRef('');
+  const wsRef = useRef(null);
+  const processedIdsRef = useRef(new Set());
+
+  // Connect to chat WebSocket for shared session viewing
+  // This allows seeing messages sent via API/curl/MCP in real-time
+  useEffect(() => {
+    const connectWebSocket = () => {
+      try {
+        const ws = new WebSocket('ws://localhost:8000/ws/chat');
+
+        ws.onopen = () => {
+          console.log('[Chat WS] Connected to shared session');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data);
+            const msgId = `ws-${payload.timestamp}`;
+
+            // Skip if we've already processed this message (dedup)
+            if (processedIdsRef.current.has(msgId)) {
+              return;
+            }
+            processedIdsRef.current.add(msgId);
+
+            // Only add if not currently streaming (avoid duplicates from our own sends)
+            if (payload.type === 'user') {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: msgId,
+                  role: 'user',
+                  content: payload.data.content,
+                  external: true,  // Mark as external message
+                },
+              ]);
+            } else if (payload.type === 'assistant') {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: msgId,
+                  role: 'assistant',
+                  content: payload.data.content,
+                  model: payload.data.model,
+                  delegated: payload.data.delegated,
+                  local: payload.data.local,
+                  latency: payload.data.latency_ms,
+                  external: true,
+                },
+              ]);
+            }
+          } catch (e) {
+            console.error('[Chat WS] Failed to parse message:', e);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log('[Chat WS] Disconnected, reconnecting in 3s...');
+          setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = (e) => {
+          console.error('[Chat WS] Error:', e);
+        };
+
+        wsRef.current = ws;
+      } catch (e) {
+        console.error('[Chat WS] Failed to connect:', e);
+        setTimeout(connectWebSocket, 3000);
+      }
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
 
   // Execute a slash command
   const executeSlashCommand = useCallback(async (text, parsed) => {

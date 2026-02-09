@@ -188,7 +188,10 @@ class MemoryGraph:
         """
         await self.db.execute(query, (from_id, to_id, relationship, strength, created_at.isoformat()))
 
-        logger.debug(f"Added edge: {from_id} --{relationship}[{strength}]--> {to_id}")
+        logger.info(
+            f"GRAPH_EDGE_ADDED: {from_id} --{relationship}[{strength:.2f}]--> {to_id} | "
+            f"total_edges={self._graph.number_of_edges()}"
+        )
 
         return Edge(
             from_id=from_id,

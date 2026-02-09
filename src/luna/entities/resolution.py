@@ -1023,12 +1023,37 @@ class EntityResolver:
     # MENTION DETECTION (for context building)
     # =========================================================================
 
+    # Minimum length for entity name/alias matching
+    # Prevents garbage matches on single letters like "A", "I", "you"
+    MIN_ENTITY_NAME_LENGTH = 3
+
+    def _is_word_boundary_match(self, name: str, text: str) -> bool:
+        """
+        Check if name appears as a whole word in text (not substring).
+
+        Uses word boundary matching to prevent 'Mars' matching 'smart'.
+
+        Args:
+            name: Entity name or alias to search for
+            text: Text to search in
+
+        Returns:
+            True if name appears as a complete word
+        """
+        import re
+        # Escape special regex chars in name, use word boundaries
+        pattern = r'\b' + re.escape(name.lower()) + r'\b'
+        return bool(re.search(pattern, text.lower()))
+
     async def detect_mentions(self, text: str) -> list[Entity]:
         """
         Detect entity mentions in text.
 
         Scans text for known entity names and aliases, returning
         all entities that are mentioned.
+
+        FIX: Uses word boundary matching instead of substring matching
+        to prevent garbage matches on short names like "A", "I", "you".
 
         Args:
             text: Text to scan for entity mentions
@@ -1043,7 +1068,6 @@ class EntityResolver:
         if not text or not text.strip():
             return []
 
-        text_lower = text.lower()
         mentioned = []
         seen_ids = set()
 
@@ -1062,20 +1086,29 @@ class EntityResolver:
             logger.info(f"[TRACE] Found {len(rows)} entities in database")
             for row in rows:
                 entity = self._row_to_entity(row)
+
+                # Skip entities with very short names (prevents "A", "I", "you" garbage matches)
+                if len(entity.name) < self.MIN_ENTITY_NAME_LENGTH:
+                    logger.debug(f"[TRACE]   - Skipping short name: '{entity.name}'")
+                    continue
+
                 logger.info(f"[TRACE]   - Checking: {entity.name}")
 
                 if entity.id in seen_ids:
                     continue
 
-                # Check name
-                if entity.name.lower() in text_lower:
+                # Check name using word boundary matching (not substring)
+                if self._is_word_boundary_match(entity.name, text):
                     mentioned.append(entity)
                     seen_ids.add(entity.id)
                     continue
 
-                # Check aliases
+                # Check aliases using word boundary matching
                 for alias in entity.aliases:
-                    if alias.lower() in text_lower:
+                    # Skip short aliases too
+                    if len(alias) < self.MIN_ENTITY_NAME_LENGTH:
+                        continue
+                    if self._is_word_boundary_match(alias, text):
                         mentioned.append(entity)
                         seen_ids.add(entity.id)
                         break

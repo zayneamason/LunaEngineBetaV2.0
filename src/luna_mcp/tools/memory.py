@@ -219,13 +219,8 @@ async def _end_auto_session():
         )
         turns = window_response.get("turns", [])
 
-        # Build conversation content
-        conversation_parts = []
-        for turn in turns:
-            role = turn.get("role", "unknown")
-            content = turn.get("content", "")
-            conversation_parts.append(f"{role}: {content}")
-        conversation_content = "\n\n".join(conversation_parts)
+        # Filter to user turns only — never extract assistant content
+        user_turns = [t for t in turns if t.get("role") == "user"]
 
         # End session
         await _call_api(
@@ -233,19 +228,22 @@ async def _end_auto_session():
             f"/hub/session/end?session_id={session_id}"
         )
 
-        # Trigger extraction if we have content
-        if conversation_content.strip():
-            logger.info(f"[AUTO-SESSION] Triggering extraction for {len(turns)} turns")
-            await _call_api(
-                "POST",
-                "/extraction/trigger",
-                json={
-                    "content": conversation_content,
-                    "role": "conversation",
-                    "session_id": session_id,
-                    "immediate": True
-                }
-            )
+        # Trigger extraction for each user turn individually
+        if user_turns:
+            logger.info(f"[AUTO-SESSION] Triggering extraction for {len(user_turns)} user turns (filtered from {len(turns)} total)")
+            for turn in user_turns:
+                content = turn.get("content", "").strip()
+                if content:
+                    await _call_api(
+                        "POST",
+                        "/extraction/trigger",
+                        json={
+                            "content": content,
+                            "role": "user",
+                            "session_id": session_id,
+                            "immediate": True
+                        }
+                    )
 
         logger.info(f"[AUTO-SESSION] Session ended successfully: {session_id}")
 
@@ -776,15 +774,9 @@ async def luna_end_session(session_id: Optional[str] = None) -> str:
 
         logger.info(f"[TRACE] luna_end_session: fetched {len(window_response.get('turns', []))} turns")
 
-        # Build conversation content from turns
+        # Filter to user turns only — never extract assistant content
         turns = window_response.get("turns", [])
-        conversation_parts = []
-        for turn in turns:
-            role = turn.get("role", "unknown")
-            content = turn.get("content", "")
-            conversation_parts.append(f"{role}: {content}")
-
-        conversation_content = "\n\n".join(conversation_parts)
+        user_turns = [t for t in turns if t.get("role") == "user"]
 
         # End the session
         await _call_api(
@@ -794,26 +786,29 @@ async def luna_end_session(session_id: Optional[str] = None) -> str:
 
         logger.info(f"[TRACE] luna_end_session: session ended")
 
-        # Trigger extraction with the actual conversation content
+        # Trigger extraction for each user turn individually
         objects_extracted = 0
-        if conversation_content.strip():
-            logger.info(f"[TRACE] luna_end_session: triggering extraction with {len(conversation_content)} chars")
+        if user_turns:
+            logger.info(f"[TRACE] luna_end_session: triggering extraction for {len(user_turns)} user turns (filtered from {len(turns)} total)")
 
-            extraction_response = await _call_api(
-                "POST",
-                "/extraction/trigger",
-                json={
-                    "content": conversation_content,
-                    "role": "conversation",
-                    "session_id": effective_session_id,
-                    "immediate": True
-                }
-            )
+            for turn in user_turns:
+                content = turn.get("content", "").strip()
+                if content:
+                    extraction_response = await _call_api(
+                        "POST",
+                        "/extraction/trigger",
+                        json={
+                            "content": content,
+                            "role": "user",
+                            "session_id": effective_session_id,
+                            "immediate": True
+                        }
+                    )
+                    objects_extracted += extraction_response.get("objects_extracted", 0)
 
-            logger.info(f"[TRACE] luna_end_session extraction response: {extraction_response}")
-            objects_extracted = extraction_response.get("objects_extracted", 0)
+            logger.info(f"[TRACE] luna_end_session extraction total: {objects_extracted} objects")
         else:
-            logger.info(f"[TRACE] luna_end_session: no content to extract")
+            logger.info(f"[TRACE] luna_end_session: no user content to extract")
 
         # Clear current session
         if effective_session_id == _current_session_id:

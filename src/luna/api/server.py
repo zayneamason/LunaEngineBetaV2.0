@@ -11,6 +11,19 @@ Endpoints:
 - GET /health - Health check
 """
 
+# Load .env before any other imports (providers check env at import time)
+import os
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    # Find project root (src/luna/api/server.py -> project root)
+    _project_root = Path(__file__).parent.parent.parent.parent
+    _env_path = _project_root / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path)
+except ImportError:
+    pass  # dotenv not installed
+
 import asyncio
 import json
 import logging
@@ -32,7 +45,103 @@ from luna.actors.base import Message
 from luna.agentic.router import ExecutionPath
 from luna.diagnostics import run_startup_check, start_watchdog
 
+# QA System imports
+try:
+    from luna.qa import QAValidator, InferenceContext, get_default_assertions
+    from luna.qa.validator import get_validator as get_qa_validator
+    from luna.qa.assertions import Assertion, PatternConfig
+    QA_AVAILABLE = True
+except ImportError:
+    QA_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# QA Background Validation
+# =============================================================================
+
+async def _run_qa_validation_background(
+    query: str,
+    response_text: str,
+    response_data: dict,
+) -> None:
+    """
+    Run QA validation in background (fire-and-forget).
+
+    This does not block the response to the user.
+    """
+    if not QA_AVAILABLE:
+        return
+
+    try:
+        validator = get_qa_validator()
+
+        # Get personality info from director
+        personality_injected = False
+        personality_length = 0
+        system_prompt = ""
+        virtues_loaded = False
+        narration_applied = response_data.get("narration_applied", False)
+
+        if _engine:
+            director = _engine.get_actor("director")
+            if director:
+                prompt_info = director.get_last_system_prompt()
+                if prompt_info.get("available"):
+                    system_prompt = prompt_info.get("full_prompt", "")
+                    personality_length = prompt_info.get("length", 0)
+                    personality_injected = personality_length > 1000
+                    # Check if virtues/identity loaded
+                    virtues_loaded = getattr(director, "_identity_buffer", None) is not None
+
+        # Get memory stats for QA assertions
+        memory_stats = {}
+        if _engine:
+            matrix = _engine.get_actor("matrix")
+            if matrix:
+                mem = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None)
+                if mem:
+                    try:
+                        memory_stats = await mem.get_stats()
+                    except Exception:
+                        pass
+
+        # Build inference context from response data
+        ctx = InferenceContext(
+            query=query,
+            final_response=response_text,
+            raw_response=response_text,
+            provider_used=response_data.get("model", "unknown"),
+            latency_ms=response_data.get("latency_ms", 0),
+            input_tokens=response_data.get("input_tokens", 0),
+            output_tokens=response_data.get("output_tokens", 0),
+            # Infer route from delegation flags
+            route="FULL_DELEGATION" if response_data.get("delegated") else "LOCAL_ONLY",
+            # Mark if local model was used
+            providers_tried=[response_data.get("model", "unknown")],
+            # Personality tracking
+            personality_injected=personality_injected,
+            personality_length=personality_length,
+            system_prompt=system_prompt,
+            virtues_loaded=virtues_loaded,
+            narration_applied=narration_applied,
+            memory_stats=memory_stats,
+        )
+
+        # Run validation (this stores the report automatically)
+        report = validator.validate(ctx)
+
+        if not report.passed:
+            logger.warning(
+                f"[QA] Inference failed {report.failed_count} assertions: "
+                f"{[a.id for a in report.failed_assertions]}"
+            )
+        else:
+            logger.debug(f"[QA] Inference passed all {len(report.assertions)} assertions")
+
+    except Exception as e:
+        logger.error(f"[QA] Background validation error: {e}")
 
 # Global engine instance
 _engine: Optional[LunaEngine] = None
@@ -41,8 +150,37 @@ _engine: Optional[LunaEngine] = None
 _orb_state_manager: Optional[OrbStateManager] = None
 _orb_websockets: set[WebSocket] = set()
 
+# Global chat WebSocket connections (for shared session viewing)
+_chat_websockets: set[WebSocket] = set()
+
 # Global performance orchestrator (coordinates voice + orb)
 _performance_orchestrator: Optional[PerformanceOrchestrator] = None
+
+
+async def _broadcast_chat_message(message_type: str, data: dict) -> None:
+    """
+    Broadcast a chat message to all connected WebSocket clients.
+
+    This enables multiple viewers to see the same conversation in real-time.
+    message_type: 'user' | 'assistant' | 'system'
+    """
+    if not _chat_websockets:
+        return
+
+    payload = {
+        "type": message_type,
+        "data": data,
+        "timestamp": asyncio.get_event_loop().time(),
+    }
+
+    disconnected = set()
+    for ws in _chat_websockets:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            disconnected.add(ws)
+
+    _chat_websockets.difference_update(disconnected)
 
 
 class MessageRequest(BaseModel):
@@ -274,6 +412,47 @@ async def orb_websocket(websocket: WebSocket):
         logger.info(f"Orb WebSocket disconnected. Total: {len(_orb_websockets)}")
 
 
+@app.websocket("/ws/chat")
+async def chat_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for shared chat session viewing.
+
+    Clients receive JSON updates for all messages (user and assistant):
+    {
+        "type": "user" | "assistant" | "system",
+        "data": {
+            "content": "message text",
+            "model": "...",  // for assistant
+            "metadata": {...}
+        },
+        "timestamp": 1234567890
+    }
+
+    This allows multiple viewers to see the same conversation in real-time,
+    including messages sent via API (curl, MCP, etc).
+    """
+    await websocket.accept()
+    _chat_websockets.add(websocket)
+    logger.info(f"Chat WebSocket connected. Total: {len(_chat_websockets)}")
+
+    # Send connection confirmation
+    await websocket.send_json({
+        "type": "system",
+        "data": {"content": "Connected to Luna chat stream"},
+        "timestamp": asyncio.get_event_loop().time(),
+    })
+
+    try:
+        while True:
+            # Keep connection alive, ignore incoming messages
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _chat_websockets.discard(websocket)
+        logger.info(f"Chat WebSocket disconnected. Total: {len(_chat_websockets)}")
+
+
 @app.post("/message", response_model=MessageResponse)
 async def send_message(request: MessageRequest):
     """
@@ -304,6 +483,23 @@ async def send_message(request: MessageRequest):
             response_future,
             timeout=request.timeout
         )
+
+        # Fire-and-forget QA validation (non-blocking)
+        asyncio.create_task(
+            _run_qa_validation_background(request.message, text, data)
+        )
+
+        # Broadcast to all chat WebSocket clients (non-blocking)
+        asyncio.create_task(_broadcast_chat_message("user", {
+            "content": request.message,
+        }))
+        asyncio.create_task(_broadcast_chat_message("assistant", {
+            "content": text,
+            "model": data.get("model", "unknown"),
+            "delegated": data.get("delegated", False),
+            "local": data.get("local", False),
+            "latency_ms": data.get("latency_ms", 0),
+        }))
 
         return MessageResponse(
             text=text,
@@ -4477,6 +4673,117 @@ async def set_current_provider(request: SetProviderRequest):
     }
 
 
+# ==============================================================================
+# Fallback Chain Endpoints
+# ==============================================================================
+
+
+@app.get("/llm/fallback-chain")
+async def get_fallback_chain():
+    """Get current fallback chain configuration and status."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    director = _engine.get_actor("director")
+    if not director:
+        raise HTTPException(status_code=503, detail="Director not available")
+
+    fallback_chain = getattr(director, '_fallback_chain', None)
+    if not fallback_chain:
+        return {
+            "success": False,
+            "error": "Fallback chain not initialized",
+            "chain": [],
+            "providers": {},
+        }
+
+    registry = _get_llm_registry()
+
+    # Build provider status
+    providers = {}
+    for name in fallback_chain.get_chain():
+        if name == "local":
+            local = getattr(director, '_local', None)
+            providers[name] = {
+                "available": local is not None and local.is_loaded if local else False,
+                "in_chain": True,
+                "type": "local",
+            }
+        else:
+            provider = registry.get(name) if registry else None
+            providers[name] = {
+                "available": provider.is_available if provider else False,
+                "in_chain": True,
+                "type": "registry",
+            }
+
+    return {
+        "success": True,
+        "chain": fallback_chain.get_chain(),
+        "providers": providers,
+    }
+
+
+class SetFallbackChainRequest(BaseModel):
+    """Request to set fallback chain order."""
+    chain: list[str]
+
+
+@app.post("/llm/fallback-chain")
+async def set_fallback_chain(request: SetFallbackChainRequest):
+    """Set fallback chain order."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    director = _engine.get_actor("director")
+    if not director:
+        raise HTTPException(status_code=503, detail="Director not available")
+
+    fallback_chain = getattr(director, '_fallback_chain', None)
+    if not fallback_chain:
+        raise HTTPException(status_code=503, detail="Fallback chain not initialized")
+
+    if not request.chain:
+        raise HTTPException(status_code=400, detail="Chain cannot be empty")
+
+    # Update chain
+    warnings = fallback_chain.set_chain(request.chain)
+
+    # Persist to config file
+    try:
+        from luna.llm.fallback_config import FallbackConfig
+        config = FallbackConfig(chain=request.chain)
+        config.save()
+    except Exception as e:
+        warnings.append(f"Failed to persist config: {e}")
+
+    return {
+        "success": True,
+        "chain": fallback_chain.get_chain(),
+        "warnings": warnings,
+    }
+
+
+@app.get("/llm/fallback-chain/stats")
+async def get_fallback_stats():
+    """Get fallback chain statistics."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    director = _engine.get_actor("director")
+    if not director:
+        return {"total_requests": 0, "by_provider": {}, "fallback_events": 0}
+
+    fallback_chain = getattr(director, '_fallback_chain', None)
+    if not fallback_chain:
+        return {"total_requests": 0, "by_provider": {}, "fallback_events": 0}
+
+    return {
+        "success": True,
+        **fallback_chain.get_stats(),
+    }
+
+
 @app.get("/slash/llm", response_model=SlashCommandResponse)
 async def slash_llm():
     """
@@ -4529,6 +4836,70 @@ async def slash_llm_switch(provider_name: str):
     )
 
 
+@app.get("/slash/prompt", response_model=SlashCommandResponse)
+async def slash_prompt():
+    """
+    /prompt - Show the last system prompt sent to the LLM.
+
+    Useful for debugging:
+    - What context is reaching the model?
+    - Is the LoRA being used or is it a prompt issue?
+    - Was this routed to local (Qwen) or delegated (Claude)?
+    """
+    global _engine
+
+    if not _engine:
+        return SlashCommandResponse(
+            command="/prompt",
+            success=False,
+            data={"error": "Engine not initialized"},
+            formatted="**Error:** Luna engine not running.",
+        )
+
+    director = _engine.get_actor("director")
+    if not director:
+        return SlashCommandResponse(
+            command="/prompt",
+            success=False,
+            data={"error": "Director not found"},
+            formatted="**Error:** Director actor not available.",
+        )
+
+    prompt_info = director.get_last_system_prompt()
+
+    if not prompt_info.get("available"):
+        return SlashCommandResponse(
+            command="/prompt",
+            success=False,
+            data=prompt_info,
+            formatted=f"**No prompt available**\n{prompt_info.get('message', 'Send a message first.')}",
+        )
+
+    route = prompt_info.get("route_decision", "unknown")
+    length = prompt_info.get("length", 0)
+    preview = prompt_info.get("preview", "")
+
+    # Format for display
+    route_emoji = "🏠" if route == "local" else "☁️"
+    formatted = f"""**{route_emoji} Last System Prompt** ({route})
+
+**Length:** {length} chars
+
+**Preview:**
+```
+{preview}
+```
+
+*Use browser console or logs for full prompt.*"""
+
+    return SlashCommandResponse(
+        command="/prompt",
+        success=True,
+        data=prompt_info,
+        formatted=formatted,
+    )
+
+
 @app.get("/slash/vk", response_model=SlashCommandResponse)
 @app.get("/slash/voight-kampff", response_model=SlashCommandResponse)
 async def slash_voight_kampff(layer: int = None):
@@ -4548,8 +4919,8 @@ async def slash_voight_kampff(layer: int = None):
     from pathlib import Path
     import sys
 
-    # Add scripts path for import
-    scripts_path = Path(__file__).parent.parent.parent.parent / "scripts"
+    # Add scripts/utils path for import
+    scripts_path = Path(__file__).parent.parent.parent.parent / "scripts" / "utils"
     if str(scripts_path) not in sys.path:
         sys.path.insert(0, str(scripts_path))
 
@@ -4641,8 +5012,757 @@ async def slash_voight_kampff(layer: int = None):
             command="/vk",
             success=False,
             data={"error": str(e)},
-            formatted=f"**❌ Voight-Kampff Test Failed**\n\n{e}\n\nTry running manually:\n`.venv/bin/python scripts/voight_kampff.py`",
+            formatted=f"**❌ Voight-Kampff Test Failed**\n\n{e}\n\nTry running manually:\n`.venv/bin/python scripts/utils/voight_kampff.py`",
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA SYSTEM ENDPOINTS
+# Luna QA v2 — Live validation system for inference quality
+# ═══════════════════════════════════════════════════════════════════════════
+
+class QAHealthResponse(BaseModel):
+    """Response from /qa/health endpoint."""
+    pass_rate: float
+    total_24h: int
+    failed_24h: int
+    failing_bugs: int
+    recent_failures: list[str]
+    top_failures: list[dict] = []
+
+
+class QAReportResponse(BaseModel):
+    """Response from /qa/last endpoint."""
+    inference_id: str
+    timestamp: str
+    query: str
+    route: str
+    provider_used: str
+    latency_ms: float
+    passed: bool
+    failed_count: int
+    diagnosis: Optional[str]
+    assertions: list[dict]
+    context: dict
+
+
+class QAStatsResponse(BaseModel):
+    """Response from /qa/stats endpoint."""
+    total: int
+    passed: int
+    failed: int
+    pass_rate: float
+    time_range: str
+    top_failures: list[dict] = []
+
+
+class QAAssertionResponse(BaseModel):
+    """Response from /qa/assertions endpoint."""
+    id: str
+    name: str
+    description: str = ""
+    category: str
+    severity: str
+    enabled: bool
+    check_type: str
+
+
+class QABugResponse(BaseModel):
+    """Response from /qa/bugs endpoint."""
+    id: str
+    name: str
+    query: str
+    expected_behavior: str
+    actual_behavior: str
+    status: str
+    severity: str
+
+
+@app.get("/qa/health", response_model=QAHealthResponse)
+async def qa_get_health():
+    """
+    Get QA system health summary.
+
+    Returns pass rate, failure counts, and recent issues.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    health = validator.get_health()
+    return QAHealthResponse(**health)
+
+
+@app.get("/qa/last")
+async def qa_get_last_report():
+    """
+    Get the most recent QA report.
+
+    Returns full details of the last inference validation.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    report = validator.get_last_report()
+
+    if not report:
+        return {"error": "No reports yet"}
+
+    return report.to_dict()
+
+
+@app.get("/qa/stats", response_model=QAStatsResponse)
+async def qa_get_stats(time_range: str = "24h"):
+    """
+    Get QA statistics for a time range.
+
+    Args:
+        time_range: "1h", "24h", "7d", "30d"
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    stats = validator.get_stats(time_range)
+    return QAStatsResponse(**stats)
+
+
+@app.get("/qa/stats/detailed")
+async def qa_get_stats_detailed(time_range: str = "7d"):
+    """
+    Get detailed QA statistics with breakdowns.
+
+    Returns:
+        - Basic stats (total, passed, failed, pass_rate)
+        - Trend data (daily breakdown)
+        - By route breakdown
+        - By provider breakdown
+        - By assertion breakdown
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+
+    validator = get_qa_validator()
+    db = validator._db
+
+    # Get time range
+    hours = {"1h": 1, "24h": 24, "7d": 168, "30d": 720}.get(time_range, 168)
+    since = datetime.now() - timedelta(hours=hours)
+
+    # Get all reports in range
+    reports = db.get_recent_reports(500)  # Get enough for analysis
+    reports_in_range = [
+        r for r in reports
+        if datetime.fromisoformat(r["timestamp"]) > since
+    ]
+
+    # Basic stats
+    total = len(reports_in_range)
+    passed = sum(1 for r in reports_in_range if r["passed"])
+    failed = total - passed
+
+    # Trend data (group by day)
+    trend_data = defaultdict(lambda: {"passed": 0, "failed": 0})
+    for r in reports_in_range:
+        date = datetime.fromisoformat(r["timestamp"]).strftime("%b %d")
+        if r["passed"]:
+            trend_data[date]["passed"] += 1
+        else:
+            trend_data[date]["failed"] += 1
+
+    trend = [
+        {"date": date, "passed": data["passed"], "failed": data["failed"]}
+        for date, data in sorted(trend_data.items())
+    ][-7:]  # Last 7 days
+
+    # By route breakdown
+    by_route = defaultdict(lambda: {"passed": 0, "failed": 0})
+    for r in reports_in_range:
+        route = r.get("route", "unknown")
+        if r["passed"]:
+            by_route[route]["passed"] += 1
+        else:
+            by_route[route]["failed"] += 1
+
+    # By provider breakdown
+    by_provider = defaultdict(lambda: {"passed": 0, "failed": 0})
+    for r in reports_in_range:
+        provider = r.get("provider_used", "unknown")
+        if r["passed"]:
+            by_provider[provider]["passed"] += 1
+        else:
+            by_provider[provider]["failed"] += 1
+
+    # By assertion breakdown
+    by_assertion = defaultdict(lambda: {"name": "", "passed": 0, "failed": 0})
+    for r in reports_in_range:
+        for a in r.get("assertions", []):
+            aid = a.get("id", "unknown")
+            by_assertion[aid]["name"] = a.get("name", aid)
+            if a.get("passed"):
+                by_assertion[aid]["passed"] += 1
+            else:
+                by_assertion[aid]["failed"] += 1
+
+    return {
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "pass_rate": passed / total if total > 0 else 0,
+        "time_range": time_range,
+        "trend": trend,
+        "by_route": dict(by_route),
+        "by_provider": dict(by_provider),
+        "by_assertion": dict(by_assertion),
+    }
+
+
+@app.get("/qa/history")
+async def qa_get_history(limit: int = 100):
+    """
+    Get QA report history.
+
+    Args:
+        limit: Maximum number of reports to return
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    return validator.get_history(limit)
+
+
+@app.get("/qa/assertions")
+async def qa_list_assertions():
+    """
+    List all configured assertions.
+
+    Returns both built-in and custom assertions.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    return [
+        {
+            "id": a.id,
+            "name": a.name,
+            "description": a.description,
+            "category": a.category,
+            "severity": a.severity,
+            "enabled": a.enabled,
+            "check_type": a.check_type,
+        }
+        for a in validator.get_assertions()
+    ]
+
+
+class AddAssertionRequest(BaseModel):
+    """Request body for adding a custom assertion."""
+    name: str
+    category: str  # structural, voice, personality, flow
+    severity: str  # critical, high, medium, low
+    target: str  # response, raw_response, system_prompt, query
+    condition: str  # contains, not_contains, regex, length_gt, length_lt
+    pattern: str
+    case_sensitive: bool = False
+
+
+@app.post("/qa/assertions")
+async def qa_add_assertion(req: AddAssertionRequest):
+    """
+    Add a custom pattern-based assertion.
+
+    Example:
+        POST /qa/assertions
+        {
+            "name": "No French",
+            "category": "voice",
+            "severity": "medium",
+            "target": "response",
+            "condition": "not_contains",
+            "pattern": "bonjour"
+        }
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    import uuid
+    validator = get_qa_validator()
+
+    assertion = Assertion(
+        id=f"CUSTOM-{uuid.uuid4().hex[:6].upper()}",
+        name=req.name,
+        description=f"Custom: {req.condition} '{req.pattern}' in {req.target}",
+        category=req.category,
+        severity=req.severity,
+        check_type="pattern",
+        pattern_config=PatternConfig(
+            target=req.target,
+            match_type=req.condition,
+            pattern=req.pattern,
+            case_sensitive=req.case_sensitive,
+        ),
+    )
+
+    assertion_id = validator.add_assertion(assertion)
+    return {"assertion_id": assertion_id, "name": req.name}
+
+
+@app.put("/qa/assertions/{assertion_id}")
+async def qa_toggle_assertion(assertion_id: str, enabled: bool):
+    """
+    Enable or disable an assertion.
+
+    Args:
+        assertion_id: The assertion ID (e.g., "P1", "CUSTOM-ABC123")
+        enabled: Whether to enable (true) or disable (false)
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    success = validator.toggle_assertion(assertion_id, enabled)
+    return {"success": success, "assertion_id": assertion_id, "enabled": enabled}
+
+
+@app.delete("/qa/assertions/{assertion_id}")
+async def qa_delete_assertion(assertion_id: str):
+    """
+    Delete a custom assertion.
+
+    Note: Built-in assertions (P1, S1, V1, F1, etc.) cannot be deleted.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    success = validator.delete_assertion(assertion_id)
+
+    if not success:
+        raise HTTPException(status_code=400, detail="Cannot delete built-in assertions")
+
+    return {"success": success}
+
+
+# ═══════════════════════════════════════════════════════════
+# QA BUG ENDPOINTS
+# ═══════════════════════════════════════════════════════════
+
+@app.get("/qa/bugs")
+async def qa_list_bugs(status: str = None):
+    """
+    List known bugs.
+
+    Args:
+        status: Filter by status (open, failing, fixed, wontfix)
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    if status:
+        return validator._db.get_bugs_by_status(status)
+    return validator._db.get_all_bugs()
+
+
+class AddBugRequest(BaseModel):
+    """Request body for adding a bug."""
+    name: str
+    query: str
+    expected_behavior: str
+    actual_behavior: str
+    severity: str = "high"
+
+
+@app.post("/qa/bugs")
+async def qa_add_bug(req: AddBugRequest):
+    """
+    Add a known bug to the regression database.
+
+    This bug will be tested in regression runs.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    bug_id = validator._db.generate_bug_id()
+    validator._db.store_bug({
+        "id": bug_id,
+        "name": req.name,
+        "query": req.query,
+        "expected_behavior": req.expected_behavior,
+        "actual_behavior": req.actual_behavior,
+        "severity": req.severity,
+    })
+    return {"bug_id": bug_id, "name": req.name}
+
+
+@app.post("/qa/bugs/from-last")
+async def qa_add_bug_from_last(name: str, expected_behavior: str):
+    """
+    Create a bug from the last failed QA report.
+
+    Automatically captures query and actual behavior.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    report = validator.get_last_report()
+
+    if not report:
+        raise HTTPException(status_code=404, detail="No reports available")
+
+    bug_id = validator._db.generate_bug_id()
+    validator._db.store_bug({
+        "id": bug_id,
+        "name": name,
+        "query": report.query,
+        "expected_behavior": expected_behavior,
+        "actual_behavior": report.context.final_response[:500],
+        "affected_assertions": [a.id for a in report.failed_assertions],
+    })
+
+    return {"bug_id": bug_id, "query": report.query}
+
+
+@app.get("/qa/bugs/{bug_id}")
+async def qa_get_bug(bug_id: str):
+    """Get details for a specific bug."""
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    bug = validator._db.get_bug_by_id(bug_id)
+
+    if not bug:
+        raise HTTPException(status_code=404, detail=f"Bug {bug_id} not found")
+
+    return bug
+
+
+@app.put("/qa/bugs/{bug_id}")
+async def qa_update_bug_status(bug_id: str, status: str):
+    """
+    Update a bug's status.
+
+    Args:
+        status: open, failing, fixed, wontfix
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+    validator._db.update_bug_status(bug_id, status)
+    return {"bug_id": bug_id, "status": status}
+
+
+# ═══════════════════════════════════════════════════════════
+# QA SIMULATION ENDPOINT
+# ═══════════════════════════════════════════════════════════
+
+
+class SimulateRequest(BaseModel):
+    """Request body for /qa/simulate endpoint."""
+    query: str = Field(..., description="The query to simulate")
+    bug_id: Optional[str] = Field(None, description="Associated bug ID if testing a known bug")
+
+
+@app.post("/qa/simulate")
+async def qa_simulate(request: SimulateRequest):
+    """
+    Run a simulation against a specific query.
+
+    This sends the query through the full inference pipeline and validates
+    the response against QA assertions. Used for testing bug regressions.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    if not _engine:
+        raise HTTPException(status_code=503, detail="Engine not started")
+
+    import time
+    import uuid
+    from datetime import datetime
+
+    start_time = time.time()
+    inference_id = f"SIM-{uuid.uuid4().hex[:8]}"
+
+    try:
+        # Get the director actor to process the query
+        director = _engine.get_actor("director")
+        if not director:
+            raise HTTPException(status_code=503, detail="Director actor not available")
+
+        # Create an event and process it
+        event = InputEvent(type=EventType.USER_MESSAGE, payload=request.query)
+
+        # Process through the director
+        response = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None, lambda: director.process(Message(event=event))
+            ),
+            timeout=30.0
+        )
+
+        latency_ms = (time.time() - start_time) * 1000
+
+        # Get the validator and check the last report
+        validator = get_qa_validator()
+
+        # Build a basic InferenceContext for the simulation
+        from luna.qa import InferenceContext
+
+        ctx = InferenceContext(
+            inference_id=inference_id,
+            session_id="simulation",
+            timestamp=datetime.now(),
+            query=request.query,
+            route=getattr(response, "route", "SIMULATION"),
+            provider_used=getattr(response, "model", "unknown"),
+            providers_tried=[getattr(response, "model", "unknown")],
+            provider_errors={},
+            latency_ms=latency_ms,
+            input_tokens=getattr(response, "input_tokens", 0),
+            output_tokens=getattr(response, "output_tokens", 0),
+            personality_injected=True,
+            personality_length=0,
+            virtues_loaded=True,
+            narration_applied=True,
+            raw_response=getattr(response, "text", str(response)),
+            narrated_response=None,
+            final_response=getattr(response, "text", str(response)),
+        )
+
+        # Validate the response
+        report = validator.validate(ctx)
+
+        # Build response with results
+        result = {
+            "inference_id": inference_id,
+            "bug_id": request.bug_id,
+            "query": request.query,
+            "passed": report.passed,
+            "failed_count": report.failed_count,
+            "latency_ms": latency_ms,
+            "response": ctx.final_response,
+            "final_response": ctx.final_response,
+            "failed_assertions": [a.id for a in report.failed_assertions],
+            "diagnosis": report.diagnosis,
+            "assertions": [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "passed": a.passed,
+                    "severity": a.severity,
+                    "expected": a.expected,
+                    "actual": a.actual,
+                }
+                for a in report.assertions
+            ],
+        }
+
+        return result
+
+    except asyncio.TimeoutError:
+        return {
+            "inference_id": inference_id,
+            "bug_id": request.bug_id,
+            "query": request.query,
+            "passed": False,
+            "failed_count": 1,
+            "latency_ms": 30000,
+            "response": "Timeout",
+            "final_response": "Timeout",
+            "failed_assertions": ["TIMEOUT"],
+            "diagnosis": "Simulation timed out after 30 seconds",
+            "assertions": [],
+        }
+    except Exception as e:
+        logger.error(f"Simulation failed: {e}")
+        return {
+            "inference_id": inference_id,
+            "bug_id": request.bug_id,
+            "query": request.query,
+            "passed": False,
+            "failed_count": 1,
+            "latency_ms": (time.time() - start_time) * 1000,
+            "response": str(e),
+            "final_response": str(e),
+            "failed_assertions": ["EXCEPTION"],
+            "diagnosis": f"Simulation failed with exception: {e}",
+            "assertions": [],
+        }
+
+
+# ═══════════════════════════════════════════════════════════
+# QA SLASH COMMAND
+# ═══════════════════════════════════════════════════════════
+
+@app.get("/slash/qa", response_model=SlashCommandResponse)
+async def slash_qa():
+    """
+    /qa - Quick QA health check.
+
+    Shows pass rate, recent failures, and known bugs.
+    """
+    if not QA_AVAILABLE:
+        return SlashCommandResponse(
+            command="/qa",
+            success=False,
+            data={"error": "QA system not available"},
+            formatted="**❌ QA System Not Available**\n\nThe QA module failed to load.",
+        )
+
+    validator = get_qa_validator()
+    health = validator.get_health()
+
+    # Build formatted output
+    pass_rate = health.get("pass_rate", 0) * 100
+    status_icon = "✅" if pass_rate >= 90 else "⚠️" if pass_rate >= 70 else "❌"
+
+    lines = [
+        f"**{status_icon} QA Health: {pass_rate:.1f}% pass rate**",
+        "",
+        f"• Total (24h): {health.get('total_24h', 0)}",
+        f"• Failed (24h): {health.get('failed_24h', 0)}",
+        f"• Open bugs: {health.get('failing_bugs', 0)}",
+    ]
+
+    if health.get("recent_failures"):
+        lines.append("")
+        lines.append("**Recent failures:**")
+        for name in health.get("recent_failures", [])[:5]:
+            lines.append(f"  • {name}")
+
+    if health.get("top_failures"):
+        lines.append("")
+        lines.append("**Top failing assertions:**")
+        for f in health.get("top_failures", [])[:3]:
+            lines.append(f"  • {f['name']} ({f['count']}x)")
+
+    return SlashCommandResponse(
+        command="/qa",
+        success=pass_rate >= 70,
+        data=health,
+        formatted="\n".join(lines),
+    )
+
+
+@app.get("/slash/qa-last", response_model=SlashCommandResponse)
+async def slash_qa_last():
+    """
+    /qa-last - Show last QA report details.
+    """
+    if not QA_AVAILABLE:
+        return SlashCommandResponse(
+            command="/qa-last",
+            success=False,
+            data={"error": "QA system not available"},
+            formatted="**❌ QA System Not Available**",
+        )
+
+    validator = get_qa_validator()
+    report = validator.get_last_report()
+
+    if not report:
+        return SlashCommandResponse(
+            command="/qa-last",
+            success=True,
+            data={"message": "No reports yet"},
+            formatted="No QA reports yet. Send a message to generate one.",
+        )
+
+    # Build formatted output
+    status_icon = "✅" if report.passed else "❌"
+    lines = [
+        f"**{status_icon} Last QA Report**",
+        "",
+        f"• Query: \"{report.query[:50]}{'...' if len(report.query) > 50 else ''}\"",
+        f"• Route: {report.route}",
+        f"• Provider: {report.provider_used}",
+        f"• Latency: {report.latency_ms:.0f}ms",
+        "",
+    ]
+
+    if report.passed:
+        lines.append(f"All {len(report.assertions)} assertions passed.")
+    else:
+        lines.append(f"**{report.failed_count} assertion(s) failed:**")
+        for a in report.failed_assertions:
+            lines.append(f"  • [{a.severity}] {a.name}: {a.actual}")
+
+        if report.diagnosis:
+            lines.append("")
+            lines.append(f"**Diagnosis:** {report.diagnosis[:200]}{'...' if len(report.diagnosis) > 200 else ''}")
+
+    return SlashCommandResponse(
+        command="/qa-last",
+        success=report.passed,
+        data=report.to_dict(),
+        formatted="\n".join(lines),
+    )
+
+
+# ═══════════════════════════════════════════════════════════
+# VOIGHT-KAMPFF ENDPOINTS
+# ═══════════════════════════════════════════════════════════
+
+
+@app.get("/vk/results/voice-memory")
+async def get_vk_voice_memory_results():
+    """
+    Get the latest Voice Memory VK test results.
+
+    Returns the results from the last test run, loaded from the JSON file.
+    """
+    import json
+    from pathlib import Path
+
+    results_path = Path(__file__).parent.parent.parent.parent / "Docs" / "Handoffs" / "VoightKampffResults" / "voice_memory_results.json"
+
+    if not results_path.exists():
+        raise HTTPException(status_code=404, detail="No test results found. Run the test suite first.")
+
+    try:
+        with open(results_path) as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load results: {e}")
+
+
+@app.get("/vk/results/latest")
+async def get_vk_latest_results():
+    """
+    Get the latest VK test results from any suite.
+    """
+    import json
+    from pathlib import Path
+
+    results_dir = Path(__file__).parent.parent.parent.parent / "Docs" / "Handoffs" / "VoightKampffResults"
+
+    if not results_dir.exists():
+        raise HTTPException(status_code=404, detail="No test results directory found")
+
+    # Find most recent results file
+    result_files = list(results_dir.glob("*_results.json"))
+    if not result_files:
+        raise HTTPException(status_code=404, detail="No test results found")
+
+    # Sort by modification time, get most recent
+    latest = max(result_files, key=lambda p: p.stat().st_mtime)
+
+    try:
+        with open(latest) as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load results: {e}")
 
 
 def create_app() -> FastAPI:

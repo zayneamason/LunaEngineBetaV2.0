@@ -224,13 +224,13 @@ class ExtractionConfig:
 # Backend configurations
 EXTRACTION_BACKENDS = {
     "haiku": {
-        "model": "claude-3-haiku-20240307",
-        "cost_per_1k_input": 0.00025,
-        "cost_per_1k_output": 0.00125,
+        "model": "claude-haiku-4-5-20251001",
+        "cost_per_1k_input": 0.0008,
+        "cost_per_1k_output": 0.004,
         "quality": "good",
     },
     "sonnet": {
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-4-5-20250929",
         "cost_per_1k_input": 0.003,
         "cost_per_1k_output": 0.015,
         "quality": "excellent",

@@ -233,6 +233,7 @@ class MemoryMatrix:
             enable_embeddings: Whether to auto-generate embeddings on add_node (default True)
         """
         self.db = db
+        self.graph: Optional["MemoryGraph"] = None  # Set by MatrixActor after init
         self._enable_embeddings = enable_embeddings
         self._embedding_store: Optional[EmbeddingStore] = None
         self._embedding_generator: Optional[EmbeddingGenerator] = None
@@ -970,6 +971,56 @@ class MemoryMatrix:
                 if len(rows) >= 50:
                     break
 
+        # =====================================================================
+        # GRAPH EXPANSION: Use spreading activation to find connected nodes
+        # =====================================================================
+        # If we found keyword matches, expand through graph to find related nodes
+        # that keyword search would miss (e.g., "Mars College" -> Robot Body -> Tarcila)
+        if rows and self.graph:
+            try:
+                # Get IDs from keyword results as seed nodes
+                seed_ids = [row[0] for row in rows[:10]]  # Top 10 keyword hits
+
+                # Run spreading activation from seeds
+                activations = await self.graph.spreading_activation(
+                    start_nodes=seed_ids,
+                    decay=0.5,
+                    max_depth=2,
+                )
+
+                if activations:
+                    # Get activated node IDs not already in results
+                    existing_ids = {row[0] for row in rows}
+                    graph_ids = [
+                        (nid, score) for nid, score in activations.items()
+                        if nid not in existing_ids and score >= 0.2
+                    ]
+                    # Sort by activation score
+                    graph_ids.sort(key=lambda x: x[1], reverse=True)
+
+                    # Fetch the top graph-discovered nodes
+                    if graph_ids:
+                        graph_node_ids = [gid for gid, _ in graph_ids[:15]]
+                        placeholders = ",".join("?" * len(graph_node_ids))
+                        graph_rows = await self.db.fetchall(
+                            f"""
+                            SELECT * FROM memory_nodes
+                            WHERE id IN ({placeholders})
+                            ORDER BY lock_in DESC
+                            """,
+                            tuple(graph_node_ids)
+                        )
+                        rows.extend(graph_rows)
+                        logger.info(
+                            f"GRAPH_EXPAND: Added {len(graph_rows)} nodes via "
+                            f"spreading activation from {len(seed_ids)} seeds "
+                            f"({len(activations)} total activated)"
+                        )
+
+            except Exception as e:
+                # Graph expansion is supplementary - never block retrieval
+                logger.warning(f"GRAPH_EXPAND_FAIL: {type(e).__name__}: {e}")
+
         # Collect nodes within token budget, filtering out confusing identity nodes
         results = []
         total_chars = 0
@@ -1383,6 +1434,12 @@ class MemoryMatrix:
         )
         avg_lock_in = avg_lock_in_row[0] if avg_lock_in_row and avg_lock_in_row[0] else 0.15
 
+        # Total edges
+        edges_row = await self.db.fetchone(
+            "SELECT COUNT(*) FROM graph_edges"
+        )
+        total_edges = edges_row[0] if edges_row else 0
+
         return {
             "total_nodes": total_nodes,
             "nodes_by_type": nodes_by_type,
@@ -1393,6 +1450,7 @@ class MemoryMatrix:
             "avg_importance": avg_importance,
             "avg_access_count": avg_access_count,
             "avg_lock_in": avg_lock_in,
+            "total_edges": total_edges,
         }
 
     # =========================================================================
