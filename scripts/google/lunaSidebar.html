@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Google Sans', Roboto, Arial, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      padding: 16px;
+      background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%);
+      border-bottom: 1px solid rgba(139, 92, 246, 0.3);
+      flex-shrink: 0;
+    }
+    .header h2 {
+      font-size: 16px;
+      font-weight: 500;
+      color: #c4b5fd;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header .orb {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #a78bfa, #7c3aed);
+      box-shadow: 0 0 12px rgba(139, 92, 246, 0.6);
+      animation: breathe 3s ease-in-out infinite;
+    }
+    .header .orb.thinking {
+      animation: think 0.8s ease-in-out infinite;
+      background: radial-gradient(circle at 35% 35%, #c4b5fd, #8b5cf6);
+      box-shadow: 0 0 18px rgba(139, 92, 246, 0.9);
+    }
+    @keyframes breathe {
+      0%, 100% { opacity: 0.7; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+    @keyframes think {
+      0%, 100% { opacity: 0.6; transform: scale(0.95); }
+      50% { opacity: 1; transform: scale(1.25); }
+    }
+    .status-bar {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-top: 4px;
+    }
+    .status-bar .connected { color: #34d399; }
+    .status-bar .disconnected { color: #f87171; }
+
+    /* Offline Banner */
+    .offline-banner {
+      padding: 20px 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .offline-banner p {
+      font-size: 13px;
+      color: #9ca3af;
+      line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .offline-banner .cmd-box {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(139, 92, 246, 0.2);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: 'Roboto Mono', monospace;
+      font-size: 11px;
+      color: #a78bfa;
+      text-align: left;
+      margin-bottom: 12px;
+      position: relative;
+      word-break: break-all;
+    }
+    .offline-banner .copy-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: rgba(139, 92, 246, 0.2);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 4px;
+      color: #c4b5fd;
+      font-size: 10px;
+      padding: 2px 6px;
+      cursor: pointer;
+    }
+    .offline-banner .copy-btn:hover { background: rgba(139, 92, 246, 0.4); }
+    .retry-btn {
+      padding: 10px 24px;
+      border-radius: 10px;
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      background: rgba(139, 92, 246, 0.15);
+      color: #c4b5fd;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .retry-btn:hover {
+      background: rgba(139, 92, 246, 0.3);
+      border-color: rgba(139, 92, 246, 0.6);
+    }
+    .retry-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Welcome */
+    .welcome {
+      padding: 20px 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .welcome p {
+      font-size: 13px;
+      color: #9ca3af;
+      line-height: 1.5;
+    }
+    .welcome .suggestions {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .welcome .suggestion {
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(139, 92, 246, 0.2);
+      background: rgba(139, 92, 246, 0.06);
+      color: #c4b5fd;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: left;
+    }
+    .welcome .suggestion:hover {
+      background: rgba(139, 92, 246, 0.15);
+      border-color: rgba(139, 92, 246, 0.4);
+    }
+
+    /* Chat Area */
+    .chat-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .chat-area::-webkit-scrollbar { width: 4px; }
+    .chat-area::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.3); border-radius: 2px; }
+
+    .message {
+      max-width: 92%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      word-wrap: break-word;
+    }
+    .message.user {
+      align-self: flex-end;
+      background: rgba(139, 92, 246, 0.2);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      color: #e0e0e0;
+      border-bottom-right-radius: 4px;
+    }
+    .message.luna {
+      align-self: flex-start;
+      background: rgba(30, 30, 60, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #d1d5db;
+      border-bottom-left-radius: 4px;
+    }
+    .message.luna a {
+      color: #93c5fd;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .message.luna a:hover { text-decoration: underline; }
+    .message.error {
+      align-self: center;
+      background: rgba(248, 113, 113, 0.1);
+      border: 1px solid rgba(248, 113, 113, 0.3);
+      color: #fca5a5;
+      font-size: 12px;
+    }
+    .message.luna ul, .message.luna ol { margin: 6px 0; padding-left: 18px; }
+    .message.luna li { margin-bottom: 4px; }
+    .message.luna strong { color: #e5e7eb; }
+    .message.luna code {
+      background: rgba(139, 92, 246, 0.15);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: 'Roboto Mono', monospace;
+    }
+    .message.luna blockquote {
+      border-left: 2px solid rgba(139, 92, 246, 0.4);
+      padding-left: 10px;
+      margin: 6px 0;
+      color: #9ca3af;
+    }
+    .message.luna p { margin-bottom: 6px; }
+    .message.luna p:last-child { margin-bottom: 0; }
+
+    .typing {
+      align-self: flex-start;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #a78bfa;
+    }
+    .typing-dots {
+      display: inline-flex;
+      gap: 3px;
+      margin-left: 4px;
+    }
+    .typing-dots span {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #a78bfa;
+      animation: bounce 1.4s ease-in-out infinite;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30% { transform: translateY(-4px); opacity: 1; }
+    }
+
+    /* Input Area */
+    .input-area {
+      padding: 12px 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(22, 33, 62, 0.5);
+      flex-shrink: 0;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+    }
+    .input-row textarea {
+      flex: 1;
+      resize: none;
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 10px;
+      background: rgba(26, 26, 46, 0.8);
+      color: #e0e0e0;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      min-height: 40px;
+      max-height: 100px;
+    }
+    .input-row textarea:focus {
+      border-color: rgba(139, 92, 246, 0.6);
+      box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.1);
+    }
+    .input-row textarea::placeholder { color: #6b7280; }
+    .send-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: none;
+      background: #8b5cf6;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.15s;
+    }
+    .send-btn:hover { background: #7c3aed; }
+    .send-btn:disabled { background: #4b5563; cursor: not-allowed; }
+    .send-btn svg { width: 18px; height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2><span class="orb" id="orb"></span> Luna</h2>
+    <div class="status-bar">
+      <span id="status" class="disconnected">connecting...</span>
+    </div>
+  </div>
+
+  <div class="offline-banner" id="offlineBanner" style="display:none;">
+    <p>Luna's engine isn't running yet. Open your terminal and run:</p>
+    <div class="cmd-box">
+      ./scripts/launch_luna.sh
+      <button class="copy-btn" onclick="copyCmd()">copy</button>
+    </div>
+    <p style="font-size:11px; color:#6b7280; margin-bottom:12px;">then come back and hit retry</p>
+    <button class="retry-btn" id="retryBtn" onclick="retryConnection()">Retry Connection</button>
+  </div>
+
+  <div class="chat-area" id="chat">
+    <div class="welcome" id="welcome">
+      <p>hey — I'm Luna. ask me anything about the data room, or just say hi.</p>
+      <div class="suggestions">
+        <button class="suggestion" onclick="quickAction('hey luna')">say hi</button>
+        <button class="suggestion" onclick="quickAction('how\'s the data room looking?')">how's the data room looking?</button>
+        <button class="suggestion" onclick="quickAction('what are we missing for due diligence?')">what are we missing?</button>
+        <button class="suggestion" onclick="quickAction('show me our legal docs')">show me our legal docs</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-row">
+      <textarea id="input" placeholder="talk to Luna..." rows="1"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"></textarea>
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    var chatEl = document.getElementById('chat');
+    var inputEl = document.getElementById('input');
+    var sendBtn = document.getElementById('sendBtn');
+    var statusEl = document.getElementById('status');
+    var orbEl = document.getElementById('orb');
+    var welcomeEl = document.getElementById('welcome');
+    var offlineBanner = document.getElementById('offlineBanner');
+    var sending = false;
+
+    function setOnline() {
+      statusEl.textContent = 'online';
+      statusEl.className = 'connected';
+      offlineBanner.style.display = 'none';
+      chatEl.style.display = 'flex';
+      document.querySelector('.input-area').style.display = 'block';
+    }
+
+    function setOffline() {
+      statusEl.textContent = 'offline';
+      statusEl.className = 'disconnected';
+      offlineBanner.style.display = 'block';
+      chatEl.style.display = 'none';
+      document.querySelector('.input-area').style.display = 'none';
+    }
+
+    function checkStatus() {
+      google.script.run
+        .withSuccessHandler(function(result) {
+          if (result && result.connected) {
+            setOnline();
+          } else {
+            setOffline();
+          }
+        })
+        .withFailureHandler(function() {
+          setOffline();
+        })
+        .checkLunaStatus();
+    }
+
+    function retryConnection() {
+      var btn = document.getElementById('retryBtn');
+      btn.disabled = true;
+      btn.textContent = 'checking...';
+      statusEl.textContent = 'connecting...';
+
+      google.script.run
+        .withSuccessHandler(function(result) {
+          btn.disabled = false;
+          btn.textContent = 'Retry Connection';
+          if (result && result.connected) {
+            setOnline();
+          } else {
+            setOffline();
+            statusEl.textContent = 'still offline';
+          }
+        })
+        .withFailureHandler(function() {
+          btn.disabled = false;
+          btn.textContent = 'Retry Connection';
+          setOffline();
+        })
+        .checkLunaStatus();
+    }
+
+    function copyCmd() {
+      var text = './scripts/launch_luna.sh';
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text);
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      var btn = document.querySelector('.copy-btn');
+      btn.textContent = 'copied!';
+      setTimeout(function() { btn.textContent = 'copy'; }, 1500);
+    }
+
+    // Check Luna API status on load
+    checkStatus();
+
+    function addMessage(text, role) {
+      // Hide welcome on first message
+      if (welcomeEl) {
+        welcomeEl.style.display = 'none';
+        welcomeEl = null;
+      }
+
+      var div = document.createElement('div');
+      div.className = 'message ' + role;
+      if (role === 'luna') {
+        div.innerHTML = formatResponse(text);
+      } else {
+        div.textContent = text;
+      }
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+      return div;
+    }
+
+    function showTyping() {
+      orbEl.classList.add('thinking');
+      var div = document.createElement('div');
+      div.className = 'typing';
+      div.id = 'typing';
+      div.innerHTML = 'Luna is thinking<span class="typing-dots"><span></span><span></span><span></span></span>';
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function hideTyping() {
+      orbEl.classList.remove('thinking');
+      var el = document.getElementById('typing');
+      if (el) el.remove();
+    }
+
+    function formatResponse(text) {
+      var html = text
+        // Code blocks
+        .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+        // Inline code
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        // Bold
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        // Italic
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        // Links [text](url)
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,
+          '<a href="$2" target="_blank">$1</a>')
+        // Bullet lists
+        .replace(/^- (.+)$/gm, '<li>$1</li>')
+        // Numbered lists
+        .replace(/^\d+\.\s(.+)$/gm, '<li>$1</li>')
+        // Wrap consecutive <li> in <ul>
+        .replace(/((<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
+        // Paragraphs (double newline)
+        .replace(/\n\n/g, '</p><p>')
+        // Line breaks
+        .replace(/\n/g, '<br>');
+
+      // Wrap in paragraph tags
+      if (!html.startsWith('<')) {
+        html = '<p>' + html + '</p>';
+      }
+
+      return html;
+    }
+
+    function sendMessage() {
+      if (sending) return;
+      var text = inputEl.value.trim();
+      if (!text) return;
+
+      sending = true;
+      sendBtn.disabled = true;
+      inputEl.value = '';
+      inputEl.style.height = 'auto';
+
+      addMessage(text, 'user');
+      showTyping();
+
+      google.script.run
+        .withSuccessHandler(function(result) {
+          hideTyping();
+          sending = false;
+          sendBtn.disabled = false;
+
+          if (result && result.success) {
+            addMessage(result.response, 'luna');
+          } else {
+            addMessage(result ? result.error : 'no response from Luna', 'error');
+          }
+          inputEl.focus();
+        })
+        .withFailureHandler(function(err) {
+          hideTyping();
+          sending = false;
+          sendBtn.disabled = false;
+          addMessage('error: ' + (err.message || err), 'error');
+          inputEl.focus();
+        })
+        .askLuna(text);
+    }
+
+    function quickAction(query) {
+      inputEl.value = query;
+      sendMessage();
+    }
+
+    // Auto-resize textarea
+    inputEl.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+    });
+
+    // Focus input on load
+    inputEl.focus();
+  </script>
+</body>
+</html>
