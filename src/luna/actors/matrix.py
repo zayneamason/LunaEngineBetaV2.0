@@ -156,12 +156,15 @@ class MatrixActor(Actor):
                 node_type=payload.get("node_type", "FACT"),
                 tags=payload.get("tags", []),
                 confidence=payload.get("confidence", 100),
+                scope=payload.get("scope", "global"),
             )
 
         elif msg.type == "retrieve":
             ctx = await self.get_context(
                 query=payload.get("query", ""),
                 max_tokens=payload.get("max_tokens", 3800),
+                scope=payload.get("scope"),
+                scopes=payload.get("scopes"),
             )
             logger.debug(f"Retrieved context: {len(ctx)} chars")
 
@@ -169,6 +172,7 @@ class MatrixActor(Actor):
             results = await self.search(
                 query=payload.get("query", ""),
                 limit=payload.get("limit", 10),
+                scope=payload.get("scope"),
             )
             logger.debug(f"Search found {len(results)} nodes")
 
@@ -183,6 +187,7 @@ class MatrixActor(Actor):
         tags: Optional[List[str]] = None,
         confidence: int = 100,
         session_id: Optional[str] = None,
+        scope: str = "global",
     ) -> str:
         """
         Store a memory node.
@@ -193,6 +198,7 @@ class MatrixActor(Actor):
             tags: Optional semantic tags (stored in metadata)
             confidence: Confidence level 0-100
             session_id: Optional session ID (stored in metadata)
+            scope: Memory scope - 'global' or 'project:{slug}'
 
         Returns:
             The node ID
@@ -213,6 +219,7 @@ class MatrixActor(Actor):
             confidence=confidence / 100.0,
             importance=0.5,
             metadata=metadata if metadata else None,
+            scope=scope,
         )
 
     async def store_turn(
@@ -263,6 +270,8 @@ class MatrixActor(Actor):
         query: str,
         max_tokens: int = 3800,
         budget_preset: str = "balanced",
+        scope: Optional[str] = None,
+        scopes: Optional[list] = None,
     ) -> str:
         """
         Get relevant context for a query.
@@ -271,6 +280,8 @@ class MatrixActor(Actor):
             query: The query to find context for
             max_tokens: Maximum tokens of context to return
             budget_preset: Ignored (for API compatibility)
+            scope: Single scope filter ('global', 'project:slug'). None = all.
+            scopes: Multi-scope list for merged context.
 
         Returns:
             Formatted context string
@@ -279,7 +290,9 @@ class MatrixActor(Actor):
             return ""
 
         # Get memory nodes
-        nodes = await self._matrix.get_context(query, max_tokens=max_tokens)
+        nodes = await self._matrix.get_context(
+            query, max_tokens=max_tokens, scope=scope, scopes=scopes
+        )
 
         if not nodes:
             return ""
@@ -328,6 +341,7 @@ class MatrixActor(Actor):
         query: str,
         limit: int = 10,
         use_hybrid: bool = True,  # Ignored, for API compatibility
+        scope: Optional[str] = None,
     ) -> list:
         """
         Search for memory nodes.
@@ -336,6 +350,7 @@ class MatrixActor(Actor):
             query: Search text
             limit: Max results
             use_hybrid: Ignored (for API compatibility)
+            scope: Optional scope filter. None = all scopes.
 
         Returns:
             List of matching nodes
@@ -343,7 +358,7 @@ class MatrixActor(Actor):
         if not self._initialized:
             return []
 
-        return await self._matrix.search_nodes(query=query, limit=limit)
+        return await self._matrix.search_nodes(query=query, limit=limit, scope=scope)
 
     async def get_stats(self) -> dict:
         """Get memory statistics."""
@@ -426,6 +441,7 @@ class MatrixActor(Actor):
         source: Optional[str] = None,
         confidence: float = 1.0,
         importance: float = 0.5,
+        scope: str = "global",
     ) -> str:
         """Add a memory node (direct passthrough to matrix)."""
         if not self._matrix:
@@ -436,6 +452,7 @@ class MatrixActor(Actor):
             source=source,
             confidence=confidence,
             importance=importance,
+            scope=scope,
         )
 
     async def get_node(self, node_id: str):

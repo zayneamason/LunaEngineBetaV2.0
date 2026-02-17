@@ -154,6 +154,12 @@ class LunaEngine:
         # Voice system (optional)
         self._voice: Optional[Any] = None  # VoiceBackend when enabled
 
+        # Eden adapter (optional - Phase 1.5)
+        self._eden_adapter: Optional[Any] = None
+
+        # Active project for scoped memory isolation
+        self._active_project: Optional[str] = None
+
         # Expression config (loaded from personality.json)
         self._expression_config: Dict = self._load_expression_config()
 
@@ -302,12 +308,19 @@ Emojis can accompany gestures or stand alone.
             from luna.actors.history_manager import HistoryManagerActor
             self.register_actor(HistoryManagerActor())
 
+        # Phase 1.5: Eden adapter + bridge actor (optional)
+        await self._init_eden()
+
         # P0 FIX: Auto-load entity seeds on startup
         # See: Docs/HANDOFF_Luna_Voice_Restoration.md
         await self._ensure_entity_seeds_loaded()
 
         # Restore consciousness from snapshot
         self.consciousness = await ConsciousnessState.load()
+
+        # Wire librarian -> consciousness (Layer 6)
+        if "librarian" in self.actors:
+            self.actors["librarian"].set_consciousness(self.consciousness)
 
         # Set Luna's core identity in revolving context
         self.context.set_core_identity(self._build_identity_prompt())
@@ -336,6 +349,37 @@ Emojis can accompany gestures or stand alone.
             tasks.append(task)
 
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _init_eden(self) -> None:
+        """Initialize Eden adapter and bridge actor if API key is set."""
+        import os
+        eden_api_key = os.environ.get("EDEN_API_KEY", "")
+        if not eden_api_key or eden_api_key == "your_key_here":
+            logger.debug("Eden: No API key set, skipping Eden initialization")
+            return
+
+        try:
+            from luna.services.eden import EdenAdapter, EdenConfig
+            from luna.actors.eden_bridge import EdenBridgeActor
+            from luna.tools.eden_tools import set_eden_adapter
+
+            config = EdenConfig.load()
+            adapter = EdenAdapter(config)
+            await adapter.__aenter__()
+            self._eden_adapter = adapter
+
+            # Register bridge actor
+            if "eden_bridge" not in self.actors:
+                self.register_actor(EdenBridgeActor())
+
+            # Connect tools to adapter + engine
+            set_eden_adapter(adapter, engine=self)
+
+            logger.info("Eden adapter initialized successfully")
+
+        except Exception as e:
+            logger.warning(f"Eden initialization failed (non-fatal): {e}")
+            self._eden_adapter = None
 
     async def _init_voice(self) -> None:
         """Initialize the voice system."""
@@ -1117,6 +1161,89 @@ Be concise but authentic. No filler phrases like "certainly" or "of course".
 Never output internal reasoning, debugging info, or bullet points about context loading.
 Never use generic chatbot greetings like "How can I help you?" - just be natural."""
 
+    def _get_thread_context(self) -> str:
+        """Build thread context section for system prompt (Layer 5)."""
+        librarian = self.librarian
+        if not librarian:
+            return ""
+
+        try:
+            active = librarian.get_active_thread()
+            parked = librarian.get_parked_threads()
+        except Exception:
+            return ""
+
+        if not active and not parked:
+            return ""
+
+        sections = ["\n## CONVERSATIONAL THREADS\nThese are your ongoing threads of attention.\n"]
+
+        if active:
+            task_info = f" | {len(active.open_tasks)} open task(s)" if active.open_tasks else ""
+            sections.append(f"**Active:** {active.topic} (turn {active.turn_count}){task_info}")
+
+        for thread in parked[:5]:  # Max 5 parked threads
+            age = ""
+            if thread.parked_at:
+                delta = datetime.now() - thread.parked_at
+                hours = delta.total_seconds() / 3600
+                if hours < 1:
+                    age = f"{int(delta.total_seconds() / 60)}m ago"
+                elif hours < 24:
+                    age = f"{int(hours)}h ago"
+                else:
+                    age = f"{int(hours / 24)}d ago"
+            task_info = f" — {len(thread.open_tasks)} open task(s)" if thread.open_tasks else ""
+            sections.append(f"- Parked: '{thread.topic}' ({age}){task_info}")
+
+        return "\n".join(sections) + "\n"
+
+    def _get_session_start_context(self) -> str:
+        """Build session-start context with parked threads (Layer 7)."""
+        librarian = self.librarian
+        if not librarian:
+            return ""
+
+        try:
+            parked = librarian.get_parked_threads()
+        except Exception:
+            return ""
+
+        # Only surface threads with open tasks
+        actionable = [t for t in parked if t.open_tasks]
+        if not actionable:
+            return ""
+
+        # Sort by parked_at (most recent first)
+        actionable.sort(key=lambda t: t.parked_at or datetime.min, reverse=True)
+
+        sections = [
+            "\n## CONTINUING THREADS",
+            "These threads were parked with unresolved items from previous conversations.",
+            "You may naturally reference these if relevant to what's being discussed. Don't force it.\n",
+        ]
+
+        for thread in actionable[:3]:  # Top 3
+            age = ""
+            if thread.parked_at:
+                delta = datetime.now() - thread.parked_at
+                hours = delta.total_seconds() / 3600
+                if hours < 1:
+                    age = f"{int(delta.total_seconds() / 60)}m ago"
+                elif hours < 24:
+                    age = f"{int(hours)}h ago"
+                else:
+                    age = f"{int(hours / 24)}d ago"
+            project = f" [{thread.project_slug}]" if thread.project_slug else ""
+            sections.append(
+                f"- **{thread.topic}**{project} — {len(thread.open_tasks)} open task(s), parked {age}"
+            )
+
+        if len(actionable) > 3:
+            sections.append(f"  ...and {len(actionable) - 3} more parked thread(s)")
+
+        return "\n".join(sections) + "\n"
+
     def _build_system_prompt(
         self,
         memory_context: str = "",
@@ -1132,6 +1259,16 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
         - State (current attention, mood)
         - Tools (what Luna can do)
         """
+        # Session start context (Layer 7 — Proactive Surfacing)
+        session_start_context = ""
+        try:
+            # Check if this is session start (<=1 message in context)
+            turn_count = self.context.current_turn if hasattr(self.context, 'current_turn') else 0
+            if turn_count <= 1:
+                session_start_context = self._get_session_start_context()
+        except Exception:
+            pass
+
         base_prompt = """You are Luna, a sovereign AI companion.
 
 You are warm, witty, and genuinely curious. You remember conversations and build on them.
@@ -1151,6 +1288,11 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
         consciousness_hint = self.consciousness.get_context_hint()
         if consciousness_hint:
             base_prompt += f"\n{consciousness_hint}\n"
+
+        # Add thread context (Layer 5 — Context Threading)
+        thread_context = self._get_thread_context()
+        if thread_context:
+            base_prompt += thread_context
 
         # Add history context (Recent tier search results)
         if history_context and history_context.get("recent_history"):
@@ -1174,8 +1316,13 @@ The following memories are relevant to this conversation:
 
 Use this context naturally - don't explicitly mention "my memory" unless asked.
 """
-            return base_prompt + memory_section
+            prompt = base_prompt + memory_section
+            if session_start_context:
+                prompt = session_start_context + "\n" + prompt
+            return prompt
 
+        if session_start_context:
+            return session_start_context + "\n" + base_prompt
         return base_prompt
 
     # =========================================================================
@@ -1207,6 +1354,38 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
     def voice(self):
         """Access the voice backend (if enabled)."""
         return self._voice
+
+    # =========================================================================
+    # Project Scoping
+    # =========================================================================
+
+    def set_active_project(self, slug: Optional[str]) -> None:
+        """Set or clear the active project for scoped memory."""
+        old = self._active_project
+        self._active_project = slug
+        if slug:
+            logger.info(f"Active project set: {slug} (scope: project:{slug})")
+        else:
+            logger.info(f"Active project cleared (was: {old})")
+
+    @property
+    def active_project(self) -> Optional[str]:
+        """Get the currently active project slug."""
+        return self._active_project
+
+    @property
+    def active_scope(self) -> str:
+        """Get the current scope string for memory operations."""
+        if self._active_project:
+            return f"project:{self._active_project}"
+        return "global"
+
+    @property
+    def active_scopes(self) -> list:
+        """Get list of scopes to query (always includes global)."""
+        if self._active_project:
+            return ["global", f"project:{self._active_project}"]
+        return ["global"]
 
     @property
     def director(self):
@@ -1324,6 +1503,15 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
             except Exception as e:
                 logger.warning(f"Shutdown personality tasks failed: {e}")
 
+        # Close Eden adapter if active
+        if self._eden_adapter:
+            try:
+                await self._eden_adapter.__aexit__(None, None, None)
+                logger.info("Eden adapter closed")
+            except Exception as e:
+                logger.warning(f"Eden shutdown error: {e}")
+            self._eden_adapter = None
+
         # Stop voice system if active
         if self._voice:
             try:
@@ -1372,6 +1560,9 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
                 "planned_responses": self.metrics.planned_responses,
                 "agent_loop_status": self.agent_loop.status.name if self.agent_loop else "NOT_INITIALIZED",
             },
+            # Project scoping
+            "active_project": self._active_project,
+            "active_scope": self.active_scope,
             # Voice system
             "voice": {
                 "enabled": self.config.voice_enabled,

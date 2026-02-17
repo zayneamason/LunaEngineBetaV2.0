@@ -34,7 +34,7 @@ MEMORY_NODE_COLUMNS = [
     "id", "node_type", "content", "summary", "source",
     "confidence", "importance", "access_count", "reinforcement_count",
     "lock_in", "lock_in_state", "last_accessed",
-    "created_at", "updated_at", "metadata"
+    "created_at", "updated_at", "metadata", "scope"
 ]
 
 # Column order for conversation_turns table
@@ -75,6 +75,7 @@ class MemoryNode:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     metadata: dict = field(default_factory=dict)
+    scope: str = "global"
 
     def __post_init__(self):
         if self.created_at is None:
@@ -128,6 +129,7 @@ class MemoryNode:
             created_at=created_at,
             updated_at=updated_at,
             metadata=metadata or {},
+            scope=row.get("scope") or "global",
         )
 
     def to_dict(self) -> dict:
@@ -147,6 +149,7 @@ class MemoryNode:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "metadata": self.metadata,
+            "scope": self.scope,
         }
 
 
@@ -253,6 +256,7 @@ class MemoryMatrix:
         confidence: float = 1.0,
         importance: float = 0.5,
         link_entities: bool = True,
+        scope: str = "global",
     ) -> str:
         """
         Add a new memory node.
@@ -266,6 +270,7 @@ class MemoryMatrix:
             confidence: Confidence score 0-1 (default 1.0)
             importance: Importance score 0-1 (default 0.5)
             link_entities: Whether to detect and link mentioned entities (default True)
+            scope: Memory scope - 'global' or 'project:{slug}'
 
         Returns:
             The ID of the created node
@@ -281,12 +286,12 @@ class MemoryMatrix:
                 id, node_type, content, summary, source,
                 confidence, importance, access_count, reinforcement_count,
                 lock_in, lock_in_state,
-                created_at, updated_at, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0.15, 'drifting', ?, ?, ?)
+                created_at, updated_at, metadata, scope
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0.15, 'drifting', ?, ?, ?, ?)
             """,
             [
                 node_id, node_type, content, summary, source,
-                confidence, importance, now, now, metadata_json
+                confidence, importance, now, now, metadata_json, scope
             ]
         )
 
@@ -535,6 +540,7 @@ class MemoryMatrix:
         query: str,
         node_type: Optional[str] = None,
         limit: int = 10,
+        scope: Optional[str] = None,
     ) -> list[MemoryNode]:
         """
         Search memory nodes by text using LIKE query.
@@ -543,33 +549,35 @@ class MemoryMatrix:
             query: Search text (uses SQL LIKE with wildcards)
             node_type: Optional filter by node type
             limit: Maximum number of results (default 10)
+            scope: Optional scope filter ('global', 'project:slug'). None = all scopes.
 
         Returns:
             List of matching MemoryNodes, ordered by importance
         """
         search_pattern = f"%{query}%"
+        conditions = ["(content LIKE ? OR summary LIKE ?)"]
+        params: list = [search_pattern, search_pattern]
 
         if node_type:
-            rows = await self.db.fetchall(
-                """
-                SELECT * FROM memory_nodes
-                WHERE (content LIKE ? OR summary LIKE ?)
-                  AND node_type = ?
-                ORDER BY importance DESC, created_at DESC
-                LIMIT ?
-                """,
-                (search_pattern, search_pattern, node_type, limit)
-            )
-        else:
-            rows = await self.db.fetchall(
-                """
-                SELECT * FROM memory_nodes
-                WHERE content LIKE ? OR summary LIKE ?
-                ORDER BY importance DESC, created_at DESC
-                LIMIT ?
-                """,
-                (search_pattern, search_pattern, limit)
-            )
+            conditions.append("node_type = ?")
+            params.append(node_type)
+
+        if scope is not None:
+            conditions.append("scope = ?")
+            params.append(scope)
+
+        where = " AND ".join(conditions)
+        params.append(limit)
+
+        rows = await self.db.fetchall(
+            f"""
+            SELECT * FROM memory_nodes
+            WHERE {where}
+            ORDER BY importance DESC, created_at DESC
+            LIMIT ?
+            """,
+            tuple(params)
+        )
 
         return [MemoryNode.from_row(row) for row in rows]
 
@@ -582,6 +590,7 @@ class MemoryMatrix:
         query: str,
         node_type: Optional[str] = None,
         limit: int = 10,
+        scope: Optional[str] = None,
     ) -> list[tuple[MemoryNode, float]]:
         """
         Search memory nodes using FTS5 full-text search.
@@ -593,6 +602,7 @@ class MemoryMatrix:
             query: Search query (FTS5 syntax supported)
             node_type: Optional filter by node type
             limit: Maximum number of results (default 10)
+            scope: Optional scope filter. None = all scopes.
 
         Returns:
             List of (MemoryNode, score) tuples, sorted by relevance
@@ -605,38 +615,37 @@ class MemoryMatrix:
 
         if not fts_exists:
             logger.warning("FTS5 table not found, falling back to LIKE search")
-            nodes = await self.search_nodes(query, node_type, limit)
+            nodes = await self.search_nodes(query, node_type, limit, scope=scope)
             return [(node, 1.0) for node in nodes]
 
         # Escape special FTS5 characters and prepare query
-        # FTS5 uses MATCH for searching
         safe_query = query.replace('"', '""')
 
+        conditions = ["memory_nodes_fts MATCH ?"]
+        params: list = [safe_query]
+
         if node_type:
-            rows = await self.db.fetchall(
-                """
-                SELECT m.*, bm25(memory_nodes_fts) as score
-                FROM memory_nodes m
-                JOIN memory_nodes_fts fts ON m.rowid = fts.rowid
-                WHERE memory_nodes_fts MATCH ?
-                  AND m.node_type = ?
-                ORDER BY bm25(memory_nodes_fts)
-                LIMIT ?
-                """,
-                (safe_query, node_type, limit)
-            )
-        else:
-            rows = await self.db.fetchall(
-                """
-                SELECT m.*, bm25(memory_nodes_fts) as score
-                FROM memory_nodes m
-                JOIN memory_nodes_fts fts ON m.rowid = fts.rowid
-                WHERE memory_nodes_fts MATCH ?
-                ORDER BY bm25(memory_nodes_fts)
-                LIMIT ?
-                """,
-                (safe_query, limit)
-            )
+            conditions.append("m.node_type = ?")
+            params.append(node_type)
+
+        if scope is not None:
+            conditions.append("m.scope = ?")
+            params.append(scope)
+
+        where = " AND ".join(conditions)
+        params.append(limit)
+
+        rows = await self.db.fetchall(
+            f"""
+            SELECT m.*, bm25(memory_nodes_fts) as score
+            FROM memory_nodes m
+            JOIN memory_nodes_fts fts ON m.rowid = fts.rowid
+            WHERE {where}
+            ORDER BY bm25(memory_nodes_fts)
+            LIMIT ?
+            """,
+            tuple(params)
+        )
 
         results = []
         for row in rows:
@@ -658,6 +667,7 @@ class MemoryMatrix:
         node_type: Optional[str] = None,
         limit: int = 10,
         min_similarity: float = 0.3,
+        scope: Optional[str] = None,
     ) -> list[tuple[MemoryNode, float]]:
         """
         Search memory nodes using semantic similarity.
@@ -670,6 +680,7 @@ class MemoryMatrix:
             node_type: Optional filter by node type
             limit: Maximum number of results (default 10)
             min_similarity: Minimum cosine similarity threshold (default 0.3)
+            scope: Optional scope filter. None = all scopes.
 
         Returns:
             List of (MemoryNode, similarity) tuples, sorted by similarity
@@ -705,13 +716,15 @@ class MemoryMatrix:
         if not similar:
             return []
 
-        # Fetch full nodes and filter by type
+        # Fetch full nodes and filter by type/scope
         results = []
         for node_id, similarity in similar:
             node = await self.get_node(node_id)
             if node is None:
                 continue
             if node_type and node.node_type != node_type:
+                continue
+            if scope is not None and node.scope != scope:
                 continue
             results.append((node, similarity))
             if len(results) >= limit:
@@ -731,6 +744,7 @@ class MemoryMatrix:
         keyword_weight: float = 0.4,
         semantic_weight: float = 0.6,
         rrf_k: int = 60,
+        scope: Optional[str] = None,
     ) -> list[tuple[MemoryNode, float]]:
         """
         Search using both FTS5 and semantic search with Reciprocal Rank Fusion.
@@ -745,13 +759,14 @@ class MemoryMatrix:
             keyword_weight: Weight for FTS5 results (default 0.4)
             semantic_weight: Weight for semantic results (default 0.6)
             rrf_k: RRF constant (default 60, higher = more emphasis on top ranks)
+            scope: Optional scope filter. None = all scopes.
 
         Returns:
             List of (MemoryNode, combined_score) tuples, sorted by score
         """
         # Run both searches in parallel conceptually (sequential here for SQLite)
-        fts_results = await self.fts5_search(query, node_type, limit * 2)
-        semantic_results = await self.semantic_search(query, node_type, limit * 2)
+        fts_results = await self.fts5_search(query, node_type, limit * 2, scope=scope)
+        semantic_results = await self.semantic_search(query, node_type, limit * 2, scope=scope)
 
         # Build node lookup and rank maps
         nodes_by_id: dict[str, MemoryNode] = {}
@@ -797,6 +812,8 @@ class MemoryMatrix:
         query: str,
         max_tokens: int = 2000,
         node_types: Optional[list[str]] = None,
+        scope: Optional[str] = None,
+        scopes: Optional[list[str]] = None,
     ) -> list[MemoryNode]:
         """
         Get relevant context for a query.
@@ -809,10 +826,21 @@ class MemoryMatrix:
             query: The query to find context for
             max_tokens: Maximum tokens worth of context (approximate)
             node_types: Optional list of node types to include
+            scope: Single scope filter. None = all scopes.
+            scopes: Multi-scope list (e.g. ["global", "project:crooked-nail"]).
+                    When provided, queries each scope separately and merges results.
+                    Overrides `scope` if both provided.
 
         Returns:
             List of relevant MemoryNodes within token budget
         """
+        # Multi-scope: query each scope and merge with budget split
+        if scopes and len(scopes) > 1:
+            return await self._get_context_multi_scope(query, max_tokens, node_types, scopes)
+
+        # Single scope (or all scopes if scope=None)
+        effective_scope = scopes[0] if scopes else scope
+
         # Approximate tokens per character (rough estimate)
         chars_per_token = 4
         max_chars = max_tokens * chars_per_token
@@ -904,6 +932,13 @@ class MemoryMatrix:
         # If we have 2+ keywords, also search for compound phrase
         compound_phrase = " ".join(keywords) if len(keywords) >= 2 else None
 
+        # Build scope filter SQL fragment
+        scope_clause = ""
+        scope_params: list = []
+        if effective_scope is not None:
+            scope_clause = " AND scope = ?"
+            scope_params = [effective_scope]
+
         if node_types:
             placeholders = ", ".join("?" * len(node_types))
             like_clauses = " OR ".join(
@@ -913,12 +948,14 @@ class MemoryMatrix:
             for kw in keywords:
                 params.extend([f"%{kw}%", f"%{kw}%"])
             params.extend(node_types)
+            params.extend(scope_params)
 
             rows = await self.db.fetchall(
                 f"""
                 SELECT * FROM memory_nodes
                 WHERE ({like_clauses})
                   AND node_type IN ({placeholders})
+                  {scope_clause}
                 ORDER BY lock_in DESC, length(content) ASC, created_at DESC
                 LIMIT 50
                 """,
@@ -934,27 +971,31 @@ class MemoryMatrix:
 
             # First, try to find exact compound phrase matches (these are most relevant)
             if compound_phrase:
+                compound_params = [f"%{compound_phrase}%", f"%{compound_phrase}%"] + scope_params
                 compound_rows = await self.db.fetchall(
-                    """
+                    f"""
                     SELECT * FROM memory_nodes
                     WHERE (content LIKE ? OR summary LIKE ?)
+                    {scope_clause}
                     ORDER BY lock_in DESC, length(content) ASC, created_at DESC
                     LIMIT 25
                     """,
-                    (f"%{compound_phrase}%", f"%{compound_phrase}%")
+                    tuple(compound_params)
                 )
             else:
                 compound_rows = []
 
             # Then get individual keyword matches
+            keyword_params = params + scope_params
             keyword_rows = await self.db.fetchall(
                 f"""
                 SELECT * FROM memory_nodes
                 WHERE {like_clauses}
+                {scope_clause}
                 ORDER BY lock_in DESC, length(content) ASC, created_at DESC
                 LIMIT 50
                 """,
-                tuple(params)
+                tuple(keyword_params)
             )
 
             # Combine: compound matches first (deduplicated), then keyword matches
@@ -986,6 +1027,7 @@ class MemoryMatrix:
                     start_nodes=seed_ids,
                     decay=0.5,
                     max_depth=2,
+                    scope=effective_scope,
                 )
 
                 if activations:
@@ -998,17 +1040,19 @@ class MemoryMatrix:
                     # Sort by activation score
                     graph_ids.sort(key=lambda x: x[1], reverse=True)
 
-                    # Fetch the top graph-discovered nodes
+                    # Fetch the top graph-discovered nodes (respecting scope)
                     if graph_ids:
                         graph_node_ids = [gid for gid, _ in graph_ids[:15]]
                         placeholders = ",".join("?" * len(graph_node_ids))
-                        graph_rows = await self.db.fetchall(
-                            f"""
+                        graph_query = f"""
                             SELECT * FROM memory_nodes
                             WHERE id IN ({placeholders})
+                            {scope_clause}
                             ORDER BY lock_in DESC
-                            """,
-                            tuple(graph_node_ids)
+                        """
+                        graph_params = list(graph_node_ids) + scope_params
+                        graph_rows = await self.db.fetchall(
+                            graph_query, tuple(graph_params)
                         )
                         rows.extend(graph_rows)
                         logger.info(
@@ -1072,6 +1116,56 @@ class MemoryMatrix:
 
         logger.debug(f"Retrieved {len(results)} nodes for context ({total_chars} chars)")
         return results
+
+    async def _get_context_multi_scope(
+        self,
+        query: str,
+        max_tokens: int,
+        node_types: Optional[list[str]],
+        scopes: list[str],
+    ) -> list[MemoryNode]:
+        """
+        Get context from multiple scopes with budget splitting.
+
+        For project + global queries: 60% tokens to project scope, 40% to global.
+        Deduplicates by node ID across scopes.
+        """
+        project_scopes = [s for s in scopes if s.startswith("project:")]
+        global_scopes = [s for s in scopes if s == "global"]
+
+        # Budget split: project gets priority
+        if project_scopes and global_scopes:
+            project_budget = int(max_tokens * 0.6)
+            global_budget = max_tokens - project_budget
+        else:
+            # Only one type of scope
+            project_budget = max_tokens
+            global_budget = max_tokens
+
+        all_results: list[MemoryNode] = []
+        seen_ids: set[str] = set()
+
+        # Query project scopes first (higher priority)
+        for ps in project_scopes:
+            nodes = await self.get_context(
+                query, max_tokens=project_budget, node_types=node_types, scope=ps
+            )
+            for node in nodes:
+                if node.id not in seen_ids:
+                    seen_ids.add(node.id)
+                    all_results.append(node)
+
+        # Then global scope
+        for gs in global_scopes:
+            nodes = await self.get_context(
+                query, max_tokens=global_budget, node_types=node_types, scope=gs
+            )
+            for node in nodes:
+                if node.id not in seen_ids:
+                    seen_ids.add(node.id)
+                    all_results.append(node)
+
+        return all_results
 
     async def get_nodes_by_type(
         self,

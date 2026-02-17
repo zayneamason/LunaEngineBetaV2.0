@@ -44,6 +44,7 @@ from luna.core.events import InputEvent, EventType
 from luna.actors.base import Message
 from luna.agentic.router import ExecutionPath
 from luna.diagnostics import run_startup_check, start_watchdog
+from luna.services.kozmo.routes import router as kozmo_router
 
 # QA System imports
 try:
@@ -303,7 +304,7 @@ async def lifespan(app: FastAPI):
         _orb_state_manager = OrbStateManager()
 
     # Start runtime watchdog for continuous health monitoring
-    watchdog_task = await start_watchdog(check_interval=60)
+    watchdog_task = await start_watchdog(check_interval=60, engine=_engine)
     logger.info("Runtime watchdog started")
 
     logger.info("Luna Engine ready")
@@ -345,11 +346,24 @@ app = FastAPI(
 # Add CORS middleware for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:5175"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:5177", "http://localhost:5178", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:5175", "http://127.0.0.1:5176", "http://127.0.0.1:5177", "http://127.0.0.1:5178"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount KOZMO service router
+app.include_router(kozmo_router)
+
+# Serve KOZMO project assets (generated reference images, etc.)
+try:
+    from pathlib import Path as _Path
+    from fastapi.staticfiles import StaticFiles
+    _kozmo_assets = _Path("data/kozmo_projects")
+    _kozmo_assets.mkdir(parents=True, exist_ok=True)
+    app.mount("/kozmo-assets", StaticFiles(directory=str(_kozmo_assets)), name="kozmo-assets")
+except Exception:
+    pass  # Non-fatal — assets won't be served if dir is missing
 
 
 # ============================================
@@ -569,13 +583,129 @@ async def get_status():
 
 @app.get("/health")
 async def health_check():
-    """Simple health check endpoint."""
+    """Simple health check endpoint with pipeline status."""
     if _engine is None:
         return {"status": "starting"}
+
+    # Pipeline status
+    pipeline = {"connected": False, "scribe_extractions": None, "librarian_filings": None}
+    scribe = _engine.get_actor("scribe")
+    librarian = _engine.get_actor("librarian")
+    if scribe and librarian:
+        pipeline["connected"] = scribe.engine is not None and librarian.engine is not None
+        pipeline["scribe_extractions"] = scribe.get_stats().get("extractions_count", 0)
+        pipeline["librarian_filings"] = librarian.get_stats().get("filings_count", 0)
 
     return {
         "status": "healthy",
         "state": _engine.state.name,
+        "pipeline": pipeline,
+    }
+
+
+@app.get("/eden/health")
+async def eden_health_check():
+    """Check whether Eden API is configured and reachable."""
+    try:
+        from luna.services.eden.config import EdenConfig
+        config = EdenConfig.load()
+        if not config.is_configured:
+            return {"status": "unconfigured", "reason": "EDEN_API_KEY not set"}
+
+        from luna.services.eden.adapter import EdenAdapter
+        adapter = EdenAdapter(config)
+        async with adapter:
+            healthy = await adapter.health_check()
+        return {
+            "status": "healthy" if healthy else "unreachable",
+            "api_base": config.api_base,
+        }
+    except Exception as e:
+        return {"status": "error", "reason": str(e)}
+
+
+class EdenGenerateRequest(BaseModel):
+    prompt: str
+    wait: bool = True
+
+
+@app.post("/eden/generate")
+async def eden_generate_image(req: EdenGenerateRequest):
+    """Generate an image via Eden API."""
+    try:
+        from luna.services.eden.config import EdenConfig
+        from luna.services.eden.adapter import EdenAdapter
+
+        config = EdenConfig.load()
+        if not config.is_configured:
+            raise HTTPException(status_code=503, detail="Eden not configured (EDEN_API_KEY missing)")
+
+        adapter = EdenAdapter(config)
+        async with adapter:
+            task = await adapter.create_image(prompt=req.prompt, wait=req.wait)
+            return {
+                "status": str(task.status.value) if hasattr(task.status, 'value') else str(task.status),
+                "image_url": task.first_output_url,
+                "task_id": task.id,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================================
+# Project Scoping Endpoints
+# =========================================================================
+
+class ProjectActivateRequest(BaseModel):
+    slug: str
+
+@app.post("/project/activate")
+async def activate_project(req: ProjectActivateRequest):
+    """Set the active project for scoped memory isolation."""
+    _engine.set_active_project(req.slug)
+
+    # Forward to Librarian for thread tagging
+    librarian = _engine.get_actor("librarian")
+    if librarian:
+        from luna.actors.base import Message
+        msg = Message(type="set_project_context", payload={"slug": req.slug})
+        await librarian.handle(msg)
+
+    return {
+        "status": "activated",
+        "project": req.slug,
+        "scope": _engine.active_scope,
+        "scopes": _engine.active_scopes,
+    }
+
+@app.post("/project/deactivate")
+async def deactivate_project():
+    """Clear the active project (return to global memory only)."""
+    old = _engine.active_project
+    _engine.set_active_project(None)
+
+    # Forward to Librarian — auto-parks active thread
+    librarian = _engine.get_actor("librarian")
+    if librarian:
+        from luna.actors.base import Message
+        msg = Message(type="clear_project_context", payload={})
+        await librarian.handle(msg)
+
+    return {
+        "status": "deactivated",
+        "previous_project": old,
+        "scope": _engine.active_scope,
+    }
+
+@app.get("/project/active")
+async def get_active_project():
+    """Get the currently active project and scope."""
+    return {
+        "project": _engine.active_project,
+        "scope": _engine.active_scope,
+        "scopes": _engine.active_scopes,
     }
 
 
@@ -902,11 +1032,13 @@ async def stream_message(request: MessageRequest):
             matrix = _engine.get_actor("matrix")
             if matrix and matrix.is_ready:
                 memory_context = await matrix.get_context(request.message, max_tokens=1500)
-                await matrix.store_turn(
-                    session_id=_engine.session_id,
-                    role="user",
-                    content=request.message,
-                )
+
+            # Record user turn through unified API (extraction + history + matrix)
+            await _engine.record_conversation_turn(
+                role="user",
+                content=request.message,
+                source="stream",
+            )
 
             # Send streaming generation request
             msg = Message(
@@ -939,6 +1071,17 @@ async def stream_message(request: MessageRequest):
 
             # Send completion event
             yield f"event: done\ndata: {json.dumps(final_data)}\n\n"
+
+            # Record assistant turn (Scribe skips assistant turns by design,
+            # but this feeds HistoryManager + matrix storage)
+            response_text = "".join(full_response)
+            if response_text:
+                await _engine.record_conversation_turn(
+                    role="assistant",
+                    content=response_text,
+                    source="stream",
+                    tokens=final_data.get("output_tokens"),
+                )
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
@@ -1026,12 +1169,12 @@ async def persona_stream(request: MessageRequest):
                     for m in recent
                 ]
 
-                # Store user turn
-                await matrix.store_turn(
-                    session_id=_engine.session_id,
-                    role="user",
-                    content=request.message,
-                )
+            # Record user turn through unified API (extraction + history + matrix)
+            await _engine.record_conversation_turn(
+                role="user",
+                content=request.message,
+                source="stream",
+            )
 
             # Build state summary
             state_summary = {
@@ -1149,6 +1292,17 @@ async def persona_stream(request: MessageRequest):
             # Update completion metrics
             _engine.metrics.agentic_tasks_completed += 1
             _engine.metrics.messages_generated += 1
+
+            # Record assistant turn (Scribe skips assistant turns by design,
+            # but this feeds HistoryManager + matrix storage)
+            response_text = "".join(full_response)
+            if response_text:
+                await _engine.record_conversation_turn(
+                    role="assistant",
+                    content=response_text,
+                    source="stream",
+                    tokens=final_metadata.get("output_tokens"),
+                )
 
         except Exception as e:
             logger.error(f"Persona stream error: {e}")
@@ -2071,6 +2225,150 @@ async def memory_trace(request: TraceRequest):
         )
     except Exception as e:
         logger.error(f"Failed to trace dependencies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==============================================================================
+# Data Room Endpoints
+# ==============================================================================
+
+@app.post("/dataroom/search")
+async def dataroom_search_endpoint(
+    query: str = "",
+    category: str = None,
+    status: str = None,
+    limit: int = 10,
+):
+    """Search investor data room documents."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix:
+        raise HTTPException(status_code=503, detail="Matrix actor not available")
+
+    try:
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+        if not memory:
+            return {"results": [], "count": 0}
+
+        nodes = await memory.search_nodes(query=query or "document", node_type="DOCUMENT", limit=limit * 3)
+
+        results = []
+        for node in nodes:
+            import json as _json
+            meta = node.metadata if isinstance(node.metadata, dict) else (
+                _json.loads(node.metadata) if node.metadata else {}
+            )
+            if category and meta.get("category") != category:
+                continue
+            if status and meta.get("status") != status:
+                continue
+            results.append({
+                "id": node.id,
+                "name": node.summary or node.content,
+                "category": meta.get("category"),
+                "subfolder": meta.get("subfolder"),
+                "status": meta.get("status"),
+                "url": meta.get("gdrive_url"),
+                "file_type": meta.get("file_type"),
+                "tags": meta.get("tags", []),
+            })
+            if len(results) >= limit:
+                break
+
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        logger.error(f"Dataroom search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/dataroom/status")
+async def dataroom_status_endpoint():
+    """Get data room statistics: total documents, by category, by status."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix:
+        raise HTTPException(status_code=503, detail="Matrix actor not available")
+
+    try:
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+        if not memory:
+            return {"total_documents": 0, "by_category": {}, "by_status": {}}
+
+        docs = await memory.get_nodes_by_type("DOCUMENT", limit=1000)
+        category_counts = {}
+        status_counts = {}
+
+        for doc in docs:
+            import json as _json
+            meta = doc.metadata if isinstance(doc.metadata, dict) else (
+                _json.loads(doc.metadata) if doc.metadata else {}
+            )
+            cat = meta.get("category", "Unknown")
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+            st = meta.get("status", "Unknown")
+            status_counts[st] = status_counts.get(st, 0) + 1
+
+        return {
+            "total_documents": len(docs),
+            "by_category": category_counts,
+            "by_status": status_counts,
+        }
+    except Exception as e:
+        logger.error(f"Dataroom status failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/dataroom/recent")
+async def dataroom_recent_endpoint(days: int = 7):
+    """Get recently synced data room documents."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix:
+        raise HTTPException(status_code=503, detail="Matrix actor not available")
+
+    try:
+        memory = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+        if not memory:
+            return {"documents": [], "count": 0}
+
+        from datetime import datetime, timedelta
+        import json as _json
+
+        docs = await memory.get_nodes_by_type("DOCUMENT", limit=1000)
+        cutoff = datetime.now() - timedelta(days=days)
+        recent = []
+
+        for doc in docs:
+            meta = doc.metadata if isinstance(doc.metadata, dict) else (
+                _json.loads(doc.metadata) if doc.metadata else {}
+            )
+            last_synced = meta.get("last_synced")
+            if not last_synced:
+                continue
+            try:
+                sync_time = datetime.fromisoformat(last_synced)
+            except (ValueError, TypeError):
+                continue
+            if sync_time >= cutoff:
+                recent.append({
+                    "id": doc.id,
+                    "name": doc.summary or doc.content,
+                    "category": meta.get("category"),
+                    "status": meta.get("status"),
+                    "synced_at": last_synced,
+                    "url": meta.get("gdrive_url"),
+                })
+
+        recent.sort(key=lambda x: x["synced_at"], reverse=True)
+        return {"documents": recent, "count": len(recent)}
+    except Exception as e:
+        logger.error(f"Dataroom recent failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3049,6 +3347,13 @@ async def hub_add_turn(request: HubTurnAddRequest):
         tokens=request.tokens,
         session_id=request.session_id
     )
+
+    # Trigger extraction pipeline (Scribe → Librarian → Matrix)
+    try:
+        await _engine._trigger_extraction(request.role, request.content)
+    except Exception as e:
+        logger.error(f"Hub turn extraction error: {e}")
+
     return HubTurnResponse(turn_id=turn_id, tier="active")
 
 

@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
     last_accessed TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    metadata TEXT  -- JSON for extra data
+    metadata TEXT,  -- JSON for extra data
+    scope TEXT NOT NULL DEFAULT 'global'  -- Memory scope: 'global' or 'project:{slug}'
 );
 
 -- Conversation turns - raw conversation history
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS graph_edges (
     strength REAL DEFAULT 1.0,  -- 0-1 edge weight
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     metadata TEXT,
+    scope TEXT NOT NULL DEFAULT 'global',  -- Edge scope: 'global' or 'project:{slug}'
     FOREIGN KEY (from_id) REFERENCES memory_nodes(id),
     FOREIGN KEY (to_id) REFERENCES memory_nodes(id),
     UNIQUE(from_id, to_id, relationship)
@@ -168,6 +170,8 @@ CREATE INDEX IF NOT EXISTS idx_nodes_importance ON memory_nodes(importance DESC)
 CREATE INDEX IF NOT EXISTS idx_nodes_accessed ON memory_nodes(last_accessed DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_lock_in ON memory_nodes(lock_in DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_lock_in_state ON memory_nodes(lock_in_state);
+-- NOTE: idx_nodes_scope and idx_nodes_scope_type created in database.py migration
+-- (scope column may not exist on pre-v2.1 databases until ALTER TABLE runs)
 
 CREATE INDEX IF NOT EXISTS idx_turns_session ON conversation_turns(session_id);
 CREATE INDEX IF NOT EXISTS idx_turns_created ON conversation_turns(created_at);
@@ -182,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_edges_from ON graph_edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON graph_edges(to_id);
 CREATE INDEX IF NOT EXISTS idx_edges_relationship ON graph_edges(relationship);
+-- NOTE: idx_edges_scope created in database.py migration
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_tick ON consciousness_snapshots(tick_count);
 

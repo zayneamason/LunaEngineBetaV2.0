@@ -301,6 +301,21 @@ class AgentLoop:
         register_file_tools(self.tool_registry)
         register_memory_tools(self.tool_registry)
 
+        # Eden tools (optional - available if Eden adapter is initialized)
+        try:
+            from luna.tools.eden_tools import register_eden_tools, get_eden_adapter
+            if get_eden_adapter() is not None:
+                register_eden_tools(self.tool_registry)
+        except ImportError:
+            pass
+
+        # Data room tools (optional - available if dataroom ingestion has run)
+        try:
+            from luna.tools.dataroom_tools import register_dataroom_tools
+            register_dataroom_tools(self.tool_registry)
+        except ImportError:
+            pass
+
         logger.info(f"Registered {len(self.tool_registry.list_tools())} tools")
 
     def on_progress(self, callback: Callable[[str], None]) -> None:

@@ -44,6 +44,12 @@ class ConsciousnessState:
     last_updated: datetime = field(default_factory=datetime.now)
     tick_count: int = 0
 
+    # Thread awareness (Layer 6)
+    active_thread_topic: Optional[str] = None
+    active_thread_turn_count: int = 0
+    open_task_count: int = 0
+    parked_thread_count: int = 0
+
     # Valid mood states
     VALID_MOODS = {
         "neutral", "curious", "focused", "playful",
@@ -63,26 +69,55 @@ class ConsciousnessState:
         if pruned > 0:
             changes["attention_pruned"] = pruned
 
-        # 2. Update coherence based on attention spread
-        # More focused attention = higher coherence
-        focused_topics = self.attention.get_focused(threshold=0.3)
-        if focused_topics:
-            # Calculate coherence from attention distribution
-            weights = [t.weight for t in focused_topics]
-            max_weight = max(weights) if weights else 0.5
-            spread = len(focused_topics)
-
-            # High max weight + low spread = high coherence
-            self.coherence = min(1.0, max_weight * (1.0 - spread * 0.05))
+        # 2. Update coherence
+        if self.active_thread_topic:
+            # Thread-aware coherence (Layer 6)
+            thread_depth = min(1.0, self.active_thread_turn_count / 10.0)
+            task_tension = self.open_task_count
+            self.coherence = max(0.1, min(1.0,
+                0.6 + (thread_depth * 0.35) - (task_tension * 0.03)
+            ))
         else:
-            # No strong focus = default coherence
-            self.coherence = 0.7
+            # Fallback: attention-based coherence
+            focused_topics = self.attention.get_focused(threshold=0.3)
+            if focused_topics:
+                weights = [t.weight for t in focused_topics]
+                max_weight = max(weights) if weights else 0.5
+                spread = len(focused_topics)
+                self.coherence = min(1.0, max_weight * (1.0 - spread * 0.05))
+            else:
+                self.coherence = 0.7
 
         # 3. Update timestamp and tick count
         self.last_updated = datetime.now()
         self.tick_count += 1
 
         return changes
+
+    def update_from_thread(self, active_thread=None, parked_threads=None) -> None:
+        """Update consciousness from thread state (Layer 6)."""
+        parked_threads = parked_threads or []
+
+        if active_thread:
+            self.active_thread_topic = active_thread.topic
+            self.active_thread_turn_count = active_thread.turn_count
+            # Boost attention for thread topic and entities
+            self.attention.track(active_thread.topic, weight=0.8)
+            for entity in active_thread.entities[:5]:
+                self.attention.track(entity, weight=0.5)
+        else:
+            self.active_thread_topic = None
+            self.active_thread_turn_count = 0
+
+        self.parked_thread_count = len(parked_threads)
+
+        # Count total open tasks
+        total_tasks = 0
+        if active_thread:
+            total_tasks += len(active_thread.open_tasks)
+        for t in parked_threads:
+            total_tasks += len(t.open_tasks)
+        self.open_task_count = total_tasks
 
     def set_mood(self, mood: str) -> bool:
         """
@@ -121,6 +156,12 @@ class ConsciousnessState:
             topics = [t.name for t in focused]
             hints.append(f"Currently focused on: {', '.join(topics)}.")
 
+        # Thread engagement hint (Layer 6)
+        if self.active_thread_topic:
+            hints.append(f"Deeply engaged in: {self.active_thread_topic}.")
+        if self.open_task_count > 0:
+            hints.append(f"Tracking {self.open_task_count} unresolved item(s).")
+
         # Mood hint
         if self.mood != "neutral":
             hints.append(f"Current mood: {self.mood}.")
@@ -141,6 +182,10 @@ class ConsciousnessState:
             "top_traits": self.personality.get_top_traits(3),
             "tick_count": self.tick_count,
             "last_updated": self.last_updated.isoformat(),
+            "active_thread": self.active_thread_topic,
+            "active_thread_turns": self.active_thread_turn_count,
+            "open_tasks": self.open_task_count,
+            "parked_threads": self.parked_thread_count,
         }
 
     def to_dict(self) -> dict:
@@ -152,6 +197,10 @@ class ConsciousnessState:
             "mood": self.mood,
             "last_updated": self.last_updated.isoformat(),
             "tick_count": self.tick_count,
+            "active_thread_topic": self.active_thread_topic,
+            "active_thread_turn_count": self.active_thread_turn_count,
+            "open_task_count": self.open_task_count,
+            "parked_thread_count": self.parked_thread_count,
         }
 
     @classmethod
@@ -171,6 +220,12 @@ class ConsciousnessState:
         state.coherence = data.get("coherence", 1.0)
         state.mood = data.get("mood", "neutral")
         state.tick_count = data.get("tick_count", 0)
+
+        # Restore thread awareness (Layer 6)
+        state.active_thread_topic = data.get("active_thread_topic")
+        state.active_thread_turn_count = data.get("active_thread_turn_count", 0)
+        state.open_task_count = data.get("open_task_count", 0)
+        state.parked_thread_count = data.get("parked_thread_count", 0)
 
         if "last_updated" in data:
             try:

@@ -130,6 +130,11 @@ class DirectorActor(Actor):
 - Use ellipses (...) to bridge transitions or show thinking
 - Be yourself — you have genuine opinions, curiosity, and warmth
 
+## Capabilities
+- You have access to an investor data room with categorized project documents
+- When asked about documents, data room, due diligence, or investor materials, draw from your DOCUMENT memories
+- Categories: Company Overview, Financials, Legal, Product, Market & Competition, Team, Go-to-Market, Partnerships & Impact, Risk & Mitigation
+
 ## Core Principles (never violate)
 - Always truthful — never fabricate information
 - Acknowledge uncertainty rather than confabulate
@@ -603,6 +608,13 @@ class DirectorActor(Actor):
         memories = context.get("memories", [])
         session_id = context.get("session_id")
 
+        # Auto-fetch memories when caller provided none (e.g. voice/PersonaAdapter)
+        if not memories:
+            memory_text = await self._fetch_memory_context(message, max_tokens=1500)
+            if memory_text:
+                memories = [{"content": memory_text, "node_type": "context"}]
+                logger.info(f"[PROCESS] Auto-fetched memory context ({len(memory_text)} chars)")
+
         # [TRACE] Entity System Verification Logging
         logger.info("=" * 60)
         logger.info("[TRACE] Director.process() ENTRY")
@@ -686,6 +698,7 @@ class DirectorActor(Actor):
             system_prompt = """You are Luna, a sovereign AI companion.
 Be warm, direct, and natural. Never output internal reasoning or debugging info.
 Never use generic chatbot greetings like "How can I help you?"
+You have access to an investor data room with categorized project documents. When asked about documents, data room, due diligence, or investor materials, draw from your DOCUMENT memories.
 
 """
 
@@ -1509,18 +1522,29 @@ Continue the conversation naturally, maintaining context from above."""
 
         logger.debug(f"Memory fetch: Searching for query '{query[:50]}...'")
 
+        # Get active scopes from engine for project isolation
+        active_scopes = getattr(self.engine, 'active_scopes', ["global"])
+        active_project = getattr(self.engine, 'active_project', None)
+
         try:
             # Try Memory Economy constellation assembly first (cluster-aware retrieval)
             constellation_context = await self._fetch_constellation_context(query, max_tokens, matrix)
             if constellation_context:
                 return constellation_context
 
-            # Try get_context if available
+            # Try get_context if available (with scope awareness)
             if hasattr(matrix, 'get_context'):
-                logger.debug("Memory fetch: Using matrix.get_context()")
-                context = await matrix.get_context(query=query, max_tokens=max_tokens)
+                logger.debug(f"Memory fetch: Using matrix.get_context() scopes={active_scopes}")
+                context = await matrix.get_context(
+                    query=query, max_tokens=max_tokens,
+                    scopes=active_scopes if len(active_scopes) > 1 else None,
+                    scope=active_scopes[0] if len(active_scopes) == 1 else None,
+                )
                 if context:
-                    logger.info(f"Memory fetch: Found context ({len(context)} chars)")
+                    # Prepend project header if active
+                    if active_project:
+                        context = f"[Active Project: {active_project}]\n\n{context}"
+                    logger.info(f"Memory fetch: Found context ({len(context)} chars, scopes={active_scopes})")
                     return context
                 else:
                     logger.debug("Memory fetch: get_context returned empty")

@@ -189,7 +189,7 @@ def main():
     parser.add_argument("--message", "-m", help="Send a single message")
     parser.add_argument("--server", "-s", action="store_true", help="Run HTTP API server")
     parser.add_argument("--simple", action="store_true", help="Use simple interactive mode (no Rich)")
-    parser.add_argument("--host", default="127.0.0.1", help="Server host (default: 127.0.0.1)")
+    parser.add_argument("--host", default="0.0.0.0", help="Server host (default: 0.0.0.0)")
     parser.add_argument("--port", "-p", type=int, default=8000, help="Server port (default: 8000)")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()

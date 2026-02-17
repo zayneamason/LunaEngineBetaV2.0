@@ -228,22 +228,7 @@ async def _end_auto_session():
             f"/hub/session/end?session_id={session_id}"
         )
 
-        # Trigger extraction for each user turn individually
-        if user_turns:
-            logger.info(f"[AUTO-SESSION] Triggering extraction for {len(user_turns)} user turns (filtered from {len(turns)} total)")
-            for turn in user_turns:
-                content = turn.get("content", "").strip()
-                if content:
-                    await _call_api(
-                        "POST",
-                        "/extraction/trigger",
-                        json={
-                            "content": content,
-                            "role": "user",
-                            "session_id": session_id,
-                            "immediate": True
-                        }
-                    )
+        # Extraction now happens in real-time via /hub/turn/add — no need to trigger here
 
         logger.info(f"[AUTO-SESSION] Session ended successfully: {session_id}")
 

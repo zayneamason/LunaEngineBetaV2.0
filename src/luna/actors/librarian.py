@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Any, TYPE_CHECKING
 import asyncio
+import json
 import logging
 import time
 
@@ -26,7 +27,12 @@ from luna.extraction.types import (
     ExtractionOutput,
     ExtractedObject,
     ExtractedEdge,
+    ExtractionType,
     FilingResult,
+    ConversationMode,
+    FlowSignal,
+    Thread,
+    ThreadStatus,
 )
 from luna.entities.models import (
     Entity,
@@ -103,6 +109,19 @@ class LibrarianActor(Actor):
         self._entity_versions_created = 0
         self._total_filing_time_ms = 0
 
+        # Consciousness reference (Layer 6)
+        self._consciousness = None
+
+        # Thread management state (Layer 3)
+        self._active_thread: Optional[Thread] = None
+        self._active_project_slug: Optional[str] = None
+        self._thread_cache: dict[str, Thread] = {}
+        self._max_cached_threads: int = 20
+        self._threads_created: int = 0
+        self._threads_parked: int = 0
+        self._threads_resumed: int = 0
+        self._threads_closed: int = 0
+
         logger.info("Librarian (The Dude) initialized")
 
     # =========================================================================
@@ -135,6 +154,18 @@ class LibrarianActor(Actor):
             case "get_stats":
                 await self._handle_get_stats(msg)
 
+            case "set_project_context":
+                await self._handle_set_project_context(msg)
+
+            case "clear_project_context":
+                await self._handle_clear_project_context(msg)
+
+            case "get_active_thread":
+                await self._handle_get_active_thread(msg)
+
+            case "get_parked_threads":
+                await self._handle_get_parked_threads(msg)
+
             case _:
                 logger.warning(f"The Dude: Unknown message type: {msg.type}")
 
@@ -161,6 +192,13 @@ class LibrarianActor(Actor):
             f"merged {len(result.nodes_merged)}, "
             f"created {len(result.edges_created)} edges"
         )
+
+        # Process flow signal (Layer 3 — thread management)
+        if extraction.flow_signal:
+            try:
+                await self._process_flow_signal(extraction.flow_signal, extraction, result)
+            except Exception as e:
+                logger.error(f"The Dude: Flow signal processing failed: {e}")
 
         # Send result back if requested
         if msg.reply_to:
@@ -326,12 +364,28 @@ class LibrarianActor(Actor):
         if prune_nodes:
             node_result = await self._prune_drifting_nodes(age_days, max_prune_nodes)
 
+        # Close stale parked threads (>7 days, no open tasks)
+        threads_closed = 0
+        stale_cutoff = datetime.now().timestamp() - (7 * 24 * 3600)
+        for thread_id, thread in list(self._thread_cache.items()):
+            if thread.status != ThreadStatus.PARKED:
+                continue
+            if thread.parked_at and thread.parked_at.timestamp() < stale_cutoff:
+                if not thread.open_tasks:
+                    thread.status = ThreadStatus.CLOSED
+                    thread.closed_at = datetime.now()
+                    await self._update_thread_node(thread)
+                    self._threads_closed += 1
+                    threads_closed += 1
+                    logger.info(f"The Dude: Closed stale thread '{thread.topic}'")
+
         combined_result = {
             "edges_pruned": edge_result["pruned"],
             "edges_preserved": edge_result["preserved"],
             "nodes_pruned": node_result["pruned"],
             "nodes_preserved": node_result["preserved"],
             "drifting_candidates": node_result["candidates"],
+            "threads_closed": threads_closed,
         }
 
         await self.send_to_engine("prune_result", combined_result)
@@ -736,10 +790,22 @@ class LibrarianActor(Actor):
                 )
                 result.nodes_created.append(node_id)
                 self._nodes_created += 1
+
+                # Layer 4: Track ACTION and OUTCOME node IDs for task ledger
+                if obj.type == ExtractionType.ACTION:
+                    result.action_node_ids.append(node_id)
+                elif obj.type == ExtractionType.OUTCOME:
+                    result.outcome_node_ids.append(node_id)
             else:
                 import uuid
                 node_id = str(uuid.uuid4())[:12]
                 result.nodes_created.append(node_id)
+
+                # Layer 4: Track ACTION and OUTCOME node IDs for task ledger
+                if obj.type == ExtractionType.ACTION:
+                    result.action_node_ids.append(node_id)
+                elif obj.type == ExtractionType.OUTCOME:
+                    result.outcome_node_ids.append(node_id)
 
             # Resolve mentioned entities (these ARE entity names)
             for entity_name in obj.entities:
@@ -1049,6 +1115,607 @@ class LibrarianActor(Actor):
         return result
 
     # =========================================================================
+    # THREAD MANAGEMENT (Layer 3)
+    # =========================================================================
+
+    async def _process_flow_signal(
+        self,
+        signal: FlowSignal,
+        extraction: ExtractionOutput,
+        filing_result: FilingResult,
+    ) -> None:
+        """React to Ben's flow signal. Create, park, or resume threads."""
+        match signal.mode:
+            case ConversationMode.FLOW:
+                await self._handle_flow_continue(signal, extraction, filing_result)
+            case ConversationMode.RECALIBRATION:
+                await self._handle_recalibration(signal, extraction, filing_result)
+            case ConversationMode.AMEND:
+                await self._handle_amend(signal, extraction, filing_result)
+
+    async def _handle_flow_continue(
+        self,
+        signal: FlowSignal,
+        extraction: ExtractionOutput,
+        filing_result: FilingResult,
+    ) -> None:
+        """Conversation continuing on-topic. Accumulate into active thread."""
+        if not self._active_thread:
+            # First substantive turn — create initial thread
+            self._active_thread = await self._create_thread(
+                topic=signal.current_topic,
+                entities=signal.topic_entities,
+            )
+            logger.info(
+                f"The Dude: Started thread '{self._active_thread.topic}' "
+                f"({self._active_thread.id})"
+            )
+            self._notify_consciousness()
+            return
+
+        # Update active thread
+        self._active_thread.turn_count += 1
+
+        # Merge new entities (additive) and create INVOLVES edges
+        for entity in signal.topic_entities:
+            if entity not in self._active_thread.entities:
+                self._active_thread.entities.append(entity)
+                # Resolve and create INVOLVES edge
+                try:
+                    entity_id = await self._resolve_entity(entity, "ENTITY")
+                    if entity_id not in self._active_thread.entity_node_ids:
+                        self._active_thread.entity_node_ids.append(entity_id)
+                        await self._create_edge(
+                            from_id=self._active_thread.id,
+                            to_id=entity_id,
+                            edge_type="INVOLVES",
+                            confidence=1.0,
+                        )
+                except Exception as e:
+                    logger.debug(f"The Dude: Could not create INVOLVES edge: {e}")
+
+        # Track open tasks from filing result (real node IDs — Layer 4)
+        for action_id in filing_result.action_node_ids:
+            if action_id not in self._active_thread.open_tasks:
+                self._active_thread.open_tasks.append(action_id)
+                # Create HAS_OPEN_TASK edge: THREAD → ACTION
+                try:
+                    await self._create_edge(
+                        from_id=self._active_thread.id,
+                        to_id=action_id,
+                        edge_type="HAS_OPEN_TASK",
+                        confidence=1.0,
+                    )
+                except Exception as e:
+                    logger.debug(f"The Dude: Could not create HAS_OPEN_TASK edge: {e}")
+
+        # Resolve open tasks when outcomes arrive
+        if filing_result.outcome_node_ids and self._active_thread.open_tasks:
+            await self._resolve_open_tasks(filing_result)
+
+        logger.debug(
+            f"The Dude: Flow continues in '{self._active_thread.topic}' "
+            f"(turn {self._active_thread.turn_count}, "
+            f"{len(self._active_thread.entities)} entities, "
+            f"{len(self._active_thread.open_tasks)} open tasks)"
+        )
+        self._notify_consciousness()
+
+    async def _handle_recalibration(
+        self,
+        signal: FlowSignal,
+        extraction: ExtractionOutput,
+        filing_result: FilingResult,
+    ) -> None:
+        """Topic shift detected. Park current thread, start or resume another."""
+        parked_thread = None
+
+        # 1. Park current thread (if one exists)
+        if self._active_thread:
+            parked_thread = self._active_thread
+            await self._park_thread(self._active_thread)
+            logger.info(
+                f"The Dude: Parked thread '{self._active_thread.topic}' "
+                f"({self._active_thread.turn_count} turns, "
+                f"{len(self._active_thread.open_tasks)} open tasks)"
+            )
+
+        # 2. Check for resumable parked thread
+        resumable = await self._find_resumable_thread(signal.topic_entities)
+
+        if resumable:
+            await self._resume_thread(resumable)
+            self._active_thread = resumable
+            logger.info(
+                f"The Dude: Resumed thread '{resumable.topic}' "
+                f"(was parked, {resumable.resume_count} resumes)"
+            )
+        else:
+            self._active_thread = await self._create_thread(
+                topic=signal.current_topic,
+                entities=signal.topic_entities,
+            )
+            logger.info(
+                f"The Dude: New thread '{self._active_thread.topic}' "
+                f"({self._active_thread.id})"
+            )
+
+        # 3. Create thread-to-thread edges (Level 2)
+        if parked_thread and self._active_thread and parked_thread.id != self._active_thread.id:
+            parked_set = set(e.lower() for e in parked_thread.entities)
+            active_set = set(e.lower() for e in self._active_thread.entities)
+            if parked_set and active_set:
+                overlap = len(parked_set & active_set) / len(parked_set | active_set)
+                if overlap > 0:
+                    await self._create_thread_edge(
+                        parked_thread.id, self._active_thread.id,
+                        "RELATES_TO", strength=overlap,
+                    )
+
+            # If resumed, also create CONTINUED_BY edge
+            if resumable and resumable.id == self._active_thread.id:
+                await self._create_thread_edge(
+                    parked_thread.id, self._active_thread.id,
+                    "CONTINUED_BY", strength=1.0,
+                )
+
+        self._notify_consciousness()
+
+    async def _handle_amend(
+        self,
+        signal: FlowSignal,
+        extraction: ExtractionOutput,
+        filing_result: FilingResult,
+    ) -> None:
+        """Course correction within current flow. No thread change needed."""
+        if not self._active_thread:
+            self._active_thread = await self._create_thread(
+                topic=signal.current_topic,
+                entities=signal.topic_entities,
+            )
+            self._notify_consciousness()
+            return
+
+        self._active_thread.turn_count += 1
+        logger.debug(
+            f"The Dude: Amend in '{self._active_thread.topic}' "
+            f"(correction_target: {signal.correction_target[:50]})"
+        )
+        self._notify_consciousness()
+
+    # --- Task Resolution (Layer 4) ---
+
+    async def _resolve_open_tasks(self, filing_result: FilingResult) -> None:
+        """
+        Resolve open tasks when OUTCOME nodes match ACTION nodes by entity overlap.
+
+        Uses Jaccard similarity >= 0.5 between outcome entities and action entities.
+        Creates RESOLVES edge: OUTCOME -> ACTION.
+        """
+        if not self._active_thread or not self._active_thread.open_tasks:
+            return
+
+        matrix = await self._get_matrix()
+        if not matrix:
+            return
+
+        for outcome_id in filing_result.outcome_node_ids:
+            # Get outcome node entities
+            try:
+                outcome_node = await matrix.get_node(outcome_id)
+                if not outcome_node:
+                    continue
+                outcome_content = outcome_node.content or ""
+                # Extract entity names from the outcome content
+                outcome_entities: set[str] = set()
+                try:
+                    parsed = json.loads(outcome_content) if outcome_content.startswith("{") else {}
+                    outcome_entities = set(e.lower() for e in parsed.get("entities", []))
+                except Exception:
+                    pass
+                if not outcome_entities:
+                    # Fallback: use entities from extraction objects that produced outcomes
+                    for obj in filing_result._extraction_objects if hasattr(filing_result, '_extraction_objects') else []:
+                        if hasattr(obj, 'entities'):
+                            outcome_entities.update(e.lower() for e in obj.entities)
+            except Exception as e:
+                logger.debug(f"The Dude: Could not load outcome node {outcome_id}: {e}")
+                continue
+
+            resolved = []
+            for action_id in self._active_thread.open_tasks:
+                try:
+                    action_node = await matrix.get_node(action_id)
+                    if not action_node:
+                        continue
+                    action_content = action_node.content or ""
+                    action_entities: set[str] = set()
+                    try:
+                        parsed = json.loads(action_content) if action_content.startswith("{") else {}
+                        action_entities = set(e.lower() for e in parsed.get("entities", []))
+                    except Exception:
+                        pass
+
+                    # Jaccard similarity
+                    if action_entities and outcome_entities:
+                        intersection = action_entities & outcome_entities
+                        union = action_entities | outcome_entities
+                        jaccard = len(intersection) / len(union) if union else 0
+                    else:
+                        # If no entities to compare, cannot resolve
+                        jaccard = 0.0
+
+                    if jaccard >= 0.5:
+                        # Create RESOLVES edge
+                        try:
+                            await self._create_edge(
+                                from_id=outcome_id,
+                                to_id=action_id,
+                                edge_type="RESOLVES",
+                                confidence=jaccard,
+                            )
+                        except Exception as e:
+                            logger.debug(f"The Dude: Could not create RESOLVES edge: {e}")
+                        resolved.append(action_id)
+                        logger.info(
+                            f"The Dude: Resolved task {action_id} "
+                            f"(Jaccard={jaccard:.2f})"
+                        )
+                except Exception as e:
+                    logger.debug(f"The Dude: Could not check action {action_id}: {e}")
+
+            # Remove resolved tasks
+            for task_id in resolved:
+                self._active_thread.open_tasks.remove(task_id)
+
+            # Update thread node in Matrix if tasks were resolved
+            if resolved:
+                try:
+                    await matrix.update_node(
+                        node_id=self._active_thread.id,
+                        content=json.dumps(self._active_thread.to_dict()),
+                    )
+                except Exception as e:
+                    logger.debug(f"The Dude: Could not update thread node: {e}")
+
+    # --- Public Accessors (Layer 5) ---
+
+    def get_active_thread(self):
+        """Get the currently active thread (if any)."""
+        return self._active_thread
+
+    def get_parked_threads(self) -> list:
+        """Get all parked threads from cache."""
+        return [t for t in self._thread_cache.values() if t.status == ThreadStatus.PARKED]
+
+    # --- Consciousness Wiring (Layer 6) ---
+
+    def set_consciousness(self, consciousness) -> None:
+        """Set consciousness reference for thread-aware updates (Layer 6)."""
+        self._consciousness = consciousness
+
+    def _notify_consciousness(self) -> None:
+        """Notify consciousness of thread state change (Layer 6)."""
+        if self._consciousness:
+            self._consciousness.update_from_thread(
+                active_thread=self._active_thread,
+                parked_threads=self.get_parked_threads(),
+            )
+
+    # --- Thread Operations ---
+
+    async def _create_thread(
+        self,
+        topic: str,
+        entities: list[str],
+    ) -> Thread:
+        """Create a new THREAD node in the Matrix."""
+        thread = Thread(
+            id="",
+            topic=topic,
+            status=ThreadStatus.ACTIVE,
+            entities=list(entities),
+            turn_count=1,
+            project_slug=self._active_project_slug,
+        )
+
+        matrix = await self._get_matrix()
+        if matrix:
+            node_id = await matrix.add_node(
+                node_type="THREAD",
+                content=json.dumps(thread.to_dict()),
+                source="librarian",
+                confidence=1.0,
+                tags=self._thread_tags(thread),
+            )
+            thread.id = node_id
+
+            # Create INVOLVES edges to entities
+            for entity_name in entities:
+                try:
+                    entity_id = await self._resolve_entity(entity_name, "ENTITY")
+                    thread.entity_node_ids.append(entity_id)
+                    await self._create_edge(
+                        from_id=node_id,
+                        to_id=entity_id,
+                        edge_type="INVOLVES",
+                        confidence=1.0,
+                    )
+                except Exception as e:
+                    logger.debug(f"The Dude: Could not create entity edge: {e}")
+
+            # Create IN_PROJECT edge if project context active
+            if self._active_project_slug:
+                try:
+                    project_id = await self._resolve_entity(
+                        self._active_project_slug, "PROJECT"
+                    )
+                    await self._create_edge(
+                        from_id=node_id,
+                        to_id=project_id,
+                        edge_type="IN_PROJECT",
+                        confidence=1.0,
+                    )
+                except Exception as e:
+                    logger.debug(f"The Dude: Could not create project edge: {e}")
+        else:
+            import uuid
+            thread.id = f"thread_{uuid.uuid4().hex[:8]}"
+
+        self._thread_cache[thread.id] = thread
+        self._threads_created += 1
+
+        # Evict oldest cached threads if over limit
+        if len(self._thread_cache) > self._max_cached_threads:
+            oldest_key = next(iter(self._thread_cache))
+            del self._thread_cache[oldest_key]
+
+        return thread
+
+    async def _park_thread(self, thread: Thread) -> None:
+        """Snapshot and park a thread."""
+        thread.status = ThreadStatus.PARKED
+        thread.parked_at = datetime.now()
+
+        await self._update_thread_node(thread)
+        self._thread_cache[thread.id] = thread
+        self._threads_parked += 1
+
+        # Reinforce entity-to-entity edges (Level 3) for non-trivial threads
+        if thread.turn_count >= 3:
+            await self._reinforce_entity_edges(thread)
+
+    async def _resume_thread(self, thread: Thread) -> None:
+        """Resume a parked thread."""
+        thread.status = ThreadStatus.ACTIVE
+        thread.resumed_at = datetime.now()
+        thread.resume_count += 1
+
+        await self._update_thread_node(thread)
+        self._thread_cache[thread.id] = thread
+        self._threads_resumed += 1
+
+    async def _find_resumable_thread(
+        self,
+        new_entities: list[str],
+    ) -> Optional[Thread]:
+        """
+        Find a parked thread whose entities overlap with the new topic.
+
+        Returns the best match if entity overlap >= 0.4 (Jaccard).
+        """
+        if not new_entities:
+            return None
+
+        new_set = set(e.lower() for e in new_entities)
+        best_match: Optional[Thread] = None
+        best_overlap: float = 0.0
+
+        # Check cache (fast path)
+        for thread in self._thread_cache.values():
+            if thread.status != ThreadStatus.PARKED:
+                continue
+
+            thread_set = set(e.lower() for e in thread.entities)
+            if not thread_set:
+                continue
+
+            overlap = len(new_set & thread_set) / len(new_set | thread_set)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_match = thread
+
+        # If no cache hit, search Matrix for THREAD nodes
+        if best_overlap < 0.4:
+            matrix = await self._get_matrix()
+            if matrix:
+                for entity in new_entities[:3]:
+                    try:
+                        nodes = await matrix.search_nodes(
+                            entity,
+                            node_type="THREAD",
+                            limit=5,
+                        )
+                        for node in nodes:
+                            try:
+                                thread_data = json.loads(node.content)
+                                if thread_data.get("status") != "parked":
+                                    continue
+
+                                thread = Thread.from_dict(thread_data)
+                                thread.id = node.id
+
+                                thread_set = set(e.lower() for e in thread.entities)
+                                overlap = len(new_set & thread_set) / len(new_set | thread_set) if thread_set else 0
+
+                                if overlap > best_overlap:
+                                    best_overlap = overlap
+                                    best_match = thread
+                                    self._thread_cache[thread.id] = thread
+                            except (json.JSONDecodeError, KeyError):
+                                continue
+                    except Exception as e:
+                        logger.debug(f"The Dude: Thread search failed for '{entity}': {e}")
+
+        if best_overlap >= 0.4 and best_match:
+            logger.info(
+                f"The Dude: Found resumable thread '{best_match.topic}' "
+                f"(overlap={best_overlap:.2f})"
+            )
+            return best_match
+
+        return None
+
+    async def _update_thread_node(self, thread: Thread) -> None:
+        """Update a THREAD node's content in the Matrix."""
+        matrix = await self._get_matrix()
+        if not matrix:
+            return
+
+        try:
+            await matrix.update_node(
+                node_id=thread.id,
+                content=json.dumps(thread.to_dict()),
+                tags=self._thread_tags(thread),
+            )
+        except Exception as e:
+            logger.error(f"The Dude: Failed to update thread node {thread.id}: {e}")
+
+    def _thread_tags(self, thread: Thread) -> list[str]:
+        """Generate searchable tags for a thread node."""
+        tags = ["thread", f"status:{thread.status.value}"]
+        if thread.project_slug:
+            tags.append(f"project:{thread.project_slug}")
+        if thread.open_tasks:
+            tags.append("has_open_tasks")
+        return tags
+
+    async def _create_thread_edge(
+        self,
+        from_id: str,
+        to_id: str,
+        relationship: str,
+        strength: float = 1.0,
+    ) -> None:
+        """Create edge between thread nodes, bypassing has_edge duplicate check."""
+        if not self.engine:
+            return
+
+        matrix_actor = self.engine.get_actor("matrix")
+        if not matrix_actor or not hasattr(matrix_actor, "_graph") or not matrix_actor._graph:
+            return
+
+        try:
+            await matrix_actor._graph.add_edge(
+                from_id=from_id,
+                to_id=to_id,
+                relationship=relationship,
+                strength=strength,
+            )
+            logger.info(
+                f"THREAD_EDGE: {from_id} --[{relationship} @ {strength:.2f}]--> {to_id}"
+            )
+        except Exception as e:
+            logger.error(f"The Dude: Thread edge creation failed: {e}")
+
+    async def _reinforce_entity_edges(self, thread: Thread) -> None:
+        """
+        Strengthen edges between entities that co-occur in this thread.
+
+        Level 3 edge strategy: entities that appear together across threads
+        get CO_OCCURS edges with growing strength.
+        """
+        if len(thread.entity_node_ids) < 2:
+            return
+
+        if not self.engine:
+            return
+
+        matrix_actor = self.engine.get_actor("matrix")
+        if not matrix_actor or not hasattr(matrix_actor, "_graph") or not matrix_actor._graph:
+            return
+
+        graph = matrix_actor._graph
+
+        for i, from_id in enumerate(thread.entity_node_ids):
+            for to_id in thread.entity_node_ids[i + 1:]:
+                try:
+                    current_edges = await graph.get_edges(from_id)
+                    existing = [
+                        e for e in current_edges
+                        if e.to_id == to_id and e.relationship == "CO_OCCURS"
+                    ]
+
+                    if existing:
+                        new_strength = min(1.0, existing[0].strength + 0.1)
+                    else:
+                        new_strength = 0.3
+
+                    await graph.add_edge(
+                        from_id=from_id,
+                        to_id=to_id,
+                        relationship="CO_OCCURS",
+                        strength=new_strength,
+                    )
+                except Exception as e:
+                    logger.debug(f"The Dude: CO_OCCURS edge failed: {e}")
+
+    # --- Project Context ---
+
+    async def _handle_set_project_context(self, msg: Message) -> None:
+        """Set active Kozmo project context for thread tagging."""
+        payload = msg.payload or {}
+        slug = payload.get("slug", "")
+
+        if slug:
+            self._active_project_slug = slug
+            logger.info(f"The Dude: Project context set to '{slug}'")
+
+            # Check for parked threads in this project
+            project_threads = [
+                t for t in self._thread_cache.values()
+                if t.project_slug == slug and t.status == ThreadStatus.PARKED
+            ]
+
+            if project_threads:
+                topics = [t.topic for t in project_threads[:3]]
+                logger.info(
+                    f"The Dude: Found {len(project_threads)} parked threads "
+                    f"for project '{slug}': {topics}"
+                )
+
+                await self.send_to_engine("project_threads_available", {
+                    "project_slug": slug,
+                    "threads": [t.to_dict() for t in project_threads[:5]],
+                })
+
+    async def _handle_clear_project_context(self, msg: Message) -> None:
+        """Clear active Kozmo project context."""
+        if self._active_thread and self._active_project_slug:
+            await self._park_thread(self._active_thread)
+            logger.info(
+                f"The Dude: Auto-parked thread '{self._active_thread.topic}' "
+                f"on project deactivate"
+            )
+            self._active_thread = None
+
+        self._active_project_slug = None
+        logger.info("The Dude: Project context cleared")
+
+    async def _handle_get_active_thread(self, msg: Message) -> None:
+        """Return the active thread info."""
+        result = self._active_thread.to_dict() if self._active_thread else None
+        await self.send_to_engine("active_thread", {"thread": result})
+
+    async def _handle_get_parked_threads(self, msg: Message) -> None:
+        """Return all parked threads."""
+        parked = [
+            t.to_dict() for t in self._thread_cache.values()
+            if t.status == ThreadStatus.PARKED
+        ]
+        await self.send_to_engine("parked_threads", {"threads": parked})
+
+    # =========================================================================
     # HELPERS
     # =========================================================================
 
@@ -1094,6 +1761,12 @@ class LibrarianActor(Actor):
             "avg_filing_time_ms": avg_time,
             "cache_size": len(self.alias_cache),
             "inference_queue_size": len(self.inference_queue),
+            "threads_created": self._threads_created,
+            "threads_parked": self._threads_parked,
+            "threads_resumed": self._threads_resumed,
+            "threads_closed": self._threads_closed,
+            "active_thread": self._active_thread.topic if self._active_thread else None,
+            "cached_threads": len(self._thread_cache),
         }
 
     async def snapshot(self) -> dict:
@@ -1144,6 +1817,18 @@ class LibrarianActor(Actor):
 
     async def on_stop(self) -> None:
         """Cleanup on stop."""
+        # Park active thread on shutdown
+        if self._active_thread:
+            try:
+                await self._park_thread(self._active_thread)
+                logger.info(
+                    f"The Dude: Parked active thread '{self._active_thread.topic}' "
+                    f"on shutdown"
+                )
+                self._active_thread = None
+            except Exception as e:
+                logger.error(f"The Dude: Failed to park thread on shutdown: {e}")
+
         self._save_alias_cache()
         # Process any remaining inference queue
         if self.inference_queue:

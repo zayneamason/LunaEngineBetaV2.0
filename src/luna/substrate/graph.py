@@ -16,6 +16,7 @@ Relationship types:
 - FOLLOWED_BY: Temporal sequence
 - CONTRADICTS: Node A contradicts Node B
 - SUPPORTS: Node A provides evidence for Node B
+- BELONGS_TO: Node A belongs to category/group Node B
 """
 
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ class RelationshipType(str, Enum):
     FOLLOWED_BY = "FOLLOWED_BY"
     CONTRADICTS = "CONTRADICTS"
     SUPPORTS = "SUPPORTS"
+    BELONGS_TO = "BELONGS_TO"
 
 
 @dataclass
@@ -120,21 +122,22 @@ class MemoryGraph:
         logger.info("Loading graph edges from database...")
 
         query = """
-            SELECT from_id, to_id, relationship, strength, created_at
+            SELECT from_id, to_id, relationship, strength, created_at, scope
             FROM graph_edges
         """
 
         rows = await self.db.fetchall(query)
 
         for row in rows:
-            # Row is a tuple: (from_id, to_id, relationship, strength, created_at)
-            from_id, to_id, relationship, strength, created_at = row
+            from_id, to_id, relationship, strength, created_at = row[0], row[1], row[2], row[3], row[4]
+            edge_scope = row[5] if len(row) > 5 else "global"
             self._graph.add_edge(
                 from_id,
                 to_id,
                 relationship=relationship,
                 strength=strength,
                 created_at=created_at,
+                scope=edge_scope,
             )
 
         self._loaded = True
@@ -150,6 +153,7 @@ class MemoryGraph:
         to_id: str,
         relationship: str,
         strength: float = 1.0,
+        scope: str = "global",
     ) -> Edge:
         """
         Add an edge between two nodes.
@@ -162,6 +166,7 @@ class MemoryGraph:
             to_id: Target node ID
             relationship: Type of relationship (use RelationshipType)
             strength: Edge weight 0-1 (default 1.0)
+            scope: Edge scope - 'global' or 'project:{slug}'
 
         Returns:
             The created or updated Edge
@@ -177,16 +182,17 @@ class MemoryGraph:
             relationship=relationship,
             strength=strength,
             created_at=created_at.isoformat(),
+            scope=scope,
         )
 
         # Persist to database (upsert)
         query = """
-            INSERT INTO graph_edges (from_id, to_id, relationship, strength, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO graph_edges (from_id, to_id, relationship, strength, created_at, scope)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(from_id, to_id, relationship)
             DO UPDATE SET strength = excluded.strength
         """
-        await self.db.execute(query, (from_id, to_id, relationship, strength, created_at.isoformat()))
+        await self.db.execute(query, (from_id, to_id, relationship, strength, created_at.isoformat(), scope))
 
         logger.info(
             f"GRAPH_EDGE_ADDED: {from_id} --{relationship}[{strength:.2f}]--> {to_id} | "
@@ -367,6 +373,7 @@ class MemoryGraph:
         start_nodes: list[str],
         decay: float = 0.5,
         max_depth: int = 3,
+        scope: Optional[str] = None,
     ) -> dict[str, float]:
         """
         Calculate relevance scores using spreading activation.
@@ -382,6 +389,8 @@ class MemoryGraph:
             start_nodes: List of node IDs to start activation from
             decay: Decay factor per hop (0-1, default 0.5)
             max_depth: Maximum hops to propagate (default 3)
+            scope: Optional scope filter. When set, only traverse edges
+                   whose scope matches or is 'global'. None = traverse all.
 
         Returns:
             Dict mapping node_id -> activation score (0-1)
@@ -412,6 +421,12 @@ class MemoryGraph:
 
                 # Spread to successors
                 for _, neighbor, data in self._graph.out_edges(node_id, data=True):
+                    # Scope boundary: skip edges outside scope (global always traversable)
+                    if scope is not None:
+                        edge_scope = data.get("scope", "global")
+                        if edge_scope != "global" and edge_scope != scope:
+                            continue
+
                     edge_strength = data.get("strength", 1.0)
                     spread = node_activation * current_decay * edge_strength
 
@@ -422,6 +437,12 @@ class MemoryGraph:
 
                 # Spread to predecessors (bidirectional activation)
                 for neighbor, _, data in self._graph.in_edges(node_id, data=True):
+                    # Scope boundary: skip edges outside scope
+                    if scope is not None:
+                        edge_scope = data.get("scope", "global")
+                        if edge_scope != "global" and edge_scope != scope:
+                            continue
+
                     edge_strength = data.get("strength", 1.0)
                     spread = node_activation * current_decay * edge_strength
 

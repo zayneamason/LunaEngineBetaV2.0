@@ -132,11 +132,29 @@ class QueryRouter:
         r"\b(latest|current|recent|today'?s?|this week)\b",
     ]
 
+    CREATIVE_PATTERNS = [
+        r"\b(generate|create|make|draw|paint|render)\b.*\b(image|picture|photo|art|illustration|portrait|video|animation)\b",
+        r"\b(image|picture|video|portrait)\b.*\bof\b",
+        r"\beden\b",
+        r"\b(visualize|illustrate|depict)\b",
+        r"\b(paint|draw)\b.*\b(a|an|the|me)\b",
+    ]
+
     MULTI_STEP_PATTERNS = [
         r"\b(and then|after that|next|also|additionally)\b",
         r"\b(first|second|third|finally)\b",
         r"\b(step by step|one by one)\b",
         r"\b(multiple|several|various)\b",
+    ]
+
+    DATAROOM_PATTERNS = [
+        r"\bdata\s*room\b",
+        r"\binvestor\s*(docs?|documents?|materials?|packet)\b",
+        r"\bdue\s*diligence\b",
+        r"\b(what|which)\b.*\b(documents?|files?)\b.*\b(do we|have we|are in)\b",
+        r"\b(financials?|legal|team|product|partnerships?)\b.*\b(folder|category|section)\b",
+        r"\bwhat'?s?\s+missing\b.*\b(data\s*room|docs?|documents?)\b",
+        r"\bdata\s*room\s+(status|overview|summary)\b",
     ]
 
     TOOL_PATTERNS = {
@@ -146,6 +164,26 @@ class QueryRouter:
         "web_search": [r"\bsearch\b.*\bweb\b", r"\bgoogle\b", r"\blook up online\b"],
         "memory_query": [r"\bremember\b", r"\brecall\b", r"\bwhat did (I|we|you)\b"],
         "calendar": [r"\bcalendar\b", r"\bschedule\b", r"\bappointment\b", r"\bevent\b"],
+        "dataroom_search": [
+            r"\bdata\s*room\b",
+            r"\binvestor\s*(docs?|documents?|materials?)\b",
+            r"\bdue\s*diligence\b",
+        ],
+        "eden_create_image": [
+            r"\b(generate|create|make|draw|paint)\b.*\b(image|picture|photo|art|illustration)\b",
+            r"\b(image|picture|photo|art|illustration)\b.*\b(of|for|about|showing|depicting)\b",
+            r"\beden\b.*\b(image|create)\b",
+        ],
+        "eden_create_video": [
+            r"\b(generate|create|make)\b.*\b(video|animation|clip|timelapse)\b",
+            r"\b(video|animation|clip)\b.*\b(of|for|about|showing)\b",
+            r"\beden\b.*\bvideo\b",
+        ],
+        "eden_chat": [
+            r"\b(talk|chat|speak|converse)\b.*\b(eden|agent)\b",
+            r"\beden agent\b",
+            r"\bcreative agent\b",
+        ],
     }
 
     BACKGROUND_PATTERNS = [
@@ -173,9 +211,11 @@ class QueryRouter:
         self._greeting_re = [re.compile(p, re.IGNORECASE) for p in self.GREETING_PATTERNS]
         self._simple_re = [re.compile(p, re.IGNORECASE) for p in self.SIMPLE_QUERY_PATTERNS]
         self._research_re = [re.compile(p, re.IGNORECASE) for p in self.RESEARCH_PATTERNS]
+        self._creative_re = [re.compile(p, re.IGNORECASE) for p in self.CREATIVE_PATTERNS]
         self._multi_step_re = [re.compile(p, re.IGNORECASE) for p in self.MULTI_STEP_PATTERNS]
         self._background_re = [re.compile(p, re.IGNORECASE) for p in self.BACKGROUND_PATTERNS]
         self._memory_query_re = [re.compile(p, re.IGNORECASE) for p in self.MEMORY_QUERY_PATTERNS]
+        self._dataroom_re = [re.compile(p, re.IGNORECASE) for p in self.DATAROOM_PATTERNS]
         self._tool_re = {
             tool: [re.compile(p, re.IGNORECASE) for p in patterns]
             for tool, patterns in self.TOOL_PATTERNS.items()
@@ -284,6 +324,36 @@ class QueryRouter:
                 reason="Research query requires multi-step planning",
                 signals=signals,
                 suggested_tools=suggested_tools,
+            )
+
+        # Creative requests should use SIMPLE_PLAN to route through Eden tools
+        if "creative_request" in signals:
+            forced_complexity = max(complexity, self._memory_min_complexity)
+            logger.debug(
+                f"Forcing creative query to SIMPLE_PLAN: "
+                f"original_complexity={complexity:.2f}, forced={forced_complexity:.2f}"
+            )
+            return RoutingDecision(
+                path=ExecutionPath.SIMPLE_PLAN,
+                complexity=forced_complexity,
+                reason="Creative request routes through Eden tools",
+                signals=signals,
+                suggested_tools=suggested_tools,
+            )
+
+        # Data room queries should use SIMPLE_PLAN to trigger dataroom tools
+        if "dataroom_query" in signals:
+            forced_complexity = max(complexity, self._memory_min_complexity)
+            logger.debug(
+                f"Forcing dataroom query to SIMPLE_PLAN: "
+                f"original_complexity={complexity:.2f}, forced={forced_complexity:.2f}"
+            )
+            return RoutingDecision(
+                path=ExecutionPath.SIMPLE_PLAN,
+                complexity=forced_complexity,
+                reason="Data room query routes through dataroom tools",
+                signals=signals,
+                suggested_tools=["dataroom_search"],
             )
 
         # =========================================================================
@@ -402,6 +472,14 @@ class QueryRouter:
         # Memory query detection - triggers RETRIEVE action
         if self._matches_any(query, self._memory_query_re):
             signals.append("memory_query")
+
+        # Creative request
+        if self._matches_any(query, self._creative_re):
+            signals.append("creative_request")
+
+        # Data room query
+        if self._matches_any(query, self._dataroom_re):
+            signals.append("dataroom_query")
 
         return signals
 

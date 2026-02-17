@@ -108,7 +108,44 @@ class MemoryDatabase:
         await self._connection.executescript(schema_sql)
         await self._connection.commit()
 
+        # Run migrations for existing databases
+        await self._migrate_scope_columns()
+
         logger.debug("Schema loaded successfully")
+
+    async def _migrate_scope_columns(self) -> None:
+        """Add scope columns to existing tables if missing (v2.1 migration)."""
+        migrations = [
+            ("memory_nodes", "scope", "ALTER TABLE memory_nodes ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'"),
+            ("graph_edges", "scope", "ALTER TABLE graph_edges ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'"),
+        ]
+
+        for table, column, alter_sql in migrations:
+            try:
+                cursor = await self._connection.execute(f"PRAGMA table_info({table})")
+                columns = await cursor.fetchall()
+                col_names = [col[1] for col in columns]
+
+                if column not in col_names:
+                    await self._connection.execute(alter_sql)
+                    logger.info(f"Migration: added '{column}' column to {table}")
+            except Exception as e:
+                # Column may already exist (race condition) — safe to ignore
+                logger.debug(f"Migration skip for {table}.{column}: {e}")
+
+        # Create scope indexes (must be after ALTER TABLE, not in schema.sql)
+        scope_indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_nodes_scope ON memory_nodes(scope)",
+            "CREATE INDEX IF NOT EXISTS idx_nodes_scope_type ON memory_nodes(scope, node_type)",
+            "CREATE INDEX IF NOT EXISTS idx_edges_scope ON graph_edges(scope)",
+        ]
+        for idx_sql in scope_indexes:
+            try:
+                await self._connection.execute(idx_sql)
+            except Exception as e:
+                logger.debug(f"Scope index skip: {e}")
+
+        await self._connection.commit()
 
     async def close(self) -> None:
         """

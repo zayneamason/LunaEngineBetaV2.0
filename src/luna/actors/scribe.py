@@ -25,6 +25,8 @@ import logging
 import time
 
 from .base import Actor, Message
+import re as _re
+
 from luna.extraction.types import (
     ExtractionType,
     ExtractedObject,
@@ -33,6 +35,8 @@ from luna.extraction.types import (
     ExtractionConfig,
     Chunk,
     EXTRACTION_BACKENDS,
+    ConversationMode,
+    FlowSignal,
 )
 from luna.extraction.chunker import SemanticChunker, Turn
 from luna.entities.models import (
@@ -162,6 +166,13 @@ class ScribeActor(Actor):
         # Extraction history (keep last 20)
         self._extraction_history: list[dict] = []
         self._max_history = 20
+
+        # Flow tracking state (Layer 2)
+        self._current_topic: str = ""
+        self._current_entities: set[str] = set()
+        self._recent_entities: deque[set[str]] = deque(maxlen=5)
+        self._turn_count_in_flow: int = 0
+        self._open_actions: list[dict] = []
 
         logger.info(f"Scribe (Ben) initialized with backend: {self.config.backend}")
 
@@ -382,8 +393,22 @@ class ScribeActor(Actor):
         chunks = list(self.stack)
         self.stack.clear()
 
+        # Get raw text for flow assessment
+        raw_text = "\n".join(chunk.content for chunk in chunks)
+
         # Extract from chunks
         extraction, entity_updates = await self._extract_chunks(chunks)
+
+        # Assess conversational flow (Layer 2)
+        flow_signal = self._assess_flow(extraction, raw_text)
+        extraction.flow_signal = flow_signal
+
+        logger.info(
+            f"Ben: Flow={flow_signal.mode.value} "
+            f"continuity={flow_signal.continuity_score:.2f} "
+            f"topic='{flow_signal.current_topic[:30]}' "
+            f"open_threads={len(flow_signal.open_threads)}"
+        )
 
         if not extraction.is_empty():
             await self._send_to_librarian(extraction)
@@ -400,6 +425,136 @@ class ScribeActor(Actor):
 
         if extraction.is_empty() and not entity_updates:
             logger.debug("Ben: No extractions from stack")
+
+    # =========================================================================
+    # FLOW AWARENESS (Layer 2)
+    # =========================================================================
+
+    # Regex patterns for detecting conversational mode shifts
+    _RECAL_PATTERNS = [
+        _re.compile(r"(?i)^(anyway|so|moving on|switching|let'?s talk about)"),
+        _re.compile(r"(?i)(different topic|change of subject|other thing)"),
+        _re.compile(r"(?i)^(what about|how about|tell me about)\b(?!.*\b(this|that|it)\b)"),
+    ]
+
+    _AMEND_PATTERNS = [
+        _re.compile(r"(?i)^(actually|wait|no|sorry|i mean)"),
+        _re.compile(r"(?i)(go back|back to|not what i|that'?s wrong)"),
+        _re.compile(r"(?i)(i meant|let me rephrase|correction)"),
+    ]
+
+    def _assess_flow(
+        self,
+        extraction: ExtractionOutput,
+        raw_text: str,
+    ) -> FlowSignal:
+        """
+        Assess conversational flow state from current extraction.
+
+        Uses three signals:
+        1. Entity overlap — are we talking about the same things?
+        2. Explicit language — did the user signal a shift or correction?
+        3. Extraction type distribution — ACTIONs without OUTCOMEs = open threads
+
+        Pure Python, no cloud calls. < 2ms.
+        """
+        # 1. Gather current entities from extraction
+        current_entities: set[str] = set()
+        for obj in extraction.objects:
+            current_entities.update(obj.entities)
+
+        # 2. Calculate entity overlap with recent history
+        if self._recent_entities:
+            recent_union: set[str] = set()
+            for entity_set in self._recent_entities:
+                recent_union.update(entity_set)
+
+            if current_entities or recent_union:
+                intersection = current_entities & recent_union
+                union = current_entities | recent_union
+                entity_overlap = len(intersection) / len(union) if union else 0.0
+            else:
+                entity_overlap = 1.0  # No entities either way = neutral
+        else:
+            entity_overlap = 1.0  # First turn = flow by default
+
+        # 3. Detect explicit signals in raw text
+        signals: list[str] = []
+
+        for pattern in self._RECAL_PATTERNS:
+            if pattern.search(raw_text):
+                signals.append(f"recal_language: {pattern.pattern}")
+
+        for pattern in self._AMEND_PATTERNS:
+            if pattern.search(raw_text):
+                signals.append(f"amend_language: {pattern.pattern}")
+
+        # 4. Determine mode
+        has_recal_language = any("recal_language" in s for s in signals)
+        has_amend_language = any("amend_language" in s for s in signals)
+
+        if has_amend_language and entity_overlap > 0.3:
+            mode = ConversationMode.AMEND
+        elif has_recal_language or entity_overlap < 0.3:
+            mode = ConversationMode.RECALIBRATION
+        else:
+            mode = ConversationMode.FLOW
+
+        # 5. Track open threads (ACTIONs without OUTCOMEs)
+        for obj in extraction.objects:
+            if obj.type == ExtractionType.ACTION:
+                self._open_actions.append({
+                    "content": obj.content,
+                    "entities": obj.entities,
+                    "timestamp": time.time(),
+                })
+            elif obj.type == ExtractionType.OUTCOME:
+                # Try to match and close an open action
+                for i, action in enumerate(self._open_actions):
+                    if set(action["entities"]) & set(obj.entities):
+                        self._open_actions.pop(i)
+                        break
+
+        # Age out stale actions (> 24 hours)
+        cutoff = time.time() - 86400
+        self._open_actions = [a for a in self._open_actions if a["timestamp"] > cutoff]
+
+        # 6. Generate topic label from highest-confidence extraction
+        current_topic = self._current_topic
+        if extraction.objects:
+            best = max(extraction.objects, key=lambda o: o.confidence)
+            if best.entities:
+                current_topic = ", ".join(best.entities[:3])
+            else:
+                current_topic = best.content[:50]
+
+        # 7. Update state
+        if mode == ConversationMode.RECALIBRATION:
+            self._turn_count_in_flow = 0
+        else:
+            self._turn_count_in_flow += 1
+
+        self._recent_entities.append(current_entities)
+        self._current_entities = current_entities
+        self._current_topic = current_topic
+
+        # 8. Build signal
+        open_thread_descriptions = [a["content"][:80] for a in self._open_actions[-5:]]
+
+        return FlowSignal(
+            mode=mode,
+            current_topic=current_topic,
+            topic_entities=list(current_entities),
+            continuity_score=entity_overlap,
+            entity_overlap=entity_overlap,
+            open_threads=open_thread_descriptions,
+            correction_target=raw_text[:80] if mode == ConversationMode.AMEND else "",
+            signals_detected=signals,
+        )
+
+    # =========================================================================
+    # EXTRACTION
+    # =========================================================================
 
     async def _extract_chunks(self, chunks: list[Chunk]) -> tuple[ExtractionOutput, list[EntityUpdate]]:
         """

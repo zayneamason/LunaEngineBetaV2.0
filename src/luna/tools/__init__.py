@@ -51,6 +51,31 @@ from .memory_tools import (
     ALL_MEMORY_TOOLS,
 )
 
+# Eden tools (optional - requires Eden adapter initialization)
+try:
+    from .eden_tools import (
+        eden_create_image_tool,
+        eden_create_video_tool,
+        eden_chat_tool,
+        eden_list_agents_tool,
+        eden_health_tool,
+        register_eden_tools,
+        set_eden_adapter,
+        get_eden_adapter,
+        get_eden_policy,
+        get_eden_policy_status,
+        ALL_EDEN_TOOLS,
+    )
+    EDEN_TOOLS_AVAILABLE = True
+except ImportError:
+    EDEN_TOOLS_AVAILABLE = False
+    ALL_EDEN_TOOLS = []
+    def register_eden_tools(registry): pass
+    def set_eden_adapter(adapter, engine=None): pass
+    def get_eden_adapter(): return None
+    def get_eden_policy(): return None
+    def get_eden_policy_status(): return {"loaded": False}
+
 # QA tools (optional - may not be available if QA module not installed)
 try:
     from .qa_tools import (
@@ -78,6 +103,21 @@ except ImportError:
     ALL_QA_TOOLS = []
     def register_qa_tools(registry): pass
 
+# Data room tools (optional - requires data room ingestion)
+try:
+    from .dataroom_tools import (
+        dataroom_search_tool,
+        dataroom_status_tool,
+        dataroom_recent_tool,
+        register_dataroom_tools,
+        ALL_DATAROOM_TOOLS,
+    )
+    DATAROOM_TOOLS_AVAILABLE = True
+except ImportError:
+    DATAROOM_TOOLS_AVAILABLE = False
+    ALL_DATAROOM_TOOLS = []
+    def register_dataroom_tools(registry): pass
+
 __all__ = [
     # Core classes
     "Tool",
@@ -100,10 +140,22 @@ __all__ = [
     "set_memory_matrix",
     "get_memory_matrix",
     "ALL_MEMORY_TOOLS",
+    # Eden tools
+    "register_eden_tools",
+    "set_eden_adapter",
+    "get_eden_adapter",
+    "get_eden_policy",
+    "get_eden_policy_status",
+    "ALL_EDEN_TOOLS",
+    "EDEN_TOOLS_AVAILABLE",
     # QA tools
     "register_qa_tools",
     "ALL_QA_TOOLS",
     "QA_TOOLS_AVAILABLE",
+    # Data room tools
+    "register_dataroom_tools",
+    "ALL_DATAROOM_TOOLS",
+    "DATAROOM_TOOLS_AVAILABLE",
 ]
 
 
@@ -120,5 +172,7 @@ def create_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
     register_file_tools(registry)
     register_memory_tools(registry)
+    register_eden_tools(registry)  # Will no-op if Eden not available
     register_qa_tools(registry)  # Will no-op if QA not available
+    register_dataroom_tools(registry)  # Will no-op if not available
     return registry

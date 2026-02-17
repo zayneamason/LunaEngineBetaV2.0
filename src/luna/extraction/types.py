@@ -146,6 +146,7 @@ class ExtractionOutput:
     edges: list[ExtractedEdge] = field(default_factory=list)
     source_id: str = ""
     extraction_time_ms: int = 0
+    flow_signal: Optional["FlowSignal"] = None  # Layer 2: conversational flow state
 
     def __len__(self) -> int:
         return len(self.objects)
@@ -156,21 +157,26 @@ class ExtractionOutput:
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
-        return {
+        result = {
             "objects": [obj.to_dict() for obj in self.objects],
             "edges": [edge.to_dict() for edge in self.edges],
             "source_id": self.source_id,
             "extraction_time_ms": self.extraction_time_ms,
         }
+        if self.flow_signal:
+            result["flow_signal"] = self.flow_signal.to_dict()
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExtractionOutput":
         """Create from dictionary."""
+        flow_data = data.get("flow_signal")
         return cls(
             objects=[ExtractedObject.from_dict(o) for o in data.get("objects", [])],
             edges=[ExtractedEdge.from_dict(e) for e in data.get("edges", [])],
             source_id=data.get("source_id", ""),
             extraction_time_ms=data.get("extraction_time_ms", 0),
+            flow_signal=FlowSignal.from_dict(flow_data) if flow_data else None,
         )
 
 
@@ -187,6 +193,10 @@ class FilingResult:
     edges_skipped: list[str] = field(default_factory=list)
     filing_time_ms: int = 0
 
+    # Layer 4: Task Ledger — real node IDs for ACTION/OUTCOME tracking
+    action_node_ids: list[str] = field(default_factory=list)
+    outcome_node_ids: list[str] = field(default_factory=list)
+
     def __len__(self) -> int:
         return len(self.nodes_created) + len(self.nodes_merged)
 
@@ -198,6 +208,8 @@ class FilingResult:
             "edges_created": self.edges_created,
             "edges_skipped": self.edges_skipped,
             "filing_time_ms": self.filing_time_ms,
+            "action_node_ids": self.action_node_ids,
+            "outcome_node_ids": self.outcome_node_ids,
         }
 
 
@@ -219,6 +231,142 @@ class ExtractionConfig:
     # Model-specific settings
     temperature: float = 0.3  # Lower = more deterministic extractions
     max_tokens: int = 1024    # Max response tokens
+
+
+# =============================================================================
+# FLOW AWARENESS TYPES (Layer 2)
+# =============================================================================
+
+class ConversationMode(str, Enum):
+    """The current conversational mode detected by Scribe."""
+    FLOW = "FLOW"                     # Continuing on-topic
+    RECALIBRATION = "RECALIBRATION"   # Topic shift detected
+    AMEND = "AMEND"                   # Course correction within flow
+
+
+@dataclass
+class FlowSignal:
+    """
+    Scribe's assessment of conversational continuity.
+
+    Emitted with every extraction. Consumed by Librarian
+    for thread management decisions.
+    """
+    mode: ConversationMode
+
+    # Topic tracking
+    current_topic: str              # Brief label for what's being discussed
+    topic_entities: list[str] = field(default_factory=list)
+
+    # Continuity metrics
+    continuity_score: float = 1.0   # 0.0 (total shift) to 1.0 (same thread)
+    entity_overlap: float = 1.0     # Jaccard similarity vs recent turns
+
+    # Open threads detected
+    open_threads: list[str] = field(default_factory=list)
+
+    # Amend specifics (only populated in AMEND mode)
+    correction_target: str = ""
+
+    # Debug
+    signals_detected: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "mode": self.mode.value,
+            "current_topic": self.current_topic,
+            "topic_entities": self.topic_entities,
+            "continuity_score": self.continuity_score,
+            "entity_overlap": self.entity_overlap,
+            "open_threads": self.open_threads,
+            "correction_target": self.correction_target,
+            "signals_detected": self.signals_detected,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FlowSignal":
+        return cls(
+            mode=ConversationMode(data["mode"]),
+            current_topic=data.get("current_topic", ""),
+            topic_entities=data.get("topic_entities", []),
+            continuity_score=data.get("continuity_score", 1.0),
+            entity_overlap=data.get("entity_overlap", 1.0),
+            open_threads=data.get("open_threads", []),
+            correction_target=data.get("correction_target", ""),
+            signals_detected=data.get("signals_detected", []),
+        )
+
+
+# =============================================================================
+# THREAD MANAGEMENT TYPES (Layer 3)
+# =============================================================================
+
+class ThreadStatus(str, Enum):
+    """Thread lifecycle states."""
+    ACTIVE = "active"
+    PARKED = "parked"
+    RESUMED = "resumed"     # Transient — becomes ACTIVE on next turn
+    CLOSED = "closed"
+
+
+@dataclass
+class Thread:
+    """
+    A named stretch of conversational attention.
+
+    Persisted as a THREAD node in Memory Matrix.
+    """
+    id: str
+    topic: str
+    status: ThreadStatus = ThreadStatus.ACTIVE
+    entities: list[str] = field(default_factory=list)
+    entity_node_ids: list[str] = field(default_factory=list)
+    open_tasks: list[str] = field(default_factory=list)
+    turn_count: int = 0
+    started_at: datetime = field(default_factory=datetime.now)
+    parked_at: Optional[datetime] = None
+    resumed_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    project_slug: Optional[str] = None
+    parent_thread_id: Optional[str] = None
+    resume_count: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "topic": self.topic,
+            "status": self.status.value,
+            "entities": self.entities,
+            "entity_node_ids": self.entity_node_ids,
+            "open_tasks": self.open_tasks,
+            "turn_count": self.turn_count,
+            "started_at": self.started_at.isoformat(),
+            "parked_at": self.parked_at.isoformat() if self.parked_at else None,
+            "resumed_at": self.resumed_at.isoformat() if self.resumed_at else None,
+            "closed_at": self.closed_at.isoformat() if self.closed_at else None,
+            "project_slug": self.project_slug,
+            "parent_thread_id": self.parent_thread_id,
+            "resume_count": self.resume_count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Thread":
+        return cls(
+            id=data["id"],
+            topic=data["topic"],
+            status=ThreadStatus(data.get("status", "active")),
+            entities=data.get("entities", []),
+            entity_node_ids=data.get("entity_node_ids", []),
+            open_tasks=data.get("open_tasks", []),
+            turn_count=data.get("turn_count", 0),
+            started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else datetime.now(),
+            parked_at=datetime.fromisoformat(data["parked_at"]) if data.get("parked_at") else None,
+            resumed_at=datetime.fromisoformat(data["resumed_at"]) if data.get("resumed_at") else None,
+            closed_at=datetime.fromisoformat(data["closed_at"]) if data.get("closed_at") else None,
+            project_slug=data.get("project_slug"),
+            parent_thread_id=data.get("parent_thread_id"),
+            resume_count=data.get("resume_count", 0),
+        )
 
 
 # Backend configurations

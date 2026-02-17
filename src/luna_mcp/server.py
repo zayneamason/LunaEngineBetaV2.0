@@ -46,7 +46,7 @@ os.environ.setdefault("LUNA_MCP_API_URL", "http://localhost:8742")
 from mcp.server.fastmcp import FastMCP
 
 # Import tool modules
-from luna_mcp.tools import filesystem, memory, state, git, forge, qa
+from luna_mcp.tools import filesystem, memory, state, git, forge, qa, eden
 
 # Import auto-session functions
 from luna_mcp.tools.memory import (
@@ -822,6 +822,224 @@ async def qa_check_personality() -> str:
     Returns status of P1, P2, P3 assertions and personality injection state.
     """
     return await qa.qa_check_personality()
+
+
+# ==============================================================================
+# Eden Tools (Creative AI — image/video generation, agent chat)
+# ==============================================================================
+
+@mcp.tool()
+async def eden_create_image(
+    prompt: str,
+    width: int = None,
+    height: int = None,
+) -> str:
+    """
+    Generate an image from a text prompt using Eden.art.
+
+    Args:
+        prompt: Text description of the image to generate
+        width: Image width in pixels (optional)
+        height: Image height in pixels (optional)
+
+    Returns:
+        JSON with task_id, status, url, and is_complete fields
+    """
+    return await eden.eden_create_image(prompt, width, height)
+
+
+@mcp.tool()
+async def eden_create_video(prompt: str) -> str:
+    """
+    Generate a video from a text prompt using Eden.art.
+
+    Args:
+        prompt: Text description of the video to generate
+
+    Returns:
+        JSON with task_id, status, url, and is_complete fields
+    """
+    return await eden.eden_create_video(prompt)
+
+
+@mcp.tool()
+async def eden_chat(
+    message: str,
+    agent_id: str = None,
+    session_id: str = None,
+) -> str:
+    """
+    Chat with an Eden agent. Creates a new session or continues an existing one.
+
+    Args:
+        message: Message to send to the agent
+        agent_id: Eden agent ID (uses EDEN_AGENT_ID env var if not provided)
+        session_id: Existing session ID to continue (creates new if not provided)
+
+    Returns:
+        JSON with session_id, messages, and message_count
+    """
+    return await eden.eden_chat(message, agent_id, session_id)
+
+
+@mcp.tool()
+async def eden_list_agents() -> str:
+    """
+    List available Eden agents.
+
+    Returns:
+        JSON with agents array and count
+    """
+    return await eden.eden_list_agents()
+
+
+@mcp.tool()
+async def eden_health() -> str:
+    """
+    Check Eden API connectivity and authentication.
+
+    Returns:
+        JSON with status (ok/error), api_base, and has_api_key
+    """
+    return await eden.eden_health()
+
+
+# ==============================================================================
+# Data Room Tools
+# ==============================================================================
+
+@mcp.tool()
+async def dataroom_search(query: str, category: str = None, status: str = None, limit: int = 10) -> str:
+    """
+    Search Luna's investor data room for documents.
+
+    Searches DOCUMENT nodes ingested from the Google Drive data room.
+    Can filter by category (e.g. "2. Financials") or status ("Final", "Draft", "Needs Review").
+
+    Args:
+        query: Search text (e.g. "cost breakdown", "LOI", "team")
+        category: Optional category filter (e.g. "2. Financials", "3. Legal")
+        status: Optional status filter ("Final", "Draft", "Needs Review")
+        limit: Maximum results (default 10)
+
+    Returns:
+        Formatted list of matching documents with links
+    """
+    try:
+        params = {"query": query, "limit": limit}
+        if category:
+            params["category"] = category
+        if status:
+            params["status"] = status
+
+        response = await state._call_api("POST", "/dataroom/search", params=params)
+        results = response.get("results", [])
+
+        if not results:
+            return f"No data room documents found for '{query}'."
+
+        lines = [f"# Data Room Search: {query}", f"*{len(results)} documents found*", ""]
+        for doc in results:
+            name = doc.get("name", "Unknown")
+            cat = doc.get("category", "")
+            url = doc.get("url", "")
+            file_type = doc.get("file_type", "")
+            status_str = doc.get("status", "")
+            link = f" — [Open]({url})" if url else ""
+            status_tag = f" [{status_str}]" if status_str else ""
+            lines.append(f"- **{name}**{status_tag} ({cat}, {file_type}){link}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error searching data room: {str(e)}"
+
+
+@mcp.tool()
+async def dataroom_status() -> str:
+    """
+    Get data room overview: total documents, coverage by category, status breakdown.
+
+    Shows which of the 9 investor data room categories have documents
+    and flags any gaps (categories with no documents).
+
+    Returns:
+        Formatted status report with category and status breakdown
+    """
+    try:
+        response = await state._call_api("GET", "/dataroom/status")
+        total = response.get("total_documents", 0)
+        by_cat = response.get("by_category", {})
+        by_status = response.get("by_status", {})
+
+        all_categories = [
+            "1. Company Overview", "2. Financials", "3. Legal",
+            "4. Product", "5. Market & Competition", "6. Team",
+            "7. Go-to-Market", "8. Partnerships & Impact", "9. Risk & Mitigation",
+        ]
+
+        lines = [
+            f"# Data Room Status",
+            f"**{total} documents** across {len(by_cat)} categories",
+            "",
+            "## By Category",
+        ]
+
+        for cat in all_categories:
+            count = by_cat.get(cat, 0)
+            marker = f"({count} docs)" if count > 0 else "EMPTY"
+            lines.append(f"- {cat}: {marker}")
+
+        missing = [c for c in all_categories if by_cat.get(c, 0) == 0]
+        if missing:
+            lines.append("")
+            lines.append(f"**Missing:** {', '.join(missing)}")
+
+        if by_status:
+            lines.append("")
+            lines.append("## By Status")
+            for st, count in sorted(by_status.items()):
+                lines.append(f"- {st}: {count}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting data room status: {str(e)}"
+
+
+@mcp.tool()
+async def dataroom_recent(days: int = 7) -> str:
+    """
+    Get recently synced data room documents.
+
+    Shows documents added or updated in the last N days.
+
+    Args:
+        days: Look back this many days (default 7)
+
+    Returns:
+        List of recently synced documents
+    """
+    try:
+        response = await state._call_api("GET", f"/dataroom/recent?days={days}")
+        docs = response.get("documents", [])
+
+        if not docs:
+            return f"No data room documents synced in the last {days} days."
+
+        lines = [
+            f"# Recently Synced ({len(docs)} documents, last {days} days)",
+            "",
+        ]
+        for doc in docs:
+            name = doc.get("name", "Unknown")
+            cat = doc.get("category", "")
+            synced = doc.get("synced_at", "")[:16]
+            url = doc.get("url", "")
+            link = f" — [Open]({url})" if url else ""
+            lines.append(f"- **{name}** ({cat}) synced {synced}{link}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting recent documents: {str(e)}"
 
 
 # ==============================================================================

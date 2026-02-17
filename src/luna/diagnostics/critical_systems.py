@@ -69,6 +69,33 @@ class CriticalSystemsCheck:
             return True, f"✅ {relative_path} ({size:,} bytes)"
         return False, f"❌ {message}: {relative_path}"
 
+    def check_pipeline_wiring(self, endpoint_name: str, source_code: str) -> tuple[bool, str]:
+        """
+        Verify a streaming endpoint calls record_conversation_turn.
+
+        Static analysis — reads the source between the endpoint decorator
+        and the next @app decorator to check for the unified recording call.
+        """
+        # Find the endpoint function
+        marker = f'"{endpoint_name}"' if endpoint_name.startswith("/") else endpoint_name
+        # Look for the route decorator
+        import re
+        pattern = rf'@app\.\w+\("{re.escape(endpoint_name)}"'
+        match = re.search(pattern, source_code)
+        if not match:
+            return True, f"✅ {endpoint_name} (not found — skipped)"
+
+        # Extract the function body up to the next route decorator
+        start = match.start()
+        next_route = re.search(r'\n@app\.', source_code[start + 1:])
+        end = start + 1 + next_route.start() if next_route else len(source_code)
+        function_body = source_code[start:end]
+
+        if "record_conversation_turn" in function_body or "_trigger_extraction" in function_body:
+            return True, f"✅ {endpoint_name} wired to extraction pipeline"
+        else:
+            return False, f"❌ {endpoint_name} bypasses extraction pipeline (missing record_conversation_turn or _trigger_extraction)"
+
     def check_data(self, db_path: str, query: str, minimum: int, name: str) -> tuple[bool, str]:
         """Check database has required minimum data."""
         full_path = self.project_root / db_path
@@ -125,6 +152,20 @@ class CriticalSystemsCheck:
             messages.append(f"  {msg}")
             if not passed:
                 all_passed = False
+
+        # Check pipeline wiring (static analysis of server.py)
+        messages.append("\n🔗 Pipeline Wiring:")
+        server_path = self.project_root / "src" / "luna" / "api" / "server.py"
+        if server_path.exists():
+            server_source = server_path.read_text()
+            for endpoint in ["/persona/stream", "/stream", "/hub/turn/add"]:
+                passed, msg = self.check_pipeline_wiring(endpoint, server_source)
+                messages.append(f"  {msg}")
+                if not passed:
+                    # Pipeline wiring is a warning, not a hard block
+                    messages.append(f"    ⚠️  Extraction pipeline will not fire for {endpoint}")
+        else:
+            messages.append("  ⚠️  server.py not found — pipeline wiring check skipped")
 
         messages.append("\n" + "=" * 60)
         if all_passed:

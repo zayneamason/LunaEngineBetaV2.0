@@ -44,7 +44,8 @@ class LunaWatchdog:
         self,
         check_interval: int = 60,
         project_root: Optional[Path] = None,
-        alert_callback: Optional[Callable[[WatchdogAlert], None]] = None
+        alert_callback: Optional[Callable[[WatchdogAlert], None]] = None,
+        engine: Optional[object] = None,
     ):
         """
         Initialize the watchdog.
@@ -53,10 +54,13 @@ class LunaWatchdog:
             check_interval: Seconds between health checks (default: 60)
             project_root: Root directory of Luna project
             alert_callback: Optional callback for alerts (default: log only)
+            engine: Optional LunaEngine reference for pipeline checks
         """
         self.check_interval = check_interval
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._engine = engine
+        self._start_time: Optional[float] = None
 
         if project_root is None:
             self.project_root = Path(__file__).parent.parent.parent.parent
@@ -161,6 +165,61 @@ class LunaWatchdog:
                 f"Local inference broken: {e}"
             )
 
+    def _check_extraction_pipeline(self) -> Optional[WatchdogAlert]:
+        """
+        Check if the extraction pipeline is actually firing.
+
+        Only alerts after Luna has been running for 5+ minutes AND
+        has processed messages — avoids false alarms on idle instances.
+        """
+        if not self._engine:
+            return None
+
+        import time
+        if self._start_time is None:
+            return None
+
+        uptime_minutes = (time.monotonic() - self._start_time) / 60
+        if uptime_minutes < 5:
+            return None  # Too early to judge
+
+        messages_processed = getattr(self._engine.metrics, "messages_generated", 0)
+        if messages_processed < 3:
+            return None  # Not enough traffic to judge
+
+        scribe = self._engine.get_actor("scribe")
+        if not scribe:
+            return WatchdogAlert(
+                "critical",
+                "Extraction Pipeline",
+                "Scribe actor not registered — extraction pipeline is offline"
+            )
+
+        stats = scribe.get_stats()
+        extractions = stats.get("extractions_count", 0)
+
+        if extractions == 0:
+            return WatchdogAlert(
+                "warning",
+                "Extraction Pipeline",
+                f"0 extractions after {messages_processed} messages processed. "
+                f"Pipeline may be disconnected."
+            )
+
+        librarian = self._engine.get_actor("librarian")
+        if librarian:
+            lib_stats = librarian.get_stats()
+            filings = lib_stats.get("filings_count", 0)
+            if filings == 0 and extractions > 0:
+                return WatchdogAlert(
+                    "warning",
+                    "Extraction Pipeline",
+                    f"Scribe has {extractions} extractions but Librarian has 0 filings. "
+                    f"Scribe → Librarian link may be broken."
+                )
+
+        return None
+
     async def _run_checks(self) -> List[WatchdogAlert]:
         """Run all health checks and return any alerts."""
         alerts = []
@@ -170,6 +229,7 @@ class LunaWatchdog:
             ("lora", self._check_lora_adapter),
             ("memory", self._check_memory_database),
             ("inference", self._check_local_inference),
+            ("extraction", self._check_extraction_pipeline),
         ]:
             try:
                 alert = check_func()
@@ -206,7 +266,9 @@ class LunaWatchdog:
             logger.warning("Watchdog already running")
             return
 
+        import time
         self._running = True
+        self._start_time = time.monotonic()
         logger.info(f"Watchdog starting (interval: {self.check_interval}s)")
 
         while self._running:
@@ -241,18 +303,21 @@ _watchdog: Optional[LunaWatchdog] = None
 
 def get_watchdog(
     check_interval: int = 60,
-    project_root: Optional[Path] = None
+    project_root: Optional[Path] = None,
+    engine: Optional[object] = None,
 ) -> LunaWatchdog:
     """Get or create the global watchdog instance."""
     global _watchdog
     if _watchdog is None:
-        _watchdog = LunaWatchdog(check_interval, project_root)
+        _watchdog = LunaWatchdog(check_interval, project_root, engine=engine)
+    elif engine is not None and _watchdog._engine is None:
+        _watchdog._engine = engine
     return _watchdog
 
 
-async def start_watchdog(check_interval: int = 60) -> asyncio.Task:
+async def start_watchdog(check_interval: int = 60, engine: Optional[object] = None) -> asyncio.Task:
     """Start the global watchdog in the background."""
-    watchdog = get_watchdog(check_interval)
+    watchdog = get_watchdog(check_interval, engine=engine)
     return await watchdog.start_background()
 
 
