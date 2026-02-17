@@ -88,7 +88,7 @@ export function useChat() {
   useEffect(() => {
     const connectWebSocket = () => {
       try {
-        const ws = new WebSocket('ws://localhost:8000/ws/chat');
+        const ws = new WebSocket('ws://127.0.0.1:8000/ws/chat');
 
         ws.onopen = () => {
           console.log('[Chat WS] Connected to shared session');
@@ -174,7 +174,7 @@ export function useChat() {
     ]);
 
     try {
-      const response = await fetch(`http://localhost:8000${parsed.endpoint}`, {
+      const response = await fetch(`http://127.0.0.1:8000${parsed.endpoint}`, {
         method: parsed.method,
       });
 
@@ -317,57 +317,80 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
     setIsStreaming(true);
     setContext(null);
 
-    await streamPersona(text, {
-      onContext: (ctx) => {
-        // Context arrives first - store it for UI
-        setContext(ctx);
-      },
+    let streamDone = false;
 
-      onToken: (token) => {
-        // Accumulate tokens
-        streamingRef.current += token;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId
-              ? { ...m, content: streamingRef.current }
-              : m
-          )
-        );
-      },
+    try {
+      await streamPersona(text, {
+        onContext: (ctx) => {
+          // Context arrives first - store it for UI
+          setContext(ctx);
+        },
 
-      onDone: (result) => {
-        // Finalize the message with metadata
+        onToken: (token) => {
+          // Accumulate tokens
+          streamingRef.current += token;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: streamingRef.current }
+                : m
+            )
+          );
+        },
+
+        onDone: (result) => {
+          streamDone = true;
+          // Finalize the message with metadata
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    content: result.response || streamingRef.current,
+                    streaming: false,
+                    metadata: result.metadata,
+                    tokens: result.metadata?.output_tokens,
+                    latency: result.metadata?.generation_time_ms,
+                    delegated: result.metadata?.model?.includes('claude'),
+                    local: result.metadata?.model?.includes('qwen'),
+                  }
+                : m
+            )
+          );
+          setIsStreaming(false);
+        },
+
+        onError: (msg) => {
+          streamDone = true;
+          // Update message with error
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, content: `Error: ${msg}`, streaming: false, error: true }
+                : m
+            )
+          );
+          setIsStreaming(false);
+        },
+      });
+    } finally {
+      // Safety net: if stream ended without done/error event, unlock the UI
+      if (!streamDone) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsgId
               ? {
                   ...m,
-                  content: result.response || streamingRef.current,
+                  content: streamingRef.current || 'Connection lost — try again.',
                   streaming: false,
-                  metadata: result.metadata,
-                  tokens: result.metadata?.output_tokens,
-                  latency: result.metadata?.generation_time_ms,
-                  delegated: result.metadata?.model?.includes('claude'),
-                  local: result.metadata?.model?.includes('qwen'),
+                  error: !streamingRef.current,
                 }
               : m
           )
         );
         setIsStreaming(false);
-      },
-
-      onError: (msg) => {
-        // Update message with error
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId
-              ? { ...m, content: `Error: ${msg}`, streaming: false, error: true }
-              : m
-          )
-        );
-        setIsStreaming(false);
-      },
-    });
+      }
+    }
   }, [streamPersona, isStreaming, executeSlashCommand]);
 
   // Abort current generation

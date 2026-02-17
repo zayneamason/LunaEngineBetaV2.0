@@ -5,7 +5,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart
 // LUNA AUTO-TUNER - Memory & Cognition Tuning Interface
 // ============================================================================
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 // Tuning profiles - curated presets for different Luna behaviors
 const TUNING_PROFILES = {
@@ -263,16 +263,16 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-6xl max-h-[90vh] bg-slate-900 rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden">
+      <div className="w-full max-w-6xl max-h-[90vh] bg-kozmo-bg rounded border border-kozmo-border shadow-2xl flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex-shrink-0 px-6 py-4 border-b border-white/10 flex items-center justify-between">
+        <div className="flex-shrink-0 px-6 py-4 border-b border-kozmo-border flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center text-xl shadow-lg shadow-violet-500/25">
+            <div className="w-10 h-10 rounded bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center text-xl shadow-lg shadow-violet-500/25">
               🧠
             </div>
             <div>
-              <h1 className="text-lg font-semibold tracking-tight text-white">Luna Auto-Tuner</h1>
-              <p className="text-xs text-white/40">Memory & Cognition Optimization</p>
+              <h1 className="text-lg font-display font-semibold tracking-tight text-white">Luna Auto-Tuner</h1>
+              <p className="text-xs text-kozmo-muted">Memory & Cognition Optimization</p>
             </div>
           </div>
           
@@ -280,7 +280,7 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
             {hasPendingChanges && (
               <button
                 onClick={applyPendingChanges}
-                className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-medium hover:from-emerald-400 hover:to-cyan-400 transition-all"
+                className="px-4 py-2 text-sm rounded bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-medium hover:from-emerald-400 hover:to-cyan-400 transition-all"
               >
                 Apply {Object.keys(pendingChanges).length} Changes
               </button>
@@ -288,13 +288,13 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
             <button
               onClick={runEvaluation}
               disabled={isOptimizing}
-              className="px-4 py-2 text-sm rounded-lg bg-white/10 border border-white/10 hover:bg-white/15 transition-all text-white disabled:opacity-50"
+              className="px-4 py-2 text-sm rounded bg-kozmo-border border border-kozmo-border hover:bg-white/15 transition-all text-white disabled:opacity-50"
             >
               🧪 Eval
             </button>
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white"
+              className="p-2 rounded hover:bg-kozmo-surface/80 transition-colors text-white/60 hover:text-white"
             >
               ✕
             </button>
@@ -302,7 +302,7 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
         </div>
 
         {/* Navigation */}
-        <div className="flex-shrink-0 border-b border-white/5 bg-black/20 flex items-center gap-1 px-6">
+        <div className="flex-shrink-0 border-b border-kozmo-border/50 bg-black/20 flex items-center gap-1 px-6">
           {[
             { id: 'profiles', label: 'Profiles', icon: '🎭' },
             { id: 'params', label: 'Parameters', icon: '🎛️' },
@@ -315,7 +315,7 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
               className={`px-4 py-3 text-sm flex items-center gap-2 border-b-2 transition-all ${
                 activeTab === tab.id
                   ? 'border-violet-500 text-white'
-                  : 'border-transparent text-white/40 hover:text-white/60'
+                  : 'border-transparent text-kozmo-muted hover:text-white/60'
               }`}
             >
               <span>{tab.icon}</span>
@@ -334,16 +334,16 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
                   <button
                     key={key}
                     onClick={() => applyProfile(key)}
-                    className={`p-5 rounded-2xl border text-left transition-all group ${
+                    className={`p-5 rounded border text-left transition-all group ${
                       selectedProfile === key
-                        ? 'bg-violet-500/10 border-violet-500/50'
-                        : 'bg-white/5 border-white/10 hover:bg-white/10 hover:border-white/20'
+                        ? 'bg-kozmo-accent/10 border-kozmo-accent/50'
+                        : 'bg-kozmo-surface border-kozmo-border hover:bg-kozmo-surface/80 hover:border-kozmo-border/80'
                     }`}
                   >
                     <div className="flex items-start justify-between mb-3">
                       <span className="text-3xl">{profile.icon}</span>
                       {selectedProfile === key && (
-                        <span className="px-2 py-0.5 text-[10px] rounded-full bg-violet-500/20 text-violet-400 border border-violet-500/30">
+                        <span className="px-2 py-0.5 text-[10px] rounded-full bg-kozmo-accent/20 text-kozmo-accent border border-kozmo-accent/30">
                           SELECTED
                         </span>
                       )}
@@ -352,7 +352,7 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
                     <p className="text-sm text-white/50 mb-4">{profile.description}</p>
                     <div className="flex flex-wrap gap-1">
                       {Object.keys(profile.params).slice(0, 3).map(param => (
-                        <span key={param} className="px-2 py-0.5 text-[10px] rounded bg-white/10 text-white/50">
+                        <span key={param} className="px-2 py-0.5 text-[10px] rounded bg-kozmo-border text-white/50">
                           {param.split('.').pop()}
                         </span>
                       ))}
@@ -362,7 +362,7 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
               </div>
 
               {currentEval && (
-                <div className="p-6 rounded-2xl bg-white/5 border border-white/10">
+                <div className="p-6 rounded bg-kozmo-surface border border-kozmo-border">
                   <h3 className="text-sm font-medium text-white/70 mb-4">Current Performance</h3>
                   <div className="grid grid-cols-2 gap-8">
                     <div className="h-64">
@@ -395,12 +395,12 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
                 const catParams = Object.entries(paramSpecs).filter(([_, spec]) => spec.category === cat);
                 
                 return (
-                  <div key={cat} className="p-6 rounded-2xl bg-white/5 border border-white/10">
+                  <div key={cat} className="p-6 rounded bg-kozmo-surface border border-kozmo-border">
                     <div className="flex items-center gap-3 mb-6">
                       <span className="text-2xl">{catInfo.icon}</span>
                       <div>
                         <h3 className="font-medium text-white">{catInfo.label}</h3>
-                        <p className="text-xs text-white/40">{catInfo.description}</p>
+                        <p className="text-xs text-kozmo-muted">{catInfo.description}</p>
                       </div>
                     </div>
                     
@@ -430,14 +430,14 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
           {/* Auto-Tune Tab */}
           {activeTab === 'optimize' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="p-6 rounded-2xl bg-white/5 border border-white/10 space-y-6">
+              <div className="p-6 rounded bg-kozmo-surface border border-kozmo-border space-y-6">
                 <h3 className="font-medium flex items-center gap-2 text-white">
                   <span className="text-lg">⚙️</span>
                   Optimization Settings
                 </h3>
                 
                 <div>
-                  <label className="text-xs text-white/40 mb-2 block">Objective</label>
+                  <label className="text-xs text-kozmo-muted mb-2 block">Objective</label>
                   <div className="grid grid-cols-2 gap-2">
                     {[
                       { id: 'balanced', label: 'Balanced', icon: '⚖️' },
@@ -448,10 +448,10 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
                       <button
                         key={obj.id}
                         onClick={() => setOptimConfig(prev => ({ ...prev, objective: obj.id }))}
-                        className={`p-3 rounded-xl border text-left transition-all ${
+                        className={`p-3 rounded border text-left transition-all ${
                           optimConfig.objective === obj.id
-                            ? 'bg-violet-500/20 border-violet-500/50'
-                            : 'bg-white/5 border-white/10 hover:border-white/20'
+                            ? 'bg-kozmo-accent/20 border-kozmo-accent/50'
+                            : 'bg-kozmo-surface border-kozmo-border hover:border-kozmo-border/80'
                         }`}
                       >
                         <span className="text-lg">{obj.icon}</span>
@@ -462,27 +462,27 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
                 </div>
 
                 <div>
-                  <label className="text-xs text-white/40 mb-2 block">Iterations: {optimConfig.iterations}</label>
+                  <label className="text-xs text-kozmo-muted mb-2 block">Iterations: {optimConfig.iterations}</label>
                   <input
                     type="range"
                     min={5}
                     max={50}
                     value={optimConfig.iterations}
                     onChange={(e) => setOptimConfig(prev => ({ ...prev, iterations: parseInt(e.target.value) }))}
-                    className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-violet-500"
+                    className="w-full h-2 bg-kozmo-border rounded appearance-none cursor-pointer accent-violet-500"
                   />
                 </div>
 
                 <button
                   onClick={startOptimization}
                   disabled={isOptimizing}
-                  className="w-full py-4 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-medium hover:from-violet-500 hover:to-fuchsia-500 transition-all shadow-lg shadow-violet-500/25 disabled:opacity-50"
+                  className="w-full py-4 rounded bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-medium hover:from-violet-500 hover:to-fuchsia-500 transition-all shadow-lg shadow-violet-500/25 disabled:opacity-50"
                 >
                   {isOptimizing ? `Optimizing... ${optimizationProgress.toFixed(0)}%` : '🚀 Start Auto-Tune'}
                 </button>
 
                 {isOptimizing && (
-                  <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                  <div className="h-2 bg-kozmo-border rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-all duration-300"
                       style={{ width: `${optimizationProgress}%` }}
@@ -491,7 +491,7 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
                 )}
               </div>
 
-              <div className="p-6 rounded-2xl bg-white/5 border border-white/10 space-y-6">
+              <div className="p-6 rounded bg-kozmo-surface border border-kozmo-border space-y-6">
                 <h3 className="font-medium flex items-center gap-2 text-white">
                   <span className="text-lg">📈</span>
                   Progress
@@ -515,7 +515,7 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
                     </ResponsiveContainer>
                   </div>
                 ) : (
-                  <div className="h-48 flex items-center justify-center text-white/30">
+                  <div className="h-48 flex items-center justify-center text-kozmo-muted">
                     Start optimization to see results
                   </div>
                 )}
@@ -528,23 +528,23 @@ const LunaAutoTuner = ({ isOpen, onClose }) => {
             <div className="space-y-4">
               {evalHistory.length > 0 ? (
                 evalHistory.slice().reverse().slice(0, 10).map((ev, i) => (
-                  <div key={i} className="p-4 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between">
+                  <div key={i} className="p-4 rounded bg-kozmo-surface border border-kozmo-border flex items-center justify-between">
                     <div className="flex items-center gap-4">
                       <div className="text-2xl">{ev.overall_score >= 0.8 ? '🌟' : '✨'}</div>
                       <div>
                         <div className="text-sm text-white">Eval #{evalHistory.length - i}</div>
-                        <div className="text-xs text-white/40">{new Date(ev.timestamp).toLocaleTimeString()}</div>
+                        <div className="text-xs text-kozmo-muted">{new Date(ev.timestamp).toLocaleTimeString()}</div>
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      <span className="px-3 py-1 rounded-lg bg-violet-500/20 text-violet-400 text-sm">
+                      <span className="px-3 py-1 rounded bg-kozmo-accent/20 text-kozmo-accent text-sm">
                         {(ev.overall_score * 100).toFixed(0)}%
                       </span>
                     </div>
                   </div>
                 ))
               ) : (
-                <div className="p-12 rounded-2xl bg-white/5 border border-white/10 text-center text-white/50">
+                <div className="p-12 rounded bg-kozmo-surface border border-kozmo-border text-center text-white/50">
                   No evaluations yet
                 </div>
               )}
@@ -561,23 +561,23 @@ const ParamSlider = ({ spec, value, isPending, onChange, onReset }) => {
   const percentage = ((value - min) / (max - min)) * 100;
   
   return (
-    <div className={`p-4 rounded-xl border transition-all ${
-      isPending ? 'bg-violet-500/10 border-violet-500/30' : 'bg-white/5 border-white/5'
+    <div className={`p-4 rounded border transition-all ${
+      isPending ? 'bg-kozmo-accent/10 border-kozmo-accent/30' : 'bg-kozmo-surface border-kozmo-border/50'
     }`}>
       <div className="flex items-start justify-between mb-3">
         <div>
           <div className="text-sm font-medium text-white">{spec.name.split('.').pop()}</div>
-          <div className="text-xs text-white/40">{spec.description}</div>
+          <div className="text-xs text-kozmo-muted">{spec.description}</div>
         </div>
         <div className="flex items-center gap-2">
           {isPending && (
-            <button onClick={onReset} className="text-xs text-violet-400 hover:text-violet-300">Reset</button>
+            <button onClick={onReset} className="text-xs text-kozmo-accent hover:text-kozmo-accent/80">Reset</button>
           )}
           <span className="text-sm font-mono text-white/80">{typeof value === 'number' ? value.toFixed(2) : value}</span>
         </div>
       </div>
       
-      <div className="relative h-2 bg-white/10 rounded-full">
+      <div className="relative h-2 bg-kozmo-border rounded-full">
         <div className="absolute h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500" style={{ width: `${percentage}%` }} />
         <input
           type="range"
@@ -590,7 +590,7 @@ const ParamSlider = ({ spec, value, isPending, onChange, onReset }) => {
         />
       </div>
       
-      <div className="flex justify-between mt-2 text-[10px] text-white/30">
+      <div className="flex justify-between mt-2 text-[10px] text-kozmo-muted">
         <span>{min}</span>
         <span>default: {spec.default}</span>
         <span>{max}</span>
@@ -601,16 +601,16 @@ const ParamSlider = ({ spec, value, isPending, onChange, onReset }) => {
 
 const StatCard = ({ label, value, color }) => {
   const colorClasses = {
-    violet: 'text-violet-400',
-    cyan: 'text-cyan-400',
+    violet: 'text-kozmo-accent',
+    cyan: 'text-kozmo-accent',
     amber: 'text-amber-400',
     emerald: 'text-emerald-400',
   };
   
   return (
-    <div className="p-4 rounded-xl bg-white/5 text-center">
-      <div className={`text-2xl font-light ${colorClasses[color]}`}>{value}</div>
-      <div className="text-[10px] text-white/40 uppercase tracking-wider">{label}</div>
+    <div className="p-4 rounded bg-kozmo-surface text-center">
+      <div className={`text-2xl font-display font-semibold ${colorClasses[color]}`}>{value}</div>
+      <div className="text-[10px] text-kozmo-muted uppercase tracking-[2px]">{label}</div>
     </div>
   );
 };

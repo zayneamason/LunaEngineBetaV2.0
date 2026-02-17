@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
+import AnnotatedText from './AnnotatedText';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 /**
  * ConversationCache - Shows the 20 turns Luna remembers
@@ -9,7 +10,7 @@ const API_BASE = 'http://localhost:8000';
  * This displays Luna's actual conversation memory - what she sees when
  * generating responses. Different from the UI's localStorage chat history.
  */
-const ConversationCache = ({ isConnected }) => {
+const ConversationCache = ({ isConnected, entities = [] }) => {
   const [cache, setCache] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -57,13 +58,13 @@ const ConversationCache = ({ isConnected }) => {
       {/* Header - Always visible */}
       <div
         onClick={() => setIsExpanded(!isExpanded)}
-        className="px-4 py-3 cursor-pointer flex items-center justify-between hover:bg-white/5 transition-colors"
+        className="px-4 py-3 cursor-pointer flex items-center justify-between hover:bg-kozmo-surface/80 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <div className="w-1 h-6 bg-gradient-to-b from-cyan-400 to-emerald-400 rounded-full" />
+          <div className="w-1 h-6 bg-gradient-to-b from-cyan-400 to-emerald-400 rounded-full" style={{ boxShadow: '0 0 12px rgba(52,211,153,0.5), 0 0 4px rgba(52,211,153,0.8)' }} />
           <div>
             <h3 className="text-sm font-medium text-white/80">Conversation Cache</h3>
-            <p className="text-xs text-white/40">
+            <p className="text-xs text-kozmo-muted">
               {itemCount} messages Luna remembers
             </p>
           </div>
@@ -71,12 +72,12 @@ const ConversationCache = ({ isConnected }) => {
 
         <div className="flex items-center gap-3">
           {/* Turn counter */}
-          <div className="text-xs text-white/40">
+          <div className="text-xs text-kozmo-muted">
             Turn {cache?.current_turn || 0}
           </div>
 
           {/* Usage bar */}
-          <div className="w-16 h-1.5 bg-white/10 rounded-full overflow-hidden">
+          <div className="w-16 h-1.5 bg-kozmo-border rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500"
               style={{ width: `${Math.min(usagePercent, 100)}%` }}
@@ -84,7 +85,7 @@ const ConversationCache = ({ isConnected }) => {
           </div>
 
           {/* Expand/collapse */}
-          <span className="text-white/40 text-sm">
+          <span className="text-kozmo-muted text-sm">
             {isExpanded ? '−' : '+'}
           </span>
         </div>
@@ -92,19 +93,19 @@ const ConversationCache = ({ isConnected }) => {
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="border-t border-white/10">
+        <div className="border-t border-kozmo-border">
           {/* Stats bar */}
-          <div className="px-4 py-2 bg-white/5 flex items-center gap-4 text-xs">
+          <div className="px-4 py-2 bg-kozmo-surface flex items-center gap-4 text-xs">
             <div>
-              <span className="text-white/40">Messages:</span>{' '}
+              <span className="text-kozmo-muted">Messages:</span>{' '}
               <span className="text-white/80 font-mono">{itemCount}</span>
             </div>
             <div>
-              <span className="text-white/40">Tokens:</span>{' '}
+              <span className="text-kozmo-muted">Tokens:</span>{' '}
               <span className="text-white/80 font-mono">{cache?.total_tokens || 0}</span>
             </div>
             <div>
-              <span className="text-white/40">Max turns:</span>{' '}
+              <span className="text-kozmo-muted">Max turns:</span>{' '}
               <span className="text-white/80 font-mono">{maxTurns}</span>
             </div>
           </div>
@@ -118,7 +119,7 @@ const ConversationCache = ({ isConnected }) => {
             )}
 
             {itemCount === 0 && !isLoading && !error && (
-              <div className="text-white/30 text-xs text-center py-4">
+              <div className="text-kozmo-muted text-xs text-center py-4">
                 No conversation in cache yet
               </div>
             )}
@@ -126,7 +127,7 @@ const ConversationCache = ({ isConnected }) => {
             {cache?.items?.map((item, i) => (
               <div
                 key={i}
-                className={`rounded-lg px-3 py-2 text-xs ${
+                className={`rounded px-3 py-2 text-xs ${
                   item.role === 'user'
                     ? 'bg-violet-500/10 border border-violet-400/20 ml-4'
                     : 'bg-emerald-500/10 border border-emerald-400/20 mr-4'
@@ -135,18 +136,18 @@ const ConversationCache = ({ isConnected }) => {
                 {/* Message header */}
                 <div className="flex items-center justify-between mb-1">
                   <span className={`font-medium ${
-                    item.role === 'user' ? 'text-violet-400' : 'text-emerald-400'
+                    item.role === 'user' ? 'text-kozmo-accent' : 'text-emerald-400'
                   }`}>
                     {item.role === 'user' ? 'You' : 'Luna'}
                   </span>
-                  <span className="text-white/30">
+                  <span className="text-kozmo-muted">
                     T{item.turn} • {Math.round(item.relevance * 100)}%
                   </span>
                 </div>
 
                 {/* Message content - truncated */}
                 <p className="text-white/70 line-clamp-2">
-                  {item.content}
+                  <AnnotatedText text={item.content} entities={entities} />
                 </p>
 
                 {/* Age indicator */}
@@ -160,7 +161,7 @@ const ConversationCache = ({ isConnected }) => {
 
             {isLoading && itemCount === 0 && (
               <div className="flex justify-center py-4">
-                <div className="flex items-center gap-2 text-white/40 text-xs">
+                <div className="flex items-center gap-2 text-kozmo-muted text-xs">
                   <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
                   Loading...
                 </div>
@@ -169,7 +170,7 @@ const ConversationCache = ({ isConnected }) => {
           </div>
 
           {/* Footer hint */}
-          <div className="px-4 py-2 border-t border-white/10 text-xs text-white/30">
+          <div className="px-4 py-2 border-t border-kozmo-border text-xs text-kozmo-muted">
             This is what Luna "remembers" when responding - older messages expire after {maxTurns} turns
           </div>
         </div>

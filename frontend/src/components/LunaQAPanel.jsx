@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
  * Shows real-time QA health, assertion results, and bug tracking.
  */
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 // Severity colors
 const severityColors = {
@@ -17,8 +17,8 @@ const severityColors = {
 };
 
 const categoryColors = {
-  personality: 'text-violet-400',
-  structural: 'text-cyan-400',
+  personality: 'text-kozmo-accent',
+  structural: 'text-kozmo-accent',
   voice: 'text-pink-400',
   flow: 'text-green-400',
 };
@@ -100,34 +100,34 @@ const LunaQAPanel = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-slate-900/95 border border-white/10 rounded-2xl w-[900px] max-h-[80vh] overflow-hidden shadow-2xl">
+      <div className="bg-kozmo-surface border border-kozmo-border rounded w-[900px] max-h-[80vh] overflow-hidden shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-kozmo-border">
           <div className="flex items-center gap-3">
             <span className="text-2xl">🔬</span>
             <div>
-              <h2 className="text-lg font-medium text-white">Luna QA</h2>
+              <h2 className="text-lg font-display font-semibold text-white">Luna QA</h2>
               <p className="text-xs text-white/50">Live inference validation</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-white/50 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+            className="p-2 text-white/50 hover:text-white hover:bg-kozmo-surface/80 rounded transition-colors"
           >
             ✕
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 px-6 py-2 border-b border-white/10 bg-white/5">
+        <div className="flex gap-1 px-6 py-2 border-b border-kozmo-border bg-kozmo-surface">
           {TABS.map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+              className={`px-4 py-2 text-sm rounded transition-colors ${
                 activeTab === tab
-                  ? 'bg-violet-500/20 text-violet-400 border border-violet-500/30'
-                  : 'text-white/50 hover:text-white hover:bg-white/10'
+                  ? 'bg-kozmo-accent/20 text-kozmo-accent border border-kozmo-accent/30'
+                  : 'text-white/50 hover:text-white hover:bg-kozmo-surface/80'
               }`}
             >
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -176,15 +176,15 @@ const HealthTab = ({ health, onRefresh, loading }) => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-          <span className="text-xs text-white/40">Auto-refreshing every 5s</span>
+          <span className="text-xs text-kozmo-muted">Auto-refreshing every 5s</span>
         </div>
         <button
           onClick={onRefresh}
           disabled={loading}
-          className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
+          className={`px-3 py-1.5 text-xs rounded border transition-all ${
             loading
-              ? 'bg-white/5 border-white/10 text-white/30 cursor-wait'
-              : 'bg-violet-500/20 border-violet-500/30 text-violet-400 hover:bg-violet-500/30'
+              ? 'bg-kozmo-surface border-kozmo-border text-kozmo-muted cursor-wait'
+              : 'bg-kozmo-accent/20 border-kozmo-accent/30 text-kozmo-accent hover:bg-kozmo-accent/30'
           }`}
         >
           {loading ? '↻ Refreshing...' : '↻ Refresh'}
@@ -210,7 +210,7 @@ const HealthTab = ({ health, onRefresh, loading }) => {
           <h3 className="text-sm font-medium text-white/70 mb-3">Top Failing Assertions</h3>
           <div className="space-y-2">
             {health.top_failures.map(f => (
-              <div key={f.id} className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+              <div key={f.id} className="flex items-center justify-between p-3 bg-kozmo-surface rounded">
                 <span className="text-white/80">{f.name}</span>
                 <span className="text-red-400">{f.count}x</span>
               </div>
@@ -263,7 +263,7 @@ const LastReportTab = ({ report }) => {
       </div>
 
       {/* Query */}
-      <div className="p-4 bg-white/5 rounded-lg">
+      <div className="p-4 bg-kozmo-surface rounded">
         <div className="text-xs text-white/50 mb-1">Query</div>
         <div className="text-white">{report.query}</div>
       </div>
@@ -277,7 +277,7 @@ const LastReportTab = ({ report }) => {
           {report.assertions?.map(a => (
             <div
               key={a.id}
-              className={`p-3 rounded-lg border ${a.passed ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/10 border-red-500/30'}`}
+              className={`p-3 rounded border ${a.passed ? 'bg-green-500/5 border-green-500/20' : 'bg-red-500/10 border-red-500/30'}`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -293,8 +293,8 @@ const LastReportTab = ({ report }) => {
               </div>
               {!a.passed && (
                 <div className="mt-2 text-sm text-white/60">
-                  <span className="text-white/40">Expected:</span> {a.expected}<br/>
-                  <span className="text-white/40">Actual:</span> {a.actual}
+                  <span className="text-kozmo-muted">Expected:</span> {a.expected}<br/>
+                  <span className="text-kozmo-muted">Actual:</span> {a.actual}
                 </div>
               )}
             </div>
@@ -304,7 +304,7 @@ const LastReportTab = ({ report }) => {
 
       {/* Diagnosis */}
       {report.diagnosis && (
-        <div className="p-4 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+        <div className="p-4 bg-orange-500/10 border border-orange-500/30 rounded">
           <div className="text-xs text-orange-400 mb-1">Diagnosis</div>
           <div className="text-white/80 text-sm">{report.diagnosis}</div>
         </div>
@@ -322,7 +322,7 @@ const HistoryTab = ({ history }) => {
       {history.map(r => (
         <div
           key={r.inference_id}
-          className={`p-4 rounded-lg border ${r.passed ? 'bg-white/5 border-white/10' : 'bg-red-500/10 border-red-500/30'}`}
+          className={`p-4 rounded border ${r.passed ? 'bg-kozmo-surface border-kozmo-border' : 'bg-red-500/10 border-red-500/30'}`}
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -359,8 +359,8 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
       {/* Header with refresh controls */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-violet-400 font-medium">QA Statistics</h3>
-          <p className="text-xs text-white/40 mt-1">
+          <h3 className="text-kozmo-accent font-medium">QA Statistics</h3>
+          <p className="text-xs text-kozmo-muted mt-1">
             Time range: {stats.time_range || '7d'} • Last updated: {new Date().toLocaleTimeString()}
           </p>
         </div>
@@ -377,10 +377,10 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
           <button
             onClick={onRefresh}
             disabled={loading}
-            className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
+            className={`px-3 py-1.5 text-xs rounded border transition-all ${
               loading
-                ? 'bg-white/5 border-white/10 text-white/30 cursor-wait'
-                : 'bg-violet-500/20 border-violet-500/30 text-violet-400 hover:bg-violet-500/30'
+                ? 'bg-kozmo-surface border-kozmo-border text-kozmo-muted cursor-wait'
+                : 'bg-kozmo-accent/20 border-kozmo-accent/30 text-kozmo-accent hover:bg-kozmo-accent/30'
             }`}
           >
             {loading ? '↻ Refreshing...' : '↻ Refresh'}
@@ -390,28 +390,28 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-4 gap-4">
-        <div className="p-4 bg-white/5 rounded-lg text-center">
+        <div className="p-4 bg-kozmo-surface rounded text-center">
           <div className="text-2xl font-bold text-white">{stats.total || 0}</div>
           <div className="text-xs text-white/50 mt-1">Total Inferences</div>
         </div>
-        <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg text-center">
+        <div className="p-4 bg-green-500/10 border border-green-500/20 rounded text-center">
           <div className="text-2xl font-bold text-green-400">{stats.passed || 0}</div>
           <div className="text-xs text-green-400/70 mt-1">Passed</div>
         </div>
-        <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-center">
+        <div className="p-4 bg-red-500/10 border border-red-500/20 rounded text-center">
           <div className="text-2xl font-bold text-red-400">{stats.failed || 0}</div>
           <div className="text-xs text-red-400/70 mt-1">Failed</div>
         </div>
-        <div className="p-4 bg-violet-500/10 border border-violet-500/20 rounded-lg text-center">
-          <div className="text-2xl font-bold text-violet-400">{passRate}%</div>
-          <div className="text-xs text-violet-400/70 mt-1">Pass Rate</div>
+        <div className="p-4 bg-kozmo-accent/10 border border-kozmo-accent/20 rounded text-center">
+          <div className="text-2xl font-bold text-kozmo-accent">{passRate}%</div>
+          <div className="text-xs text-kozmo-accent/70 mt-1">Pass Rate</div>
         </div>
       </div>
 
       {/* Trend Chart */}
       {stats.trend?.length > 0 && (
-        <div className="p-4 bg-white/5 rounded-lg">
-          <h3 className="text-sm font-medium text-violet-400 mb-4">Pass Rate Trend</h3>
+        <div className="p-4 bg-kozmo-surface rounded">
+          <h3 className="text-sm font-medium text-kozmo-accent mb-4">Pass Rate Trend</h3>
           <div className="flex items-end gap-2 h-32">
             {stats.trend.map((day, i) => {
               const total = (day.passed || 0) + (day.failed || 0);
@@ -424,7 +424,7 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
                     }`}
                     style={{ height: `${Math.max(rate * 100, 5)}%` }}
                   />
-                  <div className="text-[10px] text-white/40 mt-2 truncate w-full text-center">
+                  <div className="text-[10px] text-kozmo-muted mt-2 truncate w-full text-center">
                     {day.date}
                   </div>
                 </div>
@@ -437,8 +437,8 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
       {/* By Route */}
       {stats.by_route && Object.keys(stats.by_route).length > 0 && (
         <div className="grid grid-cols-2 gap-4">
-          <div className="p-4 bg-white/5 rounded-lg">
-            <h3 className="text-sm font-medium text-violet-400 mb-4">By Route</h3>
+          <div className="p-4 bg-kozmo-surface rounded">
+            <h3 className="text-sm font-medium text-kozmo-accent mb-4">By Route</h3>
             {Object.entries(stats.by_route).map(([route, data]) => {
               const total = (data.passed || 0) + (data.failed || 0);
               const passPercent = total > 0 ? ((data.passed || 0) / total) * 100 : 0;
@@ -448,7 +448,7 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
                     <span className="text-white/70">{route}</span>
                     <span className="text-white/50">{data.passed || 0}/{total}</span>
                   </div>
-                  <div className="h-2 bg-white/10 rounded-full overflow-hidden flex">
+                  <div className="h-2 bg-kozmo-border rounded-full overflow-hidden flex">
                     <div
                       className="bg-green-500 h-full"
                       style={{ width: `${passPercent}%` }}
@@ -464,8 +464,8 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
           </div>
 
           {/* By Provider */}
-          <div className="p-4 bg-white/5 rounded-lg">
-            <h3 className="text-sm font-medium text-violet-400 mb-4">By Provider</h3>
+          <div className="p-4 bg-kozmo-surface rounded">
+            <h3 className="text-sm font-medium text-kozmo-accent mb-4">By Provider</h3>
             {stats.by_provider && Object.entries(stats.by_provider).map(([provider, data]) => {
               const total = (data.passed || 0) + (data.failed || 0);
               const passPercent = total > 0 ? ((data.passed || 0) / total) * 100 : 0;
@@ -475,7 +475,7 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
                     <span className="text-white/70">{provider}</span>
                     <span className="text-white/50">{data.passed || 0}/{total}</span>
                   </div>
-                  <div className="h-2 bg-white/10 rounded-full overflow-hidden flex">
+                  <div className="h-2 bg-kozmo-border rounded-full overflow-hidden flex">
                     <div
                       className="bg-green-500 h-full"
                       style={{ width: `${passPercent}%` }}
@@ -494,8 +494,8 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
 
       {/* By Assertion */}
       {stats.by_assertion && Object.keys(stats.by_assertion).length > 0 && (
-        <div className="p-4 bg-white/5 rounded-lg">
-          <h3 className="text-sm font-medium text-violet-400 mb-4">Assertion Failure Rates</h3>
+        <div className="p-4 bg-kozmo-surface rounded">
+          <h3 className="text-sm font-medium text-kozmo-accent mb-4">Assertion Failure Rates</h3>
           {Object.entries(stats.by_assertion)
             .sort((a, b) => {
               const aTotal = (a[1].passed || 0) + (a[1].failed || 0);
@@ -510,7 +510,7 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
               return (
                 <div key={id} className="flex items-center gap-3 mb-2">
                   <div className="w-32 text-xs text-white/70 truncate">{data.name || id}</div>
-                  <div className="flex-1 h-4 bg-white/10 rounded overflow-hidden flex">
+                  <div className="flex-1 h-4 bg-kozmo-border rounded overflow-hidden flex">
                     <div
                       className="bg-green-500 h-full"
                       style={{ width: `${passPercent}%` }}
@@ -522,7 +522,7 @@ const StatsTab = ({ stats, onRefresh, loading }) => {
                   </div>
                   <div className="w-16 text-right text-xs">
                     <span className="text-red-400">{data.failed || 0}</span>
-                    <span className="text-white/30"> fail</span>
+                    <span className="text-kozmo-muted"> fail</span>
                   </div>
                 </div>
               );
@@ -562,7 +562,7 @@ const AssertionsTab = ({ assertions, onRefresh }) => {
           </h3>
           <div className="space-y-2">
             {items.map(a => (
-              <div key={a.id} className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+              <div key={a.id} className="flex items-center justify-between p-3 bg-kozmo-surface rounded">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-white/80">{a.id}</span>
@@ -572,7 +572,7 @@ const AssertionsTab = ({ assertions, onRefresh }) => {
                     </span>
                   </div>
                   {a.description && (
-                    <p className="text-xs text-white/40 mt-1">{a.description}</p>
+                    <p className="text-xs text-kozmo-muted mt-1">{a.description}</p>
                   )}
                 </div>
                 <button
@@ -580,7 +580,7 @@ const AssertionsTab = ({ assertions, onRefresh }) => {
                   className={`px-3 py-1 text-xs rounded ${
                     a.enabled
                       ? 'bg-green-500/20 text-green-400'
-                      : 'bg-white/10 text-white/40'
+                      : 'bg-kozmo-border text-kozmo-muted'
                   }`}
                 >
                   {a.enabled ? 'ON' : 'OFF'}
@@ -628,21 +628,21 @@ const SimulateTab = ({ bugs, onRefresh }) => {
     open: 'border-red-500/50',
     failing: 'border-orange-500/50',
     fixed: 'border-green-500/50',
-    wontfix: 'border-white/20',
+    wontfix: 'border-kozmo-border/80',
   };
 
   return (
     <div className="grid grid-cols-2 gap-6">
       {/* Bug List */}
       <div>
-        <h3 className="text-sm font-medium text-violet-400 mb-3">Known Bugs</h3>
+        <h3 className="text-sm font-medium text-kozmo-accent mb-3">Known Bugs</h3>
         <div className="space-y-2 max-h-[400px] overflow-y-auto">
           {bugs?.map(bug => (
             <div
               key={bug.id}
               onClick={() => setSelectedBug(bug)}
-              className={`p-3 rounded-lg border-l-4 cursor-pointer transition-colors ${statusColors[bug.status]} ${
-                selectedBug?.id === bug.id ? 'bg-violet-500/20 border-violet-500/50' : 'bg-white/5 hover:bg-white/10'
+              className={`p-3 rounded border-l-4 cursor-pointer transition-colors ${statusColors[bug.status]} ${
+                selectedBug?.id === bug.id ? 'bg-kozmo-accent/20 border-kozmo-accent/50' : 'bg-kozmo-surface hover:bg-kozmo-surface/80'
               }`}
             >
               <div className="flex items-center justify-between mb-1">
@@ -657,8 +657,8 @@ const SimulateTab = ({ bugs, onRefresh }) => {
               </div>
               <p className="text-xs text-white/50 truncate">"{bug.query}"</p>
               <div className="flex gap-2 mt-2">
-                <span className="text-xs px-2 py-0.5 bg-white/10 rounded text-white/50">{bug.severity}</span>
-                <span className="text-xs px-2 py-0.5 bg-white/10 rounded text-white/40">{bug.id}</span>
+                <span className="text-xs px-2 py-0.5 bg-kozmo-border rounded text-white/50">{bug.severity}</span>
+                <span className="text-xs px-2 py-0.5 bg-kozmo-border rounded text-kozmo-muted">{bug.id}</span>
               </div>
             </div>
           ))}
@@ -670,13 +670,13 @@ const SimulateTab = ({ bugs, onRefresh }) => {
 
       {/* Simulation Panel */}
       <div>
-        <h3 className="text-sm font-medium text-violet-400 mb-3">Simulation</h3>
+        <h3 className="text-sm font-medium text-kozmo-accent mb-3">Simulation</h3>
         {selectedBug ? (
-          <div className="bg-white/5 rounded-lg p-4 border border-white/10">
+          <div className="bg-kozmo-surface rounded p-4 border border-kozmo-border">
             <div className="mb-4">
               <div className="text-xs text-white/50 mb-1">Selected Bug</div>
               <div className="text-white font-medium">{selectedBug.name}</div>
-              <div className="text-violet-400 mt-1">"{selectedBug.query}"</div>
+              <div className="text-kozmo-accent mt-1">"{selectedBug.query}"</div>
             </div>
 
             <div className="grid grid-cols-2 gap-4 mb-4">
@@ -699,17 +699,17 @@ const SimulateTab = ({ bugs, onRefresh }) => {
             <button
               onClick={() => runSimulation(selectedBug)}
               disabled={running}
-              className={`w-full py-3 rounded-lg font-medium transition-colors ${
+              className={`w-full py-3 rounded font-medium transition-colors ${
                 running
-                  ? 'bg-violet-500/20 text-violet-300 cursor-wait'
-                  : 'bg-violet-500/30 hover:bg-violet-500/40 text-violet-300'
+                  ? 'bg-kozmo-accent/20 text-kozmo-accent cursor-wait'
+                  : 'bg-kozmo-accent/30 hover:bg-kozmo-accent/40 text-kozmo-accent'
               }`}
             >
               {running ? '⏳ Running...' : '▶️ Run Simulation'}
             </button>
 
             {simResult && (
-              <div className="mt-4 pt-4 border-t border-white/10">
+              <div className="mt-4 pt-4 border-t border-kozmo-border">
                 {simResult.error ? (
                   <div className="text-red-400">{simResult.error}</div>
                 ) : (
@@ -746,7 +746,7 @@ const SimulateTab = ({ bugs, onRefresh }) => {
             )}
           </div>
         ) : (
-          <div className="bg-white/5 rounded-lg p-8 text-center border border-white/10">
+          <div className="bg-kozmo-surface rounded p-8 text-center border border-kozmo-border">
             <div className="text-white/50">← Select a bug to simulate</div>
           </div>
         )}
@@ -830,7 +830,7 @@ const TestSuiteTab = ({ bugs, onRefresh }) => {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h3 className="text-violet-400 font-medium">Regression Test Suite</h3>
+          <h3 className="text-kozmo-accent font-medium">Regression Test Suite</h3>
           {results && (
             <p className="text-xs text-white/50 mt-1">
               Last run: {new Date(results.lastRun).toLocaleString()} ({results.duration}ms)
@@ -840,10 +840,10 @@ const TestSuiteTab = ({ bugs, onRefresh }) => {
         <button
           onClick={runFullSuite}
           disabled={running || !bugs?.length}
-          className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+          className={`px-6 py-3 rounded font-medium transition-colors ${
             running
-              ? 'bg-violet-500/20 text-violet-300 cursor-wait'
-              : 'bg-violet-500/30 hover:bg-violet-500/40 text-violet-300'
+              ? 'bg-kozmo-accent/20 text-kozmo-accent cursor-wait'
+              : 'bg-kozmo-accent/30 hover:bg-kozmo-accent/40 text-kozmo-accent'
           }`}
         >
           {running ? `⏳ Running... ${progress.toFixed(0)}%` : '▶️ Run All Tests'}
@@ -853,9 +853,9 @@ const TestSuiteTab = ({ bugs, onRefresh }) => {
       {/* Progress Bar */}
       {running && (
         <div className="mb-6">
-          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+          <div className="h-2 bg-kozmo-border rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-violet-500 to-violet-400 transition-all duration-300"
+              className="h-full bg-kozmo-accent transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -865,15 +865,15 @@ const TestSuiteTab = ({ bugs, onRefresh }) => {
       {/* Summary Cards */}
       {results && (
         <div className="grid grid-cols-3 gap-4 mb-6">
-          <div className="p-4 bg-white/5 rounded-lg text-center">
+          <div className="p-4 bg-kozmo-surface rounded text-center">
             <div className="text-2xl font-bold text-white">{totalCount}</div>
             <div className="text-xs text-white/50 mt-1">Total Tests</div>
           </div>
-          <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg text-center">
+          <div className="p-4 bg-green-500/10 border border-green-500/20 rounded text-center">
             <div className="text-2xl font-bold text-green-400">{passedCount}</div>
             <div className="text-xs text-green-400/70 mt-1">Passing</div>
           </div>
-          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-center">
+          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded text-center">
             <div className="text-2xl font-bold text-red-400">{totalCount - passedCount}</div>
             <div className="text-xs text-red-400/70 mt-1">Failing</div>
           </div>
@@ -888,7 +888,7 @@ const TestSuiteTab = ({ bugs, onRefresh }) => {
             {results.results.map(result => (
               <div
                 key={result.bugId}
-                className={`p-4 rounded-lg border-l-4 ${
+                className={`p-4 rounded border-l-4 ${
                   result.passed
                     ? 'bg-green-500/5 border-green-500'
                     : 'bg-red-500/10 border-red-500'
@@ -947,13 +947,13 @@ const BugsTab = ({ bugs, onRefresh }) => {
     open: 'bg-red-500/20 text-red-400',
     failing: 'bg-orange-500/20 text-orange-400',
     fixed: 'bg-green-500/20 text-green-400',
-    wontfix: 'bg-white/10 text-white/40',
+    wontfix: 'bg-kozmo-border text-kozmo-muted',
   };
 
   return (
     <div className="space-y-3">
       {bugs.map(bug => (
-        <div key={bug.id} className="p-4 bg-white/5 rounded-lg border border-white/10">
+        <div key={bug.id} className="p-4 bg-kozmo-surface rounded border border-kozmo-border">
           <div className="flex items-start justify-between">
             <div>
               <div className="flex items-center gap-2">
@@ -964,13 +964,13 @@ const BugsTab = ({ bugs, onRefresh }) => {
                 </span>
               </div>
               <p className="text-sm text-white/60 mt-2">
-                <span className="text-white/40">Query:</span> {bug.query}
+                <span className="text-kozmo-muted">Query:</span> {bug.query}
               </p>
             </div>
             <select
               value={bug.status}
               onChange={(e) => updateStatus(bug.id, e.target.value)}
-              className="px-2 py-1 text-xs bg-white/10 border border-white/20 rounded text-white"
+              className="px-2 py-1 text-xs bg-kozmo-border border border-kozmo-border/80 rounded text-white"
             >
               <option value="open">Open</option>
               <option value="failing">Failing</option>
@@ -980,11 +980,11 @@ const BugsTab = ({ bugs, onRefresh }) => {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
             <div>
-              <div className="text-white/40 text-xs mb-1">Expected</div>
+              <div className="text-kozmo-muted text-xs mb-1">Expected</div>
               <div className="text-white/70">{bug.expected_behavior}</div>
             </div>
             <div>
-              <div className="text-white/40 text-xs mb-1">Actual</div>
+              <div className="text-kozmo-muted text-xs mb-1">Actual</div>
               <div className="text-white/70">{bug.actual_behavior}</div>
             </div>
           </div>
@@ -996,7 +996,7 @@ const BugsTab = ({ bugs, onRefresh }) => {
 
 // Stat Card Component
 const StatCard = ({ label, value, color = 'text-white' }) => (
-  <div className="p-4 bg-white/5 rounded-lg text-center">
+  <div className="p-4 bg-kozmo-surface rounded text-center">
     <div className={`text-2xl font-bold ${color}`}>{value}</div>
     <div className="text-xs text-white/50 mt-1">{label}</div>
   </div>

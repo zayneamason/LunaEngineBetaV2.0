@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
+import AnnotatedText from './AnnotatedText';
 
 /**
  * Memory Monitor Panel — Live memory substrate dashboard
@@ -8,7 +9,7 @@ import GlassCard from './GlassCard';
  * Data comes from 4 existing API endpoints (no backend changes needed).
  */
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 // --- Tabs ---
 const TABS = [
@@ -22,7 +23,7 @@ const TABS = [
 const severityConfig = {
   critical: { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30', icon: '🔴' },
   warning: { color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', icon: '🟡' },
-  info: { color: 'text-cyan-400', bg: 'bg-cyan-500/10', border: 'border-cyan-500/30', icon: '🔵' },
+  info: { color: 'text-kozmo-accent', bg: 'bg-kozmo-accent/10', border: 'border-kozmo-accent/30', icon: '🔵' },
   ok: { color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30', icon: '🟢' },
 };
 
@@ -91,10 +92,10 @@ function diagnoseHealth(memStats, extStats) {
 // --- Sub-components ---
 
 const StatBox = ({ label, value, sub, color = 'text-white' }) => (
-  <div className="p-3 bg-white/5 rounded-xl border border-white/10 text-center">
+  <div className="p-3 bg-kozmo-surface rounded border border-kozmo-border text-center">
     <div className={`text-2xl font-bold ${color}`}>{value ?? '—'}</div>
     <div className="text-xs text-white/50 mt-1">{label}</div>
-    {sub && <div className="text-[10px] text-white/30 mt-0.5">{sub}</div>}
+    {sub && <div className="text-[10px] text-kozmo-muted mt-0.5">{sub}</div>}
   </div>
 );
 
@@ -133,7 +134,7 @@ const TypeDistributionBar = ({ nodesByType }) => {
             <div key={type} className="flex items-center gap-1.5 text-xs text-white/60">
               <div className={`w-2.5 h-2.5 rounded-full ${typeColors[type] || 'bg-white/20'}`} />
               <span>{type}</span>
-              <span className="text-white/30">{count}</span>
+              <span className="text-kozmo-muted">{count}</span>
             </div>
           ))}
       </div>
@@ -150,12 +151,12 @@ const PipelineFlow = ({ extStats }) => {
       <SectionHeader icon="⚙️">Pipeline Flow</SectionHeader>
       <div className="flex items-center gap-2">
         {/* Scribe */}
-        <div className="flex-1 p-3 bg-white/5 rounded-xl border border-white/10 text-center">
-          <div className="text-xs text-white/40 mb-1">Scribe</div>
-          <div className="text-lg font-bold text-cyan-400">
+        <div className="flex-1 p-3 bg-kozmo-surface rounded border border-kozmo-border text-center">
+          <div className="text-xs text-kozmo-muted mb-1">Scribe</div>
+          <div className="text-lg font-bold text-kozmo-accent">
             {scribe?.extractions_count ?? '—'}
           </div>
-          <div className="text-[10px] text-white/30">extractions</div>
+          <div className="text-[10px] text-kozmo-muted">extractions</div>
           {scribe?.backend && (
             <div className="text-[10px] text-white/20 mt-1">{scribe.backend}</div>
           )}
@@ -164,25 +165,25 @@ const PipelineFlow = ({ extStats }) => {
         <div className="text-white/20 text-xl">→</div>
 
         {/* Librarian */}
-        <div className="flex-1 p-3 bg-white/5 rounded-xl border border-white/10 text-center">
-          <div className="text-xs text-white/40 mb-1">Librarian</div>
-          <div className="text-lg font-bold text-violet-400">
+        <div className="flex-1 p-3 bg-kozmo-surface rounded border border-kozmo-border text-center">
+          <div className="text-xs text-kozmo-muted mb-1">Librarian</div>
+          <div className="text-lg font-bold text-kozmo-accent">
             {librarian?.filings_count ?? '—'}
           </div>
-          <div className="text-[10px] text-white/30">filings</div>
+          <div className="text-[10px] text-kozmo-muted">filings</div>
         </div>
 
         <div className="text-white/20 text-xl">→</div>
 
         {/* Matrix */}
-        <div className="flex-1 p-3 bg-white/5 rounded-xl border border-white/10 text-center">
-          <div className="text-xs text-white/40 mb-1">Matrix</div>
+        <div className="flex-1 p-3 bg-kozmo-surface rounded border border-kozmo-border text-center">
+          <div className="text-xs text-kozmo-muted mb-1">Matrix</div>
           <div className="text-lg font-bold text-green-400">
             {librarian?.filings_count != null && scribe?.extractions_count != null
               ? '✓'
               : '—'}
           </div>
-          <div className="text-[10px] text-white/30">stored</div>
+          <div className="text-[10px] text-kozmo-muted">stored</div>
         </div>
       </div>
     </div>
@@ -201,7 +202,7 @@ const LockInBar = ({ memStats }) => {
     <div>
       <SectionHeader icon="🔒">Average Lock-In</SectionHeader>
       <div className="flex items-center gap-3">
-        <div className="flex-1 h-3 bg-white/10 rounded-full overflow-hidden">
+        <div className="flex-1 h-3 bg-kozmo-border rounded-full overflow-hidden">
           <div className={`h-full ${color} transition-all`} style={{ width: `${percent}%` }} />
         </div>
         <span className={`text-sm font-bold ${textColor}`}>{percent}%</span>
@@ -227,7 +228,7 @@ const OverviewTab = ({ memStats, extStats, issues }) => (
         {issues.map((issue, i) => {
           const cfg = severityConfig[issue.severity] || severityConfig.info;
           return (
-            <div key={i} className={`p-3 rounded-xl ${cfg.bg} border ${cfg.border} flex items-center gap-3`}>
+            <div key={i} className={`p-3 rounded ${cfg.bg} border ${cfg.border} flex items-center gap-3`}>
               <span>{cfg.icon}</span>
               <span className={`text-sm ${cfg.color}`}>{issue.message}</span>
             </div>
@@ -238,8 +239,8 @@ const OverviewTab = ({ memStats, extStats, issues }) => (
 
     {/* Stats Grid */}
     <div className="grid grid-cols-4 gap-3">
-      <StatBox label="Total Nodes" value={memStats?.total_nodes?.toLocaleString()} color="text-cyan-400" />
-      <StatBox label="Total Edges" value={memStats?.total_edges?.toLocaleString()} color="text-violet-400" />
+      <StatBox label="Total Nodes" value={memStats?.total_nodes?.toLocaleString()} color="text-kozmo-accent" />
+      <StatBox label="Total Edges" value={memStats?.total_edges?.toLocaleString()} color="text-kozmo-accent" />
       <StatBox
         label="Avg Lock-In"
         value={memStats?.avg_lock_in != null ? `${(memStats.avg_lock_in * 100).toFixed(1)}%` : '—'}
@@ -268,10 +269,10 @@ const ExtractionTab = ({ extStats, extHistory }) => (
     {/* Scribe + Librarian Cards */}
     <div className="grid grid-cols-2 gap-4">
       {/* Scribe */}
-      <div className="p-4 bg-cyan-500/5 rounded-xl border border-cyan-500/20">
+      <div className="p-4 bg-kozmo-accent/5 rounded border border-kozmo-accent/20">
         <div className="flex items-center gap-2 mb-3">
           <span className="text-lg">📝</span>
-          <h3 className="text-sm font-medium text-cyan-400">Scribe (Ben)</h3>
+          <h3 className="text-sm font-medium text-kozmo-accent">Scribe (Ben)</h3>
         </div>
         {extStats?.scribe ? (
           <div className="space-y-2 text-sm">
@@ -281,7 +282,7 @@ const ExtractionTab = ({ extStats, extHistory }) => (
             </div>
             <div className="flex justify-between">
               <span className="text-white/50">Extractions</span>
-              <span className="text-cyan-400 font-medium">{extStats.scribe.extractions_count ?? 0}</span>
+              <span className="text-kozmo-accent font-medium">{extStats.scribe.extractions_count ?? 0}</span>
             </div>
             {extStats.scribe.avg_objects_per_extraction != null && (
               <div className="flex justify-between">
@@ -305,21 +306,21 @@ const ExtractionTab = ({ extStats, extHistory }) => (
             )}
           </div>
         ) : (
-          <div className="text-white/30 text-sm">No scribe data</div>
+          <div className="text-kozmo-muted text-sm">No scribe data</div>
         )}
       </div>
 
       {/* Librarian */}
-      <div className="p-4 bg-violet-500/5 rounded-xl border border-violet-500/20">
+      <div className="p-4 bg-kozmo-accent/5 rounded border border-kozmo-accent/20">
         <div className="flex items-center gap-2 mb-3">
           <span className="text-lg">📚</span>
-          <h3 className="text-sm font-medium text-violet-400">Librarian (Dude)</h3>
+          <h3 className="text-sm font-medium text-kozmo-accent">Librarian (Dude)</h3>
         </div>
         {extStats?.librarian ? (
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-white/50">Filings</span>
-              <span className="text-violet-400 font-medium">{extStats.librarian.filings_count ?? 0}</span>
+              <span className="text-kozmo-accent font-medium">{extStats.librarian.filings_count ?? 0}</span>
             </div>
             {extStats.librarian.nodes_created != null && (
               <div className="flex justify-between">
@@ -341,7 +342,7 @@ const ExtractionTab = ({ extStats, extHistory }) => (
             )}
           </div>
         ) : (
-          <div className="text-white/30 text-sm">No librarian data</div>
+          <div className="text-kozmo-muted text-sm">No librarian data</div>
         )}
       </div>
     </div>
@@ -352,21 +353,21 @@ const ExtractionTab = ({ extStats, extHistory }) => (
       {extHistory?.extractions?.length > 0 ? (
         <div className="space-y-3">
           {extHistory.extractions.map((ext, i) => (
-            <div key={ext.extraction_id || i} className="p-3 bg-white/5 rounded-xl border border-white/10">
+            <div key={ext.extraction_id || i} className="p-3 bg-kozmo-surface rounded border border-kozmo-border">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs text-white/40">#{ext.extraction_id || i + 1}</span>
+                  <span className="font-mono text-xs text-kozmo-muted">#{ext.extraction_id || i + 1}</span>
                   {ext.extraction_time_ms != null && (
                     <span className="text-[10px] text-white/20">{ext.extraction_time_ms}ms</span>
                   )}
                 </div>
-                <span className="text-xs text-white/30">
+                <span className="text-xs text-kozmo-muted">
                   {ext.timestamp ? new Date(ext.timestamp * 1000).toLocaleTimeString() : '—'}
                 </span>
               </div>
               <div className="flex gap-4 text-xs mb-2">
-                <span className="text-cyan-400">{Array.isArray(ext.objects) ? ext.objects.length : (ext.objects ?? 0)} objects</span>
-                <span className="text-violet-400">{Array.isArray(ext.edges) ? ext.edges.length : (ext.edges ?? 0)} edges</span>
+                <span className="text-kozmo-accent">{Array.isArray(ext.objects) ? ext.objects.length : (ext.objects ?? 0)} objects</span>
+                <span className="text-kozmo-accent">{Array.isArray(ext.edges) ? ext.edges.length : (ext.edges ?? 0)} edges</span>
                 {ext.entity_updates?.length > 0 && (
                   <span className="text-green-400">{ext.entity_updates.length} entities</span>
                 )}
@@ -376,8 +377,8 @@ const ExtractionTab = ({ extStats, extHistory }) => (
               {Array.isArray(ext.objects) && ext.objects.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {ext.objects.map((obj, j) => (
-                    <div key={j} className="flex items-start gap-2 text-xs pl-2 border-l-2 border-cyan-500/30">
-                      <span className="text-cyan-400/70 font-mono shrink-0">{obj.type}</span>
+                    <div key={j} className="flex items-start gap-2 text-xs pl-2 border-l-2 border-kozmo-accent/30">
+                      <span className="text-kozmo-accent/70 font-mono shrink-0">{obj.type}</span>
                       <span className="text-white/60 break-all">{obj.content?.slice(0, 120)}{obj.content?.length > 120 ? '...' : ''}</span>
                       {obj.confidence != null && (
                         <span className="text-white/20 shrink-0">{(obj.confidence * 100).toFixed(0)}%</span>
@@ -391,11 +392,11 @@ const ExtractionTab = ({ extStats, extHistory }) => (
               {Array.isArray(ext.edges) && ext.edges.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {ext.edges.map((edge, j) => (
-                    <div key={j} className="flex items-center gap-1.5 text-xs pl-2 border-l-2 border-violet-500/30">
+                    <div key={j} className="flex items-center gap-1.5 text-xs pl-2 border-l-2 border-kozmo-accent/30">
                       <span className="text-white/50">{edge.from_ref}</span>
-                      <span className="text-violet-400/60">→</span>
-                      <span className="text-violet-400/80 font-mono text-[10px]">{edge.edge_type}</span>
-                      <span className="text-violet-400/60">→</span>
+                      <span className="text-kozmo-accent/60">→</span>
+                      <span className="text-kozmo-accent/80 font-mono text-[10px]">{edge.edge_type}</span>
+                      <span className="text-kozmo-accent/60">→</span>
                       <span className="text-white/50">{edge.to_ref}</span>
                     </div>
                   ))}
@@ -408,9 +409,9 @@ const ExtractionTab = ({ extStats, extHistory }) => (
                   {ext.entity_updates.map((eu, j) => (
                     <div key={j} className="flex items-start gap-2 text-xs pl-2 border-l-2 border-green-500/30">
                       <span className="text-green-400/80 font-medium shrink-0">{eu.name}</span>
-                      <span className="text-white/30 shrink-0">({eu.entity_type})</span>
+                      <span className="text-kozmo-muted shrink-0">({eu.entity_type})</span>
                       {eu.facts && Object.keys(eu.facts).length > 0 && (
-                        <span className="text-white/40 break-all">
+                        <span className="text-kozmo-muted break-all">
                           {Object.entries(eu.facts).map(([k, v]) => `${k}: ${v}`).join(', ').slice(0, 100)}
                         </span>
                       )}
@@ -422,10 +423,10 @@ const ExtractionTab = ({ extStats, extHistory }) => (
           ))}
         </div>
       ) : (
-        <div className="text-white/30 text-sm p-4 text-center">No recent extractions</div>
+        <div className="text-kozmo-muted text-sm p-4 text-center">No recent extractions</div>
       )}
       {extHistory?.total != null && (
-        <div className="text-xs text-white/30 text-center mt-2">
+        <div className="text-xs text-kozmo-muted text-center mt-2">
           Showing {extHistory.extractions?.length || 0} of {extHistory.total} total
         </div>
       )}
@@ -433,12 +434,12 @@ const ExtractionTab = ({ extStats, extHistory }) => (
   </div>
 );
 
-const ClustersTab = ({ clusterStats }) => (
+const ClustersTab = ({ clusterStats, entities = [] }) => (
   <div className="space-y-5">
     {/* Summary Row */}
     <div className="grid grid-cols-3 gap-3">
-      <StatBox label="Clusters" value={clusterStats?.cluster_count ?? '—'} color="text-violet-400" />
-      <StatBox label="Nodes in Clusters" value={clusterStats?.total_nodes?.toLocaleString() ?? '—'} color="text-cyan-400" />
+      <StatBox label="Clusters" value={clusterStats?.cluster_count ?? '—'} color="text-kozmo-accent" />
+      <StatBox label="Nodes in Clusters" value={clusterStats?.total_nodes?.toLocaleString() ?? '—'} color="text-kozmo-accent" />
       <StatBox
         label="Avg Lock-In"
         value={clusterStats?.avg_lock_in != null ? `${(clusterStats.avg_lock_in * 100).toFixed(1)}%` : '—'}
@@ -475,7 +476,7 @@ const ClustersTab = ({ clusterStats }) => (
                     <div key={state} className="flex items-center gap-1.5 text-xs text-white/60">
                       <div className={`w-2.5 h-2.5 rounded-full ${cfg.color}`} />
                       <span>{cfg.label}</span>
-                      <span className="text-white/30">{count}</span>
+                      <span className="text-kozmo-muted">{count}</span>
                     </div>
                   );
                 })}
@@ -492,11 +493,13 @@ const ClustersTab = ({ clusterStats }) => (
         <SectionHeader icon="🏆">Top Clusters</SectionHeader>
         <div className="space-y-2">
           {clusterStats.top_clusters.map((cluster, i) => (
-            <div key={cluster.id || i} className="p-3 bg-white/5 rounded-xl border border-white/10">
+            <div key={cluster.id || i} className="p-3 bg-kozmo-surface rounded border border-kozmo-border">
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-white/30">#{i + 1}</span>
-                  <span className="text-white/90 font-medium">{cluster.label || cluster.id || `Cluster ${i + 1}`}</span>
+                  <span className="text-xs font-mono text-kozmo-muted">#{i + 1}</span>
+                  <span className="text-white/90 font-medium">
+                    <AnnotatedText text={cluster.label || cluster.id || `Cluster ${i + 1}`} entities={entities} />
+                  </span>
                   {cluster.state && (
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                       stateConfig[cluster.state]?.color || 'bg-white/20'
@@ -517,7 +520,7 @@ const ClustersTab = ({ clusterStats }) => (
               {cluster.top_types && (
                 <div className="flex gap-2 mt-1">
                   {Object.entries(cluster.top_types).map(([type, count]) => (
-                    <span key={type} className="text-[10px] text-white/40">
+                    <span key={type} className="text-[10px] text-kozmo-muted">
                       {type}: {count}
                     </span>
                   ))}
@@ -540,13 +543,13 @@ const ClustersTab = ({ clusterStats }) => (
             return (
               <div key={bucket} className="flex items-center gap-3">
                 <span className="text-xs text-white/50 w-16 text-right">{bucket}</span>
-                <div className="flex-1 h-4 bg-white/5 rounded overflow-hidden">
+                <div className="flex-1 h-4 bg-kozmo-surface rounded overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-cyan-500/60 to-violet-500/60 rounded transition-all"
+                    className="h-full bg-kozmo-accent rounded transition-all"
                     style={{ width: `${width}%` }}
                   />
                 </div>
-                <span className="text-xs text-white/40 w-8">{count}</span>
+                <span className="text-xs text-kozmo-muted w-8">{count}</span>
               </div>
             );
           })}
@@ -555,7 +558,7 @@ const ClustersTab = ({ clusterStats }) => (
     )}
 
     {!clusterStats && (
-      <div className="text-white/30 text-sm text-center p-8">No cluster data available</div>
+      <div className="text-kozmo-muted text-sm text-center p-8">No cluster data available</div>
     )}
   </div>
 );
@@ -574,7 +577,7 @@ const lockInBadge = (state) => {
     fluid: 'bg-yellow-500/20 text-yellow-400',
     drifting: 'bg-red-500/20 text-red-400',
   };
-  return colors[state] || 'bg-white/10 text-white/40';
+  return colors[state] || 'bg-kozmo-border text-kozmo-muted';
 };
 
 const MemoriesTab = () => {
@@ -641,12 +644,12 @@ const MemoriesTab = () => {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && doSearch()}
           placeholder="Search memories..."
-          className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-white/30 focus:outline-none focus:border-cyan-500/50"
+          className="flex-1 px-3 py-2 bg-kozmo-surface border border-kozmo-border rounded text-sm text-white font-mono placeholder-kozmo-muted focus:outline-none focus:border-kozmo-accent/50"
         />
         <button
           onClick={doSearch}
           disabled={searching || !query.trim()}
-          className="px-4 py-2 text-sm bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 rounded-lg hover:bg-cyan-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
+          className="px-4 py-2 text-sm bg-kozmo-accent/20 border border-kozmo-accent/30 text-kozmo-accent rounded hover:bg-kozmo-accent/30 disabled:opacity-30 disabled:cursor-not-allowed"
         >
           {searching ? '...' : 'Search'}
         </button>
@@ -654,11 +657,11 @@ const MemoriesTab = () => {
 
       {/* Filters */}
       <div className="flex gap-2 items-center">
-        <span className="text-xs text-white/30">Filter:</span>
+        <span className="text-xs text-kozmo-muted">Filter:</span>
         <select
           value={filterType}
           onChange={(e) => { setFilterType(e.target.value); }}
-          className="px-2 py-1 text-xs bg-white/5 border border-white/10 rounded text-white/70 focus:outline-none"
+          className="px-2 py-1 text-xs bg-kozmo-surface border border-kozmo-border rounded text-white/70 focus:outline-none"
         >
           <option value="">All Types</option>
           <option value="FACT">FACT</option>
@@ -675,7 +678,7 @@ const MemoriesTab = () => {
         <select
           value={filterState}
           onChange={(e) => { setFilterState(e.target.value); }}
-          className="px-2 py-1 text-xs bg-white/5 border border-white/10 rounded text-white/70 focus:outline-none"
+          className="px-2 py-1 text-xs bg-kozmo-surface border border-kozmo-border rounded text-white/70 focus:outline-none"
         >
           <option value="">All States</option>
           <option value="settled">Settled</option>
@@ -684,12 +687,12 @@ const MemoriesTab = () => {
         </select>
         <button
           onClick={() => { setResults(null); setQuery(''); doBrowse(); }}
-          className="px-3 py-1 text-xs bg-white/5 border border-white/10 rounded text-white/50 hover:text-white hover:bg-white/10"
+          className="px-3 py-1 text-xs bg-kozmo-surface border border-kozmo-border rounded text-white/50 hover:text-white hover:bg-kozmo-surface/80"
         >
           Browse
         </button>
         {results && (
-          <span className="text-xs text-cyan-400 ml-auto">{results.length} results for "{query}"</span>
+          <span className="text-xs text-kozmo-accent ml-auto">{results.length} results for "{query}"</span>
         )}
       </div>
 
@@ -707,7 +710,7 @@ const MemoriesTab = () => {
             <div
               key={id}
               onClick={() => setExpandedId(isExpanded ? null : id)}
-              className="p-3 bg-white/5 rounded-xl border border-white/10 cursor-pointer hover:bg-white/[0.07] transition-colors"
+              className="p-3 bg-kozmo-surface rounded border border-kozmo-border cursor-pointer hover:bg-kozmo-surface/80 transition-colors"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -722,7 +725,7 @@ const MemoriesTab = () => {
                       {(lockIn * 100).toFixed(0)}%
                     </span>
                     {node.score != null && (
-                      <span className="text-[10px] text-cyan-400/60">score: {node.score.toFixed(3)}</span>
+                      <span className="text-[10px] text-kozmo-accent/60">score: {node.score.toFixed(3)}</span>
                     )}
                   </div>
                   <div className={`text-xs text-white/70 ${isExpanded ? '' : 'line-clamp-2'}`}>
@@ -731,7 +734,7 @@ const MemoriesTab = () => {
                 </div>
               </div>
               {isExpanded && (
-                <div className="mt-2 pt-2 border-t border-white/5 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] text-white/30">
+                <div className="mt-2 pt-2 border-t border-white/5 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] text-kozmo-muted">
                   <span>ID: <span className="text-white/50 font-mono">{id}</span></span>
                   <span>Source: <span className="text-white/50">{node.source || '—'}</span></span>
                   <span>Confidence: <span className="text-white/50">{(node.confidence ?? 0).toFixed(2)}</span></span>
@@ -746,7 +749,7 @@ const MemoriesTab = () => {
             </div>
           );
         }) : (
-          <div className="text-white/30 text-sm text-center p-8">
+          <div className="text-kozmo-muted text-sm text-center p-8">
             {searching ? 'Searching...' : 'No memories found'}
           </div>
         )}
@@ -757,7 +760,7 @@ const MemoriesTab = () => {
 
 // --- Main Component ---
 
-const MemoryMonitorPanel = ({ isOpen, onClose }) => {
+const MemoryMonitorPanel = ({ isOpen, onClose, entities = [] }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [memStats, setMemStats] = useState(null);
   const [extStats, setExtStats] = useState(null);
@@ -806,12 +809,12 @@ const MemoryMonitorPanel = ({ isOpen, onClose }) => {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
         <GlassCard className="w-full max-w-md" padding="p-6" hover={false}>
-          <div className="text-white/30 text-sm text-center">
+          <div className="text-kozmo-muted text-sm text-center">
             Memory Monitor unavailable ({error})
           </div>
           <button
             onClick={onClose}
-            className="mt-4 mx-auto block text-xs text-white/40 hover:text-white/60"
+            className="mt-4 mx-auto block text-xs text-kozmo-muted hover:text-white/60"
           >
             Close
           </button>
@@ -826,13 +829,13 @@ const MemoryMonitorPanel = ({ isOpen, onClose }) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <GlassCard className="w-full max-w-5xl max-h-[90vh] flex flex-col" padding="p-0" hover={false}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-gradient-to-r from-cyan-500/10 to-violet-500/10 rounded-t-2xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-kozmo-border bg-kozmo-accent/10 rounded-t">
           <div className="flex items-center gap-3">
             <span className="text-3xl">🧠</span>
             <div>
               <h2 className="text-lg font-medium text-white flex items-center gap-2">
                 Memory Monitor
-                <span className="text-xs px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded-full">Live</span>
+                <span className="text-xs px-2 py-0.5 bg-kozmo-eden/20 text-kozmo-eden rounded-full">Live</span>
               </h2>
               <p className="text-xs text-white/50">
                 {lastRefresh
@@ -846,17 +849,17 @@ const MemoryMonitorPanel = ({ isOpen, onClose }) => {
             <button
               onClick={fetchAll}
               disabled={loading}
-              className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
+              className={`px-3 py-1.5 text-xs rounded border transition-all ${
                 loading
-                  ? 'bg-white/5 border-white/10 text-white/30 cursor-wait'
-                  : 'bg-cyan-500/20 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/30'
+                  ? 'bg-kozmo-surface border-kozmo-border text-kozmo-muted cursor-wait'
+                  : 'bg-kozmo-accent/20 border-kozmo-accent/30 text-kozmo-accent hover:bg-kozmo-accent/30'
               }`}
             >
               {loading ? '↻ Refreshing...' : '↻ Refresh'}
             </button>
             <button
               onClick={onClose}
-              className="p-2 text-white/50 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              className="p-2 text-white/50 hover:text-white hover:bg-kozmo-surface/80 rounded transition-colors"
             >
               ✕
             </button>
@@ -864,15 +867,15 @@ const MemoryMonitorPanel = ({ isOpen, onClose }) => {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 px-6 py-2 border-b border-white/10 bg-white/5">
+        <div className="flex gap-1 px-6 py-2 border-b border-kozmo-border bg-kozmo-surface">
           {TABS.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-2 text-sm rounded-lg transition-colors flex items-center gap-1.5 ${
+              className={`px-4 py-2 text-sm rounded transition-colors flex items-center gap-1.5 ${
                 activeTab === tab.id
-                  ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                  : 'text-white/50 hover:text-white hover:bg-white/10'
+                  ? 'bg-kozmo-accent/20 text-kozmo-accent border border-kozmo-accent/30'
+                  : 'text-white/50 hover:text-white hover:bg-kozmo-surface/80'
               }`}
             >
               <span className="text-xs">{tab.icon}</span>
@@ -902,7 +905,7 @@ const MemoryMonitorPanel = ({ isOpen, onClose }) => {
                 <ExtractionTab extStats={extStats || {}} extHistory={extHistory} />
               )}
               {activeTab === 'clusters' && (
-                <ClustersTab clusterStats={clusterStats} />
+                <ClustersTab clusterStats={clusterStats} entities={entities} />
               )}
             </>
           ) : null}

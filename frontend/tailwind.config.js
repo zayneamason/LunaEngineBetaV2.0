@@ -6,12 +6,23 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['"Space Grotesk"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
+        display: ['"Space Grotesk"', 'sans-serif'],
+      },
       colors: {
-        luna: {
-          violet: '#8b5cf6',
-          cyan: '#06b6d4',
-          pink: '#ec4899',
-        }
+        kozmo: {
+          bg: '#0a0a0f',
+          surface: '#12121a',
+          border: '#1e1e2e',
+          muted: '#4a4a5a',
+          accent: '#c084fc',
+          eden: '#34d399',
+          warning: '#fbbf24',
+          danger: '#f87171',
+          cinema: '#818cf8',
+        },
       },
       animation: {
         'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',

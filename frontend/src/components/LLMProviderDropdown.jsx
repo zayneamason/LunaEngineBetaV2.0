@@ -73,7 +73,7 @@ export function LLMProviderDropdown({ className = '' }) {
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={isLoading}
-        className="flex items-center gap-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm text-white/80 transition-all"
+        className="flex items-center gap-2 px-3 py-1.5 bg-kozmo-surface hover:bg-kozmo-border border border-kozmo-border rounded text-sm text-white/80 transition-all"
       >
         {/* Status dot */}
         <span
@@ -87,7 +87,7 @@ export function LLMProviderDropdown({ className = '' }) {
         </span>
         {/* Model */}
         {currentInfo?.default_model && (
-          <span className="text-white/40 text-xs">
+          <span className="text-kozmo-muted text-xs">
             ({currentInfo.default_model.split('-').slice(0, 2).join('-')})
           </span>
         )}
@@ -104,9 +104,9 @@ export function LLMProviderDropdown({ className = '' }) {
 
       {/* Dropdown */}
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1 w-56 bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50">
-          <div className="px-3 py-2 border-b border-white/10">
-            <span className="text-xs text-white/40">LLM Provider</span>
+        <div className="absolute top-full left-0 mt-1 w-56 bg-kozmo-surface backdrop-blur-xl border border-kozmo-border rounded overflow-hidden shadow-2xl z-50">
+          <div className="px-3 py-2 border-b border-kozmo-border">
+            <span className="text-xs text-kozmo-muted">LLM Provider</span>
           </div>
           {Object.entries(providers).map(([name, info]) => (
             <button
@@ -115,9 +115,9 @@ export function LLMProviderDropdown({ className = '' }) {
               disabled={!info.is_available}
               className={`w-full px-3 py-2.5 flex items-center gap-3 text-left transition-all ${
                 name === currentProvider
-                  ? 'bg-violet-500/20 border-l-2 border-violet-400'
+                  ? 'bg-kozmo-accent/20 border-l-2 border-kozmo-accent'
                   : info.is_available
-                    ? 'hover:bg-white/5 border-l-2 border-transparent'
+                    ? 'hover:bg-kozmo-surface/80 border-l-2 border-transparent'
                     : 'opacity-50 cursor-not-allowed border-l-2 border-transparent'
               }`}
             >
@@ -141,7 +141,7 @@ export function LLMProviderDropdown({ className = '' }) {
               </div>
               {/* Current indicator */}
               {name === currentProvider && (
-                <span className="text-xs text-white/30 px-1.5 py-0.5 bg-white/10 rounded">
+                <span className="text-xs text-kozmo-muted px-1.5 py-0.5 bg-kozmo-border rounded">
                   active
                 </span>
               )}

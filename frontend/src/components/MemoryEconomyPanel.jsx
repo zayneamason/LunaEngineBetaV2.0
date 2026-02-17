@@ -47,7 +47,7 @@ const MemoryEconomyPanel = () => {
   if (loading) {
     return (
       <GlassCard padding="p-6" hover={false}>
-        <div className="text-white/30 text-sm">Loading Memory Economy...</div>
+        <div className="text-kozmo-muted text-sm">Loading Memory Economy...</div>
       </GlassCard>
     );
   }
@@ -55,7 +55,7 @@ const MemoryEconomyPanel = () => {
   if (error || !stats) {
     return (
       <GlassCard padding="p-6" hover={false}>
-        <div className="text-white/30 text-sm">
+        <div className="text-kozmo-muted text-sm">
           Memory Economy unavailable {error && `(${error})`}
         </div>
       </GlassCard>
@@ -71,41 +71,41 @@ const MemoryEconomyPanel = () => {
   return (
     <GlassCard padding="p-0" hover={false}>
       {/* Header */}
-      <div className="px-6 py-4 border-b border-white/10">
+      <div className="px-6 py-4 border-b border-kozmo-border">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-1 h-6 bg-gradient-to-b from-cyan-400 to-violet-400 rounded-full" />
-            <h2 className="text-lg font-light tracking-wide text-white/90">Memory Economy</h2>
+            <div className="w-1 h-6 bg-kozmo-accent rounded-full" style={{ boxShadow: '0 0 12px rgba(192,132,252,0.5), 0 0 4px rgba(192,132,252,0.8)' }} />
+            <h2 className="text-lg font-display font-semibold tracking-tight text-white/90">Memory Economy</h2>
           </div>
-          <div className="text-xs text-white/30">{cluster_count} clusters</div>
+          <div className="text-xs text-kozmo-muted">{cluster_count} clusters</div>
         </div>
       </div>
 
       <div className="p-6 space-y-6">
         {/* Overview Stats */}
         <div className="grid grid-cols-3 gap-4">
-          <div className="bg-white/5 rounded-xl p-4 text-center">
-            <div className="text-2xl font-light text-white/90">{cluster_count}</div>
-            <div className="text-xs text-white/40 uppercase tracking-widest mt-1">Clusters</div>
+          <div className="bg-kozmo-surface rounded p-4 text-center">
+            <div className="text-2xl font-display font-semibold text-white/90">{cluster_count}</div>
+            <div className="text-xs text-kozmo-muted uppercase tracking-[2px] mt-1">Clusters</div>
           </div>
 
-          <div className="bg-white/5 rounded-xl p-4 text-center">
-            <div className="text-2xl font-light text-white/90">{total_nodes.toLocaleString()}</div>
-            <div className="text-xs text-white/40 uppercase tracking-widest mt-1">Nodes</div>
+          <div className="bg-kozmo-surface rounded p-4 text-center">
+            <div className="text-2xl font-display font-semibold text-white/90">{total_nodes.toLocaleString()}</div>
+            <div className="text-xs text-kozmo-muted uppercase tracking-[2px] mt-1">Nodes</div>
           </div>
 
-          <div className="bg-white/5 rounded-xl p-4 text-center">
-            <div className="text-2xl font-light text-white/90">{Math.round(avg_lock_in * 100)}%</div>
-            <div className="text-xs text-white/40 uppercase tracking-widest mt-1">Avg Lock-in</div>
+          <div className="bg-kozmo-surface rounded p-4 text-center">
+            <div className="text-2xl font-display font-semibold text-white/90">{Math.round(avg_lock_in * 100)}%</div>
+            <div className="text-xs text-kozmo-muted uppercase tracking-[2px] mt-1">Avg Lock-in</div>
           </div>
         </div>
 
         {/* State Distribution */}
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-widest mb-3">Lock-in States</div>
+          <div className="text-xs text-kozmo-muted uppercase tracking-[2px] mb-3">Lock-in States</div>
 
           {/* State bar */}
-          <div className="h-4 flex rounded-lg overflow-hidden mb-3">
+          <div className="h-4 flex rounded overflow-hidden mb-3">
             {stateOrder.map((state) => {
               const count = state_distribution[state] || 0;
               const pct = (count / totalClusters) * 100;
@@ -129,7 +129,7 @@ const MemoryEconomyPanel = () => {
                 <div key={state} className="flex items-center gap-2">
                   <div className={`w-2 h-2 rounded-full bg-gradient-to-r ${stateColors[state]}`} />
                   <span className="text-xs text-white/60 capitalize">{state}</span>
-                  <span className="text-xs text-white/30">({count})</span>
+                  <span className="text-xs text-kozmo-muted">({count})</span>
                 </div>
               );
             })}
@@ -138,18 +138,18 @@ const MemoryEconomyPanel = () => {
 
         {/* Top Clusters */}
         <div>
-          <div className="text-xs text-white/40 uppercase tracking-widest mb-3">Top Clusters</div>
+          <div className="text-xs text-kozmo-muted uppercase tracking-[2px] mb-3">Top Clusters</div>
 
           {top_clusters && top_clusters.length > 0 ? (
             <div className="space-y-2">
               {top_clusters.map((cluster) => (
                 <div
                   key={cluster.cluster_id}
-                  className="flex items-center gap-3 bg-white/5 rounded-lg p-3 hover:bg-white/10 transition-colors"
+                  className="flex items-center gap-3 bg-kozmo-surface rounded p-3 hover:bg-kozmo-border transition-colors"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="text-sm text-white/80 truncate">{cluster.name}</div>
-                    <div className="text-xs text-white/40">{cluster.member_count} nodes</div>
+                    <div className="text-xs text-kozmo-muted">{cluster.member_count} nodes</div>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded ${stateBgColors[cluster.state]}`}>
                     {cluster.state}
@@ -161,7 +161,7 @@ const MemoryEconomyPanel = () => {
               ))}
             </div>
           ) : (
-            <div className="text-white/30 text-sm">No clusters yet</div>
+            <div className="text-kozmo-muted text-sm">No clusters yet</div>
           )}
         </div>
       </div>

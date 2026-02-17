@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
+import AnnotatedText from './AnnotatedText';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 // Ring colors for visual distinction
 const RING_COLORS = {
@@ -22,7 +23,7 @@ const SOURCE_ICONS = {
   LIBRARIAN: '📚',
 };
 
-const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
+const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [], entities = [] }) => {
   const [contextData, setContextData] = useState(null);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -78,7 +79,7 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
       const isKeyword = keywords.some(k => k.toLowerCase() === part.toLowerCase());
       if (isKeyword) {
         return (
-          <span key={i} className="bg-cyan-500/40 text-cyan-200 px-1 rounded font-medium">
+          <span key={i} className="bg-kozmo-accent/40 text-kozmo-accent px-1 rounded font-medium">
             {part}
           </span>
         );
@@ -97,11 +98,11 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <GlassCard className="w-full max-w-4xl max-h-[90vh] flex flex-col" padding="p-0" hover={false}>
         {/* Header */}
-        <div className="flex-shrink-0 px-6 py-4 border-b border-white/10 flex items-center justify-between">
+        <div className="flex-shrink-0 px-6 py-4 border-b border-kozmo-border flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-1 h-6 bg-gradient-to-b from-red-500 to-orange-500 rounded-full" />
-            <h2 className="text-lg font-light tracking-wide text-white/90">Context Debug</h2>
-            <span className="text-xs text-white/40 bg-red-500/20 px-2 py-1 rounded border border-red-500/30">
+            <div className="w-1 h-6 bg-gradient-to-b from-red-500 to-orange-500 rounded-full" style={{ boxShadow: '0 0 12px rgba(239,68,68,0.5), 0 0 4px rgba(239,68,68,0.8)' }} />
+            <h2 className="text-lg font-display font-semibold tracking-tight text-white/90">Context Debug</h2>
+            <span className="text-xs text-kozmo-muted bg-red-500/20 px-2 py-1 rounded border border-red-500/30">
               DEBUG MODE
             </span>
           </div>
@@ -115,40 +116,40 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
 
         {/* Stats Bar */}
         {contextData && (
-          <div className="flex-shrink-0 px-6 py-3 bg-white/5 border-b border-white/10 flex items-center gap-6 text-sm">
+          <div className="flex-shrink-0 px-6 py-3 bg-kozmo-surface border-b border-kozmo-border flex items-center gap-6 text-sm">
             <div>
-              <span className="text-white/40">Turn:</span>{' '}
+              <span className="text-kozmo-muted">Turn:</span>{' '}
               <span className="text-white/90 font-mono">{contextData.current_turn}</span>
             </div>
             <div>
-              <span className="text-white/40">Tokens:</span>{' '}
+              <span className="text-kozmo-muted">Tokens:</span>{' '}
               <span className="text-white/90 font-mono">
                 {contextData.total_tokens}/{contextData.token_budget}
               </span>
-              <span className="text-white/30 ml-1">
+              <span className="text-kozmo-muted ml-1">
                 ({Math.round(contextData.total_tokens / contextData.token_budget * 100)}%)
               </span>
             </div>
             <div>
-              <span className="text-white/40">Items:</span>{' '}
+              <span className="text-kozmo-muted">Items:</span>{' '}
               <span className="text-white/90 font-mono">{contextData.items?.length || 0}</span>
             </div>
           </div>
         )}
 
         {/* Ring Filter */}
-        <div className="flex-shrink-0 px-6 py-3 border-b border-white/10 flex items-center gap-2">
-          <span className="text-white/40 text-sm mr-2">Ring:</span>
+        <div className="flex-shrink-0 px-6 py-3 border-b border-kozmo-border flex items-center gap-2">
+          <span className="text-kozmo-muted text-sm mr-2">Ring:</span>
           {['ALL', 'CORE', 'INNER', 'MIDDLE', 'OUTER'].map(ring => (
             <button
               key={ring}
               onClick={() => setSelectedRing(ring)}
-              className={`px-3 py-1 text-xs rounded-lg border transition-all ${
+              className={`px-3 py-1 text-xs rounded border transition-all ${
                 selectedRing === ring
                   ? ring === 'ALL'
-                    ? 'bg-white/10 border-white/30 text-white/90'
+                    ? 'bg-kozmo-border border-white/30 text-white/90'
                     : `${RING_COLORS[ring]?.bg} ${RING_COLORS[ring]?.border} ${RING_COLORS[ring]?.text}`
-                  : 'bg-transparent border-white/10 text-white/40 hover:border-white/20'
+                  : 'bg-transparent border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80'
               }`}
             >
               {ring}
@@ -161,19 +162,19 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
 
         {/* Keywords Bar */}
         {contextData?.keywords?.length > 0 && (
-          <div className="flex-shrink-0 px-6 py-3 border-b border-white/10">
+          <div className="flex-shrink-0 px-6 py-3 border-b border-kozmo-border">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-white/40 text-sm mr-2">Keywords Luna knows:</span>
+              <span className="text-kozmo-muted text-sm mr-2">Keywords Luna knows:</span>
               {contextData.keywords.slice(0, 15).map(keyword => (
                 <span
                   key={keyword}
-                  className="bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded text-xs border border-cyan-500/30"
+                  className="bg-kozmo-accent/20 text-kozmo-accent px-2 py-0.5 rounded text-xs border border-kozmo-accent/30"
                 >
                   {keyword}
                 </span>
               ))}
               {contextData.keywords.length > 15 && (
-                <span className="text-white/30 text-xs">
+                <span className="text-kozmo-muted text-xs">
                   +{contextData.keywords.length - 15} more
                 </span>
               )}
@@ -184,19 +185,19 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
         {/* Content */}
         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
           {isLoading && !contextData && (
-            <div className="flex items-center justify-center h-32 text-white/40">
+            <div className="flex items-center justify-center h-32 text-kozmo-muted">
               Loading context...
             </div>
           )}
 
           {error && (
-            <div className="p-4 rounded-xl bg-red-500/10 border border-red-400/30 text-red-300 text-sm">
+            <div className="p-4 rounded bg-red-500/10 border border-red-400/30 text-red-300 text-sm">
               {error}
             </div>
           )}
 
           {filteredItems.length === 0 && !isLoading && (
-            <div className="flex items-center justify-center h-32 text-white/40">
+            <div className="flex items-center justify-center h-32 text-kozmo-muted">
               No context items in {selectedRing === 'ALL' ? 'any ring' : `${selectedRing} ring`}
             </div>
           )}
@@ -209,12 +210,12 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
             return (
               <div
                 key={item.id}
-                className={`rounded-xl border-2 ${ringStyle.border} ${ringStyle.bg} overflow-hidden transition-all`}
+                className={`rounded border-2 ${ringStyle.border} ${ringStyle.bg} overflow-hidden transition-all`}
               >
                 {/* Item Header */}
                 <div
                   onClick={() => toggleItem(item.id)}
-                  className="px-4 py-3 cursor-pointer flex items-center justify-between hover:bg-white/5 transition-colors"
+                  className="px-4 py-3 cursor-pointer flex items-center justify-between hover:bg-kozmo-surface/80 transition-colors"
                 >
                   <div className="flex items-center gap-3">
                     <span className="text-lg">{sourceIcon}</span>
@@ -223,10 +224,10 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
                         <span className={`text-xs font-medium ${ringStyle.text}`}>
                           {item.ring}
                         </span>
-                        <span className="text-white/40 text-xs">•</span>
+                        <span className="text-kozmo-muted text-xs">•</span>
                         <span className="text-white/60 text-xs">{item.source}</span>
                       </div>
-                      <div className="text-white/40 text-xs mt-0.5">
+                      <div className="text-kozmo-muted text-xs mt-0.5">
                         {item.tokens} tokens • rel: {item.relevance} • age: {item.age_turns}/{item.ttl_turns} turns
                         {item.is_expired && (
                           <span className="ml-2 text-red-400">(EXPIRED)</span>
@@ -234,16 +235,16 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
                       </div>
                     </div>
                   </div>
-                  <span className="text-white/40 text-lg">
+                  <span className="text-kozmo-muted text-lg">
                     {isExpanded ? '−' : '+'}
                   </span>
                 </div>
 
                 {/* Item Content (expanded) */}
                 {isExpanded && (
-                  <div className="px-4 pb-4 pt-2 border-t border-white/10">
-                    <pre className="text-sm text-white/80 whitespace-pre-wrap font-mono bg-black/20 p-3 rounded-lg overflow-x-auto">
-                      {highlightText(item.content, contextData?.keywords || [])}
+                  <div className="px-4 pb-4 pt-2 border-t border-kozmo-border">
+                    <pre className="text-sm text-white/80 whitespace-pre-wrap font-mono bg-black/20 p-3 rounded overflow-x-auto">
+                      <AnnotatedText text={item.content} entities={entities} />
                     </pre>
                   </div>
                 )}
@@ -262,13 +263,13 @@ const ContextDebugPanel = ({ isOpen, onClose, highlightKeywords = [] }) => {
         </div>
 
         {/* Footer */}
-        <div className="flex-shrink-0 px-6 py-3 border-t border-white/10 flex items-center justify-between text-xs text-white/40">
+        <div className="flex-shrink-0 px-6 py-3 border-t border-kozmo-border flex items-center justify-between text-xs text-kozmo-muted">
           <div>
             Red box = what Luna "sees" when generating a response
           </div>
           <button
             onClick={fetchContext}
-            className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors text-white/60"
+            className="px-3 py-1 rounded bg-kozmo-border hover:bg-kozmo-surface/80 transition-colors text-white/60"
           >
             Refresh
           </button>

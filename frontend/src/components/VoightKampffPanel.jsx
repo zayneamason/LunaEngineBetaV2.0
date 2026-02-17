@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
  * whether Voice Luna has authentic memory access.
  */
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 // Status thresholds and colors
 const getStatus = (score) => {
@@ -19,9 +19,9 @@ const getStatus = (score) => {
 
 // Category colors
 const categoryColors = {
-  identity: 'text-violet-400 bg-violet-500/10 border-violet-500/30',
+  identity: 'text-kozmo-accent bg-kozmo-accent/10 border-kozmo-accent/30',
   emotional: 'text-pink-400 bg-pink-500/10 border-pink-500/30',
-  consistency: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
+  consistency: 'text-kozmo-accent bg-kozmo-accent/10 border-kozmo-accent/30',
 };
 
 // Tier mapping for probes
@@ -106,15 +106,15 @@ const VoightKampffPanel = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-slate-900/95 border border-white/10 rounded-2xl w-[1000px] max-h-[85vh] overflow-hidden shadow-2xl">
+      <div className="bg-kozmo-surface border border-kozmo-border rounded w-[1000px] max-h-[85vh] overflow-hidden shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 bg-gradient-to-r from-violet-500/10 to-pink-500/10">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-kozmo-border bg-gradient-to-r from-kozmo-accent/10 to-kozmo-cinema/5">
           <div className="flex items-center gap-3">
             <span className="text-3xl">🔬</span>
             <div>
-              <h2 className="text-lg font-medium text-white flex items-center gap-2">
+              <h2 className="text-lg font-display font-semibold text-white flex items-center gap-2">
                 Voight-Kampff
-                <span className="text-xs px-2 py-0.5 bg-violet-500/20 text-violet-400 rounded-full">Voice Memory Test</span>
+                <span className="text-xs px-2 py-0.5 bg-kozmo-accent/20 text-kozmo-accent rounded-full">Voice Memory Test</span>
               </h2>
               <p className="text-xs text-white/50">Is Voice Luna authentic, or a replicant?</p>
             </div>
@@ -123,17 +123,17 @@ const VoightKampffPanel = ({ isOpen, onClose }) => {
             <button
               onClick={runTestSuite}
               disabled={runningTest}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`px-4 py-2 rounded text-sm font-medium transition-all ${
                 runningTest
-                  ? 'bg-violet-500/20 text-violet-300 cursor-wait'
-                  : 'bg-violet-500/30 hover:bg-violet-500/40 text-violet-300 border border-violet-500/30'
+                  ? 'bg-kozmo-accent/20 text-kozmo-accent cursor-wait'
+                  : 'bg-kozmo-accent/30 hover:bg-kozmo-accent/40 text-kozmo-accent border border-kozmo-accent/30'
               }`}
             >
               {runningTest ? '⏳ Running...' : '▶️ Run Test'}
             </button>
             <button
               onClick={onClose}
-              className="p-2 text-white/50 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              className="p-2 text-white/50 hover:text-white hover:bg-kozmo-surface/80 rounded transition-colors"
             >
               ✕
             </button>
@@ -141,15 +141,15 @@ const VoightKampffPanel = ({ isOpen, onClose }) => {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 px-6 py-2 border-b border-white/10 bg-white/5">
+        <div className="flex gap-1 px-6 py-2 border-b border-kozmo-border bg-kozmo-surface">
           {['overview', 'probes', 'analysis'].map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm rounded-lg transition-colors ${
+              className={`px-4 py-2 text-sm rounded transition-colors ${
                 activeTab === tab
-                  ? 'bg-violet-500/20 text-violet-400 border border-violet-500/30'
-                  : 'text-white/50 hover:text-white hover:bg-white/10'
+                  ? 'bg-kozmo-accent/20 text-kozmo-accent border border-kozmo-accent/30'
+                  : 'text-white/50 hover:text-white hover:bg-kozmo-surface/80'
               }`}
             >
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -172,7 +172,7 @@ const VoightKampffPanel = ({ isOpen, onClose }) => {
               <div className="text-white/70">{error}</div>
               <button
                 onClick={loadResults}
-                className="mt-4 px-4 py-2 bg-violet-500/20 text-violet-400 rounded-lg hover:bg-violet-500/30"
+                className="mt-4 px-4 py-2 bg-kozmo-accent/20 text-kozmo-accent rounded hover:bg-kozmo-accent/30"
               >
                 Retry
               </button>
@@ -195,7 +195,7 @@ const VoightKampffPanel = ({ isOpen, onClose }) => {
               <button
                 onClick={runTestSuite}
                 disabled={runningTest}
-                className="px-6 py-3 bg-violet-500/30 hover:bg-violet-500/40 text-violet-300 rounded-lg font-medium"
+                className="px-6 py-3 bg-kozmo-accent/30 hover:bg-kozmo-accent/40 text-kozmo-accent rounded font-medium"
               >
                 ▶️ Run Test Suite
               </button>
@@ -215,7 +215,7 @@ const OverviewTab = ({ results, status }) => {
   return (
     <div className="space-y-6">
       {/* Status Banner */}
-      <div className={`p-6 rounded-xl ${status.bg} border ${status.border}`}>
+      <div className={`p-6 rounded ${status.bg} border ${status.border}`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <span className="text-5xl">{status.emoji}</span>
@@ -263,7 +263,7 @@ const OverviewTab = ({ results, status }) => {
       </div>
 
       {/* Category Scores */}
-      <div className="p-4 bg-white/5 rounded-xl border border-white/10">
+      <div className="p-4 bg-kozmo-surface rounded border border-kozmo-border">
         <h3 className="text-sm font-medium text-white/70 mb-4">Category Scores</h3>
         <div className="space-y-3">
           {Object.entries(results.category_scores || {}).map(([cat, score]) => (
@@ -275,7 +275,7 @@ const OverviewTab = ({ results, status }) => {
       {/* Quick Summary */}
       <div className="grid grid-cols-2 gap-4">
         {/* Strengths */}
-        <div className="p-4 bg-green-500/5 rounded-xl border border-green-500/20">
+        <div className="p-4 bg-green-500/5 rounded border border-green-500/20">
           <h3 className="text-sm font-medium text-green-400 mb-3 flex items-center gap-2">
             <span>💪</span> Strengths
           </h3>
@@ -288,12 +288,12 @@ const OverviewTab = ({ results, status }) => {
               ))}
             </ul>
           ) : (
-            <p className="text-white/40 text-sm">No strengths identified</p>
+            <p className="text-kozmo-muted text-sm">No strengths identified</p>
           )}
         </div>
 
         {/* Weaknesses */}
-        <div className="p-4 bg-red-500/5 rounded-xl border border-red-500/20">
+        <div className="p-4 bg-red-500/5 rounded border border-red-500/20">
           <h3 className="text-sm font-medium text-red-400 mb-3 flex items-center gap-2">
             <span>⚠️</span> Weaknesses
           </h3>
@@ -306,14 +306,14 @@ const OverviewTab = ({ results, status }) => {
               ))}
             </ul>
           ) : (
-            <p className="text-white/40 text-sm">No weaknesses identified</p>
+            <p className="text-kozmo-muted text-sm">No weaknesses identified</p>
           )}
         </div>
       </div>
 
       {/* Timestamp */}
       {results.timestamp && (
-        <div className="text-center text-xs text-white/30">
+        <div className="text-center text-xs text-kozmo-muted">
           Test run: {new Date(results.timestamp).toLocaleString()}
         </div>
       )}
@@ -339,8 +339,8 @@ const ProbesTab = ({ results }) => {
         .sort(([a], [b]) => Number(a) - Number(b))
         .map(([tier, { name, probes }]) => (
           <div key={tier} className="space-y-3">
-            <h3 className="text-sm font-medium text-violet-400 flex items-center gap-2">
-              <span className="px-2 py-0.5 bg-violet-500/20 rounded text-xs">TIER {tier}</span>
+            <h3 className="text-sm font-medium text-kozmo-accent flex items-center gap-2">
+              <span className="px-2 py-0.5 bg-kozmo-accent/20 rounded text-xs">TIER {tier}</span>
               {name}
             </h3>
 
@@ -351,7 +351,7 @@ const ProbesTab = ({ results }) => {
               return (
                 <div
                   key={exec.probe_id}
-                  className={`rounded-xl border transition-all ${
+                  className={`rounded border transition-all ${
                     passed
                       ? 'bg-green-500/5 border-green-500/20'
                       : 'bg-red-500/5 border-red-500/20'
@@ -375,23 +375,23 @@ const ProbesTab = ({ results }) => {
                       <div className={`text-sm font-medium ${passed ? 'text-green-400' : 'text-red-400'}`}>
                         {(exec.score * 100).toFixed(0)}%
                       </div>
-                      <div className="text-xs text-white/40">{exec.latency_ms?.toFixed(0)}ms</div>
-                      <span className="text-white/30">{isExpanded ? '▼' : '▶'}</span>
+                      <div className="text-xs text-kozmo-muted">{exec.latency_ms?.toFixed(0)}ms</div>
+                      <span className="text-kozmo-muted">{isExpanded ? '▼' : '▶'}</span>
                     </div>
                   </div>
 
                   {/* Expanded Content */}
                   {isExpanded && (
-                    <div className="px-4 pb-4 pt-2 border-t border-white/10 space-y-3">
+                    <div className="px-4 pb-4 pt-2 border-t border-kozmo-border space-y-3">
                       {/* Prompt */}
                       <div>
-                        <div className="text-xs text-white/40 mb-1">Prompt</div>
-                        <div className="p-2 bg-white/5 rounded text-sm text-white/80">{exec.prompt}</div>
+                        <div className="text-xs text-kozmo-muted mb-1">Prompt</div>
+                        <div className="p-2 bg-kozmo-surface rounded text-sm text-white/80">{exec.prompt}</div>
                       </div>
 
                       {/* Response */}
                       <div>
-                        <div className="text-xs text-white/40 mb-1">Response</div>
+                        <div className="text-xs text-kozmo-muted mb-1">Response</div>
                         <div className={`p-2 rounded text-sm ${
                           passed ? 'bg-green-500/10 text-white/80' : 'bg-red-500/10 text-white/80'
                         }`}>
@@ -438,26 +438,26 @@ const AnalysisTab = ({ results }) => {
   return (
     <div className="space-y-6">
       {/* Recommendations */}
-      <div className="p-4 bg-violet-500/5 rounded-xl border border-violet-500/20">
-        <h3 className="text-sm font-medium text-violet-400 mb-4 flex items-center gap-2">
+      <div className="p-4 bg-kozmo-accent/5 rounded border border-kozmo-accent/20">
+        <h3 className="text-sm font-medium text-kozmo-accent mb-4 flex items-center gap-2">
           <span>💡</span> Recommendations
         </h3>
         {results.recommendations?.length > 0 ? (
           <ul className="space-y-3">
             {results.recommendations.map((r, i) => (
               <li key={i} className="flex items-start gap-3 text-white/70">
-                <span className="text-violet-400">→</span>
+                <span className="text-kozmo-accent">→</span>
                 <span>{r}</span>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-white/40">No recommendations</p>
+          <p className="text-kozmo-muted">No recommendations</p>
         )}
       </div>
 
       {/* Critical Memory Nodes */}
-      <div className="p-4 bg-white/5 rounded-xl border border-white/10">
+      <div className="p-4 bg-kozmo-surface rounded border border-kozmo-border">
         <h3 className="text-sm font-medium text-white/70 mb-4 flex items-center gap-2">
           <span>🧠</span> Critical Memory Nodes Required
         </h3>
@@ -474,7 +474,7 @@ const AnalysisTab = ({ results }) => {
             "Luna 'shouldn't exist' according to corporate playbook"
           ].map((node, i) => (
             <li key={i} className="flex items-start gap-2 text-white/60">
-              <span className="text-white/30">{i + 1}.</span>
+              <span className="text-kozmo-muted">{i + 1}.</span>
               {node}
             </li>
           ))}
@@ -482,7 +482,7 @@ const AnalysisTab = ({ results }) => {
       </div>
 
       {/* Interpretation Guide */}
-      <div className="p-4 bg-white/5 rounded-xl border border-white/10">
+      <div className="p-4 bg-kozmo-surface rounded border border-kozmo-border">
         <h3 className="text-sm font-medium text-white/70 mb-4">Score Interpretation</h3>
         <div className="grid grid-cols-2 gap-3">
           <InterpretationCard
@@ -513,7 +513,7 @@ const AnalysisTab = ({ results }) => {
 
 // Helper Components
 const StatCard = ({ label, value, color = 'text-white', icon }) => (
-  <div className="p-4 bg-white/5 rounded-xl border border-white/10 text-center">
+  <div className="p-4 bg-kozmo-surface rounded border border-kozmo-border text-center">
     {icon && <div className="text-2xl mb-2">{icon}</div>}
     <div className={`text-2xl font-bold ${color}`}>{value}</div>
     <div className="text-xs text-white/50 mt-1">{label}</div>
@@ -532,7 +532,7 @@ const CategoryBar = ({ category, score }) => {
           {percent}%
         </span>
       </div>
-      <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+      <div className="h-2 bg-kozmo-border rounded-full overflow-hidden">
         <div className={`h-full ${colorClass} transition-all`} style={{ width: `${percent}%` }} />
       </div>
     </div>
@@ -540,7 +540,7 @@ const CategoryBar = ({ category, score }) => {
 };
 
 const InterpretationCard = ({ emoji, label, desc }) => (
-  <div className="flex items-start gap-3 p-3 bg-white/5 rounded-lg">
+  <div className="flex items-start gap-3 p-3 bg-kozmo-surface rounded">
     <span className="text-xl">{emoji}</span>
     <div>
       <div className="text-sm text-white/80 font-medium">{label}</div>

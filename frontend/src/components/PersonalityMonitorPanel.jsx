@@ -13,7 +13,7 @@ import {
   Legend,
 } from 'recharts';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 // Topic colors for charts
 const TOPIC_COLORS = {
@@ -101,11 +101,11 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <GlassCard className="w-full max-w-5xl max-h-[90vh] flex flex-col" padding="p-0" hover={false}>
         {/* Header */}
-        <div className="flex-shrink-0 px-6 py-4 border-b border-white/10 flex items-center justify-between">
+        <div className="flex-shrink-0 px-6 py-4 border-b border-kozmo-border flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-1 h-6 bg-gradient-to-b from-violet-500 to-pink-500 rounded-full" />
-            <h2 className="text-lg font-light tracking-wide text-white/90">Personality Monitor</h2>
-            <span className="text-xs text-white/40 bg-violet-500/20 px-2 py-1 rounded border border-violet-500/30">
+            <div className="w-1 h-6 bg-kozmo-accent rounded-full" style={{ boxShadow: '0 0 12px rgba(192,132,252,0.5), 0 0 4px rgba(192,132,252,0.8)' }} />
+            <h2 className="text-lg font-display font-semibold tracking-tight text-white/90">Personality Monitor</h2>
+            <span className="text-xs text-kozmo-muted bg-kozmo-accent/20 px-2 py-1 rounded border border-kozmo-accent/30">
               {data?.bootstrap_status === 'bootstrapped' ? 'ACTIVE' : 'INITIALIZING'}
             </span>
           </div>
@@ -128,38 +128,38 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
 
         {/* Stats Bar */}
         {data && (
-          <div className="flex-shrink-0 px-6 py-3 bg-white/5 border-b border-white/10 flex items-center gap-6 text-sm">
+          <div className="flex-shrink-0 px-6 py-3 bg-kozmo-surface border-b border-kozmo-border flex items-center gap-6 text-sm">
             <div>
-              <span className="text-white/40">Total Patches:</span>{' '}
+              <span className="text-kozmo-muted">Total Patches:</span>{' '}
               <span className="text-white/90 font-mono">{data.stats.total_patches}</span>
             </div>
             <div>
-              <span className="text-white/40">Active:</span>{' '}
+              <span className="text-kozmo-muted">Active:</span>{' '}
               <span className="text-green-400 font-mono">{data.stats.active_patches}</span>
             </div>
             <div>
-              <span className="text-white/40">Avg Lock-in:</span>{' '}
-              <span className="text-violet-400 font-mono">
+              <span className="text-kozmo-muted">Avg Lock-in:</span>{' '}
+              <span className="text-kozmo-accent font-mono">
                 {(data.stats.average_lock_in * 100).toFixed(1)}%
               </span>
             </div>
             <div>
-              <span className="text-white/40">Session Messages:</span>{' '}
-              <span className="text-cyan-400 font-mono">{data.session.messages_tracked}</span>
+              <span className="text-kozmo-muted">Session Messages:</span>{' '}
+              <span className="text-kozmo-accent font-mono">{data.session.messages_tracked}</span>
             </div>
           </div>
         )}
 
         {/* Tabs */}
-        <div className="flex-shrink-0 px-6 py-2 border-b border-white/10 flex items-center gap-2">
+        <div className="flex-shrink-0 px-6 py-2 border-b border-kozmo-border flex items-center gap-2">
           {['overview', 'patches', 'maintenance'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm rounded-lg border transition-all ${
+              className={`px-4 py-2 text-sm rounded border transition-all ${
                 activeTab === tab
-                  ? 'bg-violet-500/20 border-violet-500/50 text-violet-400'
-                  : 'bg-transparent border-white/10 text-white/40 hover:border-white/20'
+                  ? 'bg-kozmo-accent/20 border-kozmo-accent/50 text-kozmo-accent'
+                  : 'bg-transparent border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80'
               }`}
             >
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -170,13 +170,13 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
         {/* Content */}
         <div className="flex-1 min-h-0 overflow-y-auto p-4">
           {isLoading && !data && (
-            <div className="flex items-center justify-center h-32 text-white/40">
+            <div className="flex items-center justify-center h-32 text-kozmo-muted">
               Loading personality data...
             </div>
           )}
 
           {error && (
-            <div className="p-4 rounded-xl bg-red-500/10 border border-red-400/30 text-red-300 text-sm">
+            <div className="p-4 rounded bg-red-500/10 border border-red-400/30 text-red-300 text-sm">
               {error}
             </div>
           )}
@@ -184,7 +184,7 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
           {data && activeTab === 'overview' && (
             <div className="grid grid-cols-2 gap-6">
               {/* Topic Distribution Chart */}
-              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+              <div className="bg-kozmo-surface rounded p-4 border border-kozmo-border">
                 <h3 className="text-sm font-medium text-white/70 mb-4">Patch Distribution by Topic</h3>
                 {topicChartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height={200}>
@@ -216,14 +216,14 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="h-[200px] flex items-center justify-center text-white/40">
+                  <div className="h-[200px] flex items-center justify-center text-kozmo-muted">
                     No patches yet
                   </div>
                 )}
               </div>
 
               {/* Lock-in State Distribution */}
-              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+              <div className="bg-kozmo-surface rounded p-4 border border-kozmo-border">
                 <h3 className="text-sm font-medium text-white/70 mb-4">Lock-in State Distribution</h3>
                 {lockInChartData.some((d) => d.count > 0) ? (
                   <ResponsiveContainer width="100%" height={200}>
@@ -245,7 +245,7 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="h-[200px] flex items-center justify-center text-white/40">
+                  <div className="h-[200px] flex items-center justify-center text-kozmo-muted">
                     No patches yet
                   </div>
                 )}
@@ -280,13 +280,13 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
               </div>
 
               {/* Recent Activity */}
-              <div className="col-span-2 bg-white/5 rounded-xl p-4 border border-white/10">
+              <div className="col-span-2 bg-kozmo-surface rounded p-4 border border-kozmo-border">
                 <h3 className="text-sm font-medium text-white/70 mb-3">Top Patches by Lock-in</h3>
                 <div className="space-y-2">
                   {data.patches.slice(0, 5).map((patch) => (
                     <div
                       key={patch.patch_id}
-                      className="flex items-center justify-between py-2 px-3 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer transition-colors"
+                      className="flex items-center justify-between py-2 px-3 rounded bg-kozmo-surface hover:bg-kozmo-border cursor-pointer transition-colors"
                       onClick={() => {
                         setSelectedPatch(patch);
                         setActiveTab('patches');
@@ -296,11 +296,11 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
                         <span className="text-lg">{getTopicEmoji(patch.topic)}</span>
                         <div>
                           <div className="text-sm text-white/80">{patch.subtopic}</div>
-                          <div className="text-xs text-white/40">{patch.topic.replace(/_/g, ' ')}</div>
+                          <div className="text-xs text-kozmo-muted">{patch.topic.replace(/_/g, ' ')}</div>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <div className="w-24 h-2 bg-white/10 rounded-full overflow-hidden">
+                        <div className="w-24 h-2 bg-kozmo-border rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full ${
                               patch.lock_in >= 0.7
@@ -319,7 +319,7 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
                     </div>
                   ))}
                   {data.patches.length === 0 && (
-                    <div className="text-center py-4 text-white/40">
+                    <div className="text-center py-4 text-kozmo-muted">
                       No patches created yet. Start a conversation!
                     </div>
                   )}
@@ -339,7 +339,7 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
                 />
               ))}
               {data.patches.length === 0 && (
-                <div className="text-center py-8 text-white/40">
+                <div className="text-center py-8 text-kozmo-muted">
                   No personality patches yet. Patches are created through conversation reflection.
                 </div>
               )}
@@ -349,7 +349,7 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
           {data && activeTab === 'maintenance' && (
             <div className="space-y-6">
               {/* Maintenance Stats */}
-              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+              <div className="bg-kozmo-surface rounded p-4 border border-kozmo-border">
                 <h3 className="text-sm font-medium text-white/70 mb-4">Lifecycle Maintenance</h3>
                 <div className="grid grid-cols-3 gap-4">
                   <MaintenanceStat
@@ -369,38 +369,38 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
                   />
                 </div>
                 {data.maintenance.last_maintenance_run && (
-                  <div className="mt-4 text-xs text-white/40">
+                  <div className="mt-4 text-xs text-kozmo-muted">
                     Last maintenance: {new Date(data.maintenance.last_maintenance_run).toLocaleString()}
                   </div>
                 )}
               </div>
 
               {/* Session Info */}
-              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+              <div className="bg-kozmo-surface rounded p-4 border border-kozmo-border">
                 <h3 className="text-sm font-medium text-white/70 mb-4">Session Reflection</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <div className="text-2xl font-light text-cyan-400">
+                    <div className="text-2xl font-display font-semibold text-kozmo-accent">
                       {data.session.messages_tracked}
                     </div>
-                    <div className="text-xs text-white/40">Messages tracked this session</div>
+                    <div className="text-xs text-kozmo-muted">Messages tracked this session</div>
                   </div>
                   <div>
-                    <div className="text-2xl font-light text-violet-400">
+                    <div className="text-2xl font-display font-semibold text-kozmo-accent">
                       {data.session.patches_created_this_session}
                     </div>
-                    <div className="text-xs text-white/40">Patches created this session</div>
+                    <div className="text-xs text-kozmo-muted">Patches created this session</div>
                   </div>
                 </div>
                 {data.session.last_reflection && (
-                  <div className="mt-4 text-xs text-white/40">
+                  <div className="mt-4 text-xs text-kozmo-muted">
                     Last reflection: {new Date(data.session.last_reflection).toLocaleString()}
                   </div>
                 )}
               </div>
 
               {/* Bootstrap Status */}
-              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+              <div className="bg-kozmo-surface rounded p-4 border border-kozmo-border">
                 <h3 className="text-sm font-medium text-white/70 mb-3">Bootstrap Status</h3>
                 <div className="flex items-center gap-3">
                   <div
@@ -420,11 +420,11 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
         </div>
 
         {/* Footer */}
-        <div className="flex-shrink-0 px-6 py-3 border-t border-white/10 flex items-center justify-between text-xs text-white/40">
+        <div className="flex-shrink-0 px-6 py-3 border-t border-kozmo-border flex items-center justify-between text-xs text-kozmo-muted">
           <div>Luna's emergent personality - patches evolve through conversation</div>
           <button
             onClick={fetchPersonalityData}
-            className="px-3 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors text-white/60"
+            className="px-3 py-1 rounded bg-kozmo-border hover:bg-kozmo-surface/80 transition-colors text-white/60"
           >
             Refresh
           </button>
@@ -437,20 +437,20 @@ const PersonalityMonitorPanel = ({ isOpen, onClose }) => {
 // Helper Components
 
 const StatCard = ({ label, value, color, icon }) => (
-  <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+  <div className="bg-kozmo-surface rounded p-4 border border-kozmo-border">
     <div className="flex items-center justify-between mb-2">
       <span className="text-xl">{icon}</span>
-      <span className={`text-2xl font-light text-${color}-400`}>{value}</span>
+      <span className={`text-2xl font-display font-semibold text-${color}-400`}>{value}</span>
     </div>
-    <div className="text-xs text-white/40">{label}</div>
+    <div className="text-xs text-kozmo-muted">{label}</div>
   </div>
 );
 
 const MaintenanceStat = ({ label, value, subValue }) => (
   <div>
-    <div className="text-xl font-light text-white/80">{value}</div>
+    <div className="text-xl font-display font-semibold text-white/80">{value}</div>
     <div className="text-sm text-white/60">{label}</div>
-    <div className="text-xs text-white/40">{subValue}</div>
+    <div className="text-xs text-kozmo-muted">{subValue}</div>
   </div>
 );
 
@@ -460,10 +460,10 @@ const PatchCard = ({ patch, isSelected, onClick }) => {
 
   return (
     <div
-      className={`rounded-xl border transition-all cursor-pointer ${
+      className={`rounded border transition-all cursor-pointer ${
         isSelected
-          ? 'bg-violet-500/10 border-violet-500/30'
-          : 'bg-white/5 border-white/10 hover:border-white/20'
+          ? 'bg-kozmo-accent/10 border-kozmo-accent/30'
+          : 'bg-kozmo-surface border-kozmo-border hover:border-kozmo-border/80'
       }`}
       onClick={onClick}
     >
@@ -473,7 +473,7 @@ const PatchCard = ({ patch, isSelected, onClick }) => {
           <span className="text-xl">{getTopicEmoji(patch.topic)}</span>
           <div>
             <div className="text-sm font-medium text-white/80">{patch.subtopic}</div>
-            <div className="flex items-center gap-2 text-xs text-white/40">
+            <div className="flex items-center gap-2 text-xs text-kozmo-muted">
               <span className="capitalize">{patch.topic.replace(/_/g, ' ')}</span>
               <span>•</span>
               <span>{patch.trigger.replace(/_/g, ' ')}</span>
@@ -485,31 +485,31 @@ const PatchCard = ({ patch, isSelected, onClick }) => {
             <div className={`text-sm font-mono text-${lockInColor}-400`}>
               {(patch.lock_in * 100).toFixed(0)}%
             </div>
-            <div className="text-xs text-white/40">lock-in</div>
+            <div className="text-xs text-kozmo-muted">lock-in</div>
           </div>
           <div className="text-right">
-            <div className="text-sm font-mono text-cyan-400">{patch.reinforcement_count}</div>
-            <div className="text-xs text-white/40">reinforced</div>
+            <div className="text-sm font-mono text-kozmo-accent">{patch.reinforcement_count}</div>
+            <div className="text-xs text-kozmo-muted">reinforced</div>
           </div>
-          <span className="text-white/40">{isSelected ? '−' : '+'}</span>
+          <span className="text-kozmo-muted">{isSelected ? '−' : '+'}</span>
         </div>
       </div>
 
       {/* Expanded Content */}
       {isSelected && (
-        <div className="px-4 pb-4 pt-2 border-t border-white/10 space-y-3">
+        <div className="px-4 pb-4 pt-2 border-t border-kozmo-border space-y-3">
           {/* States */}
           <div className="grid grid-cols-2 gap-4">
             {patch.before_state && (
               <div>
-                <div className="text-xs text-white/40 mb-1">Before State</div>
+                <div className="text-xs text-kozmo-muted mb-1">Before State</div>
                 <div className="text-sm text-white/60 bg-red-500/10 p-2 rounded">
                   {patch.before_state}
                 </div>
               </div>
             )}
             <div>
-              <div className="text-xs text-white/40 mb-1">After State</div>
+              <div className="text-xs text-kozmo-muted mb-1">After State</div>
               <div className="text-sm text-white/80 bg-green-500/10 p-2 rounded">
                 {patch.after_state}
               </div>
@@ -518,12 +518,12 @@ const PatchCard = ({ patch, isSelected, onClick }) => {
 
           {/* Content */}
           <div>
-            <div className="text-xs text-white/40 mb-1">Full Content</div>
-            <div className="text-sm text-white/70 bg-white/5 p-2 rounded">{patch.content}</div>
+            <div className="text-xs text-kozmo-muted mb-1">Full Content</div>
+            <div className="text-sm text-white/70 bg-kozmo-surface p-2 rounded">{patch.content}</div>
           </div>
 
           {/* Metadata */}
-          <div className="flex items-center gap-4 text-xs text-white/40">
+          <div className="flex items-center gap-4 text-xs text-kozmo-muted">
             <span>Created: {new Date(patch.created_at).toLocaleDateString()}</span>
             <span>•</span>
             <span>Last reinforced: {new Date(patch.last_reinforced).toLocaleDateString()}</span>

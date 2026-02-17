@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = 'http://127.0.0.1:8000';
 
 /**
  * TuningPanel - Luna Engine Tuning Interface
@@ -273,28 +273,28 @@ const TuningPanel = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-y-0 right-0 w-[500px] bg-slate-900/95 backdrop-blur-xl border-l border-white/10 shadow-2xl z-50 flex flex-col">
+    <div className="fixed inset-y-0 right-0 w-[500px] bg-kozmo-surface backdrop-blur-xl border-l border-kozmo-border shadow-2xl z-50 flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-white/10">
+      <div className="flex items-center justify-between p-4 border-b border-kozmo-border">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+          <div className="w-8 h-8 rounded bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
             <span className="text-lg">⚙️</span>
           </div>
           <div>
-            <h2 className="text-lg font-medium text-white">Tuning</h2>
-            <p className="text-xs text-white/40">Parameter tuning & evaluation</p>
+            <h2 className="text-lg font-display font-semibold text-white">Tuning</h2>
+            <p className="text-xs text-kozmo-muted">Parameter tuning & evaluation</p>
           </div>
         </div>
         <button
           onClick={onClose}
-          className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white"
+          className="p-2 rounded hover:bg-kozmo-surface/80 transition-colors text-white/60 hover:text-white"
         >
           ✕
         </button>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-white/10">
+      <div className="flex border-b border-kozmo-border">
         {['params', 'session', 'eval'].map((tab) => (
           <button
             key={tab}
@@ -302,7 +302,7 @@ const TuningPanel = ({ isOpen, onClose }) => {
             className={`flex-1 py-3 text-sm font-medium transition-colors ${
               activeTab === tab
                 ? 'text-amber-400 border-b-2 border-amber-400'
-                : 'text-white/40 hover:text-white/60'
+                : 'text-kozmo-muted hover:text-white/60'
             }`}
           >
             {tab === 'params' && '🎛️ Parameters'}
@@ -314,7 +314,7 @@ const TuningPanel = ({ isOpen, onClose }) => {
 
       {/* Error Banner */}
       {error && (
-        <div className="m-4 p-3 rounded-lg bg-red-500/20 border border-red-500/30 text-red-300 text-sm">
+        <div className="m-4 p-3 rounded bg-red-500/20 border border-red-500/30 text-red-300 text-sm">
           {error}
           <button onClick={() => setError(null)} className="ml-2 text-red-400 hover:text-red-200">
             ✕
@@ -331,10 +331,10 @@ const TuningPanel = ({ isOpen, onClose }) => {
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => setSelectedCategory(null)}
-                className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
+                className={`px-3 py-1.5 text-xs rounded border transition-all ${
                   !selectedCategory
                     ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
-                    : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20'
+                    : 'bg-kozmo-surface border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80'
                 }`}
               >
                 All
@@ -343,10 +343,10 @@ const TuningPanel = ({ isOpen, onClose }) => {
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`px-3 py-1.5 text-xs rounded-lg border transition-all ${
+                  className={`px-3 py-1.5 text-xs rounded border transition-all ${
                     selectedCategory === cat
                       ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
-                      : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20'
+                      : 'bg-kozmo-surface border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80'
                   }`}
                 >
                   {cat}
@@ -383,7 +383,7 @@ const TuningPanel = ({ isOpen, onClose }) => {
                   className={`px-2 py-1 rounded text-xs ${
                     session
                       ? 'bg-green-500/20 text-green-400'
-                      : 'bg-white/10 text-white/40'
+                      : 'bg-kozmo-border text-kozmo-muted'
                   }`}
                 >
                   {session ? 'Active' : 'No Session'}
@@ -394,21 +394,21 @@ const TuningPanel = ({ isOpen, onClose }) => {
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
-                      <span className="text-white/40">Focus:</span>{' '}
+                      <span className="text-kozmo-muted">Focus:</span>{' '}
                       <span className="text-white">{session.focus}</span>
                     </div>
                     <div>
-                      <span className="text-white/40">Iterations:</span>{' '}
+                      <span className="text-kozmo-muted">Iterations:</span>{' '}
                       <span className="text-white">{session.iteration_count}</span>
                     </div>
                     <div>
-                      <span className="text-white/40">Best Score:</span>{' '}
+                      <span className="text-kozmo-muted">Best Score:</span>{' '}
                       <span className="text-amber-400 font-medium">
                         {(session.best_score * 100).toFixed(1)}%
                       </span>
                     </div>
                     <div>
-                      <span className="text-white/40">Best Iter:</span>{' '}
+                      <span className="text-kozmo-muted">Best Iter:</span>{' '}
                       <span className="text-white">#{session.best_iteration}</span>
                     </div>
                   </div>
@@ -417,14 +417,14 @@ const TuningPanel = ({ isOpen, onClose }) => {
                     <button
                       onClick={handleApplyBest}
                       disabled={isLoading}
-                      className="flex-1 py-2 text-sm rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+                      className="flex-1 py-2 text-sm rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
                     >
                       Apply Best
                     </button>
                     <button
                       onClick={handleEndSession}
                       disabled={isLoading}
-                      className="flex-1 py-2 text-sm rounded-lg bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                      className="flex-1 py-2 text-sm rounded bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
                     >
                       End Session
                     </button>
@@ -432,7 +432,7 @@ const TuningPanel = ({ isOpen, onClose }) => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-white/40">
+                  <p className="text-sm text-kozmo-muted">
                     Start a tuning session to track parameter changes and evaluate performance.
                   </p>
                   <div className="grid grid-cols-2 gap-2">
@@ -441,7 +441,7 @@ const TuningPanel = ({ isOpen, onClose }) => {
                         key={focus}
                         onClick={() => handleStartSession(focus)}
                         disabled={isLoading}
-                        className="py-2 text-sm rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50 capitalize"
+                        className="py-2 text-sm rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50 capitalize"
                       >
                         {focus}
                       </button>
@@ -459,10 +459,10 @@ const TuningPanel = ({ isOpen, onClose }) => {
                   {session.iterations.map((iter) => (
                     <div
                       key={iter.num}
-                      className={`p-3 rounded-lg border ${
+                      className={`p-3 rounded border ${
                         iter.num === session.best_iteration
                           ? 'bg-amber-500/10 border-amber-500/30'
-                          : 'bg-white/5 border-white/10'
+                          : 'bg-kozmo-surface border-kozmo-border'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -485,12 +485,12 @@ const TuningPanel = ({ isOpen, onClose }) => {
                         </span>
                       </div>
                       {Object.keys(iter.params_changed).length > 0 && (
-                        <div className="mt-1 text-xs text-white/40">
+                        <div className="mt-1 text-xs text-kozmo-muted">
                           Changed: {Object.keys(iter.params_changed).join(', ')}
                         </div>
                       )}
                       {iter.notes && (
-                        <div className="mt-1 text-xs text-white/30">{iter.notes}</div>
+                        <div className="mt-1 text-xs text-kozmo-muted">{iter.notes}</div>
                       )}
                     </div>
                   ))}
@@ -504,29 +504,29 @@ const TuningPanel = ({ isOpen, onClose }) => {
               <div className="space-y-4">
                 {/* Status Display */}
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white/5 rounded-lg p-3 text-center">
-                    <div className="text-2xl font-light text-cyan-400">
+                  <div className="bg-kozmo-surface rounded p-3 text-center">
+                    <div className="text-2xl font-display font-semibold text-kozmo-accent">
                       {ringStatus?.current_turns ?? '-'}
                     </div>
-                    <div className="text-[10px] text-white/40">Current Turns</div>
+                    <div className="text-[10px] text-kozmo-muted">Current Turns</div>
                   </div>
-                  <div className="bg-white/5 rounded-lg p-3 text-center">
-                    <div className="text-2xl font-light text-amber-400">
+                  <div className="bg-kozmo-surface rounded p-3 text-center">
+                    <div className="text-2xl font-display font-semibold text-amber-400">
                       {ringStatus?.max_turns ?? '-'}
                     </div>
-                    <div className="text-[10px] text-white/40">Max Turns</div>
+                    <div className="text-[10px] text-kozmo-muted">Max Turns</div>
                   </div>
                 </div>
 
                 {/* Topics */}
                 {ringStatus?.topics?.length > 0 && (
                   <div>
-                    <div className="text-xs text-white/40 mb-2">Detected Topics</div>
+                    <div className="text-xs text-kozmo-muted mb-2">Detected Topics</div>
                     <div className="flex flex-wrap gap-1">
                       {ringStatus.topics.slice(0, 8).map((topic, i) => (
                         <span
                           key={i}
-                          className="px-2 py-0.5 text-[10px] bg-white/5 border border-white/10 rounded-full text-white/60"
+                          className="px-2 py-0.5 text-[10px] bg-kozmo-surface border border-kozmo-border rounded-full text-white/60"
                         >
                           {topic}
                         </span>
@@ -538,8 +538,8 @@ const TuningPanel = ({ isOpen, onClose }) => {
                 {/* Max Turns Slider */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-white/40">Buffer Size</span>
-                    <span className="text-xs text-cyan-400">{ringMaxTurns} turns</span>
+                    <span className="text-xs text-kozmo-muted">Buffer Size</span>
+                    <span className="text-xs text-kozmo-accent">{ringMaxTurns} turns</span>
                   </div>
                   <input
                     type="range"
@@ -547,9 +547,9 @@ const TuningPanel = ({ isOpen, onClose }) => {
                     max={20}
                     value={ringMaxTurns}
                     onChange={(e) => setRingMaxTurns(parseInt(e.target.value))}
-                    className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                    className="w-full h-1 bg-kozmo-border rounded appearance-none cursor-pointer accent-cyan-400"
                   />
-                  <div className="flex justify-between text-[10px] text-white/30 mt-1">
+                  <div className="flex justify-between text-[10px] text-kozmo-muted mt-1">
                     <span>2 (minimal)</span>
                     <span>20 (extended)</span>
                   </div>
@@ -560,20 +560,20 @@ const TuningPanel = ({ isOpen, onClose }) => {
                   <button
                     onClick={() => handleRingConfig(ringMaxTurns)}
                     disabled={isRingLoading || ringMaxTurns === ringStatus?.max_turns}
-                    className="py-2 text-sm rounded-lg bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:bg-cyan-500/30 transition-colors disabled:opacity-50"
+                    className="py-2 text-sm rounded bg-kozmo-accent/20 text-kozmo-accent border border-kozmo-accent/30 hover:bg-kozmo-accent/30 transition-colors disabled:opacity-50"
                   >
                     {isRingLoading ? 'Applying...' : 'Apply Size'}
                   </button>
                   <button
                     onClick={handleRingClear}
                     disabled={isRingLoading || !ringStatus?.current_turns}
-                    className="py-2 text-sm rounded-lg bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                    className="py-2 text-sm rounded bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors disabled:opacity-50"
                   >
                     Clear Memory
                   </button>
                 </div>
 
-                <p className="text-[10px] text-white/30">
+                <p className="text-[10px] text-kozmo-muted">
                   The ring buffer holds recent conversation turns. More turns = better context retention, but higher token usage.
                 </p>
               </div>
@@ -583,16 +583,16 @@ const TuningPanel = ({ isOpen, onClose }) => {
             <GlassCard className="p-4">
               <h3 className="text-sm font-medium text-white/70 mb-3">System Controls</h3>
               <div className="space-y-3">
-                <p className="text-sm text-white/40">
+                <p className="text-sm text-kozmo-muted">
                   Restart the Luna Engine to apply configuration changes or recover from errors.
                 </p>
                 <button
                   onClick={handleRelaunch}
                   disabled={isRelaunching}
-                  className={`w-full py-3 text-sm font-medium rounded-lg border transition-all flex items-center justify-center gap-2 ${
+                  className={`w-full py-3 text-sm font-medium rounded border transition-all flex items-center justify-center gap-2 ${
                     isRelaunching
                       ? 'bg-amber-500/20 border-amber-500/30 text-amber-400 cursor-wait'
-                      : 'bg-cyan-500/20 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/30'
+                      : 'bg-kozmo-accent/20 border-kozmo-accent/30 text-kozmo-accent hover:bg-kozmo-accent/30'
                   }`}
                 >
                   <span className={isRelaunching ? 'animate-spin' : ''}>↻</span>
@@ -614,14 +614,14 @@ const TuningPanel = ({ isOpen, onClose }) => {
             {/* Run Evaluation */}
             <GlassCard className="p-4">
               <h3 className="text-sm font-medium text-white/70 mb-3">Run Evaluation</h3>
-              <p className="text-sm text-white/40 mb-4">
+              <p className="text-sm text-kozmo-muted mb-4">
                 Test Luna's performance across memory recall, context retention, routing, and
                 latency.
               </p>
               <button
                 onClick={handleRunEval}
                 disabled={isLoading}
-                className="w-full py-3 text-sm font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-400 hover:to-orange-500 transition-all disabled:opacity-50"
+                className="w-full py-3 text-sm font-medium rounded bg-gradient-to-r from-amber-500 to-orange-600 text-white hover:from-amber-400 hover:to-orange-500 transition-all disabled:opacity-50"
               >
                 {isLoading ? 'Running...' : '🧪 Run Full Evaluation'}
               </button>
@@ -633,12 +633,12 @@ const TuningPanel = ({ isOpen, onClose }) => {
                 <h3 className="text-sm font-medium text-white/70 mb-3">Results</h3>
 
                 {/* Overall Score */}
-                <div className="mb-4 p-3 rounded-lg bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20">
+                <div className="mb-4 p-3 rounded bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20">
                   <div className="text-center">
                     <div className="text-3xl font-bold text-amber-400">
                       {(evalResults.overall_score * 100).toFixed(1)}%
                     </div>
-                    <div className="text-xs text-white/40">Overall Score</div>
+                    <div className="text-xs text-kozmo-muted">Overall Score</div>
                   </div>
                 </div>
 
@@ -659,14 +659,14 @@ const TuningPanel = ({ isOpen, onClose }) => {
 
                 {/* Stats */}
                 <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className="p-2 rounded bg-white/5">
-                    <div className="text-white/40">Tests</div>
+                  <div className="p-2 rounded bg-kozmo-surface">
+                    <div className="text-kozmo-muted">Tests</div>
                     <div className="text-white">
                       {evalResults.passed_tests}/{evalResults.total_tests} passed
                     </div>
                   </div>
-                  <div className="p-2 rounded bg-white/5">
-                    <div className="text-white/40">Avg Latency</div>
+                  <div className="p-2 rounded bg-kozmo-surface">
+                    <div className="text-kozmo-muted">Avg Latency</div>
                     <div className="text-white">{evalResults.avg_latency_ms.toFixed(0)}ms</div>
                   </div>
                 </div>
@@ -707,8 +707,8 @@ const ParamCard = ({ paramName, pendingValue, onPendingChange, onApply, onReset 
 
   if (!param) {
     return (
-      <div className="p-3 rounded-lg bg-white/5 animate-pulse">
-        <div className="h-4 w-32 bg-white/10 rounded" />
+      <div className="p-3 rounded bg-kozmo-surface animate-pulse">
+        <div className="h-4 w-32 bg-kozmo-border rounded" />
       </div>
     );
   }
@@ -718,16 +718,16 @@ const ParamCard = ({ paramName, pendingValue, onPendingChange, onApply, onReset 
 
   return (
     <div
-      className={`p-3 rounded-lg border transition-all ${
+      className={`p-3 rounded border transition-all ${
         param.is_overridden || hasChanged
           ? 'bg-amber-500/5 border-amber-500/20'
-          : 'bg-white/5 border-white/10'
+          : 'bg-kozmo-surface border-kozmo-border'
       }`}
     >
       <div className="flex items-start justify-between mb-2">
         <div>
           <div className="text-sm font-medium text-white/90">{paramName}</div>
-          <div className="text-xs text-white/40">{param.description}</div>
+          <div className="text-xs text-kozmo-muted">{param.description}</div>
         </div>
         {param.is_overridden && (
           <button
@@ -753,7 +753,7 @@ const ParamCard = ({ paramName, pendingValue, onPendingChange, onApply, onReset 
             setLocalValue(val);
             onPendingChange(val);
           }}
-          className="flex-1 h-2 bg-white/10 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-amber-400"
+          className="flex-1 h-2 bg-kozmo-border rounded appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-amber-400"
         />
         <div className="w-16 text-right">
           <span className="text-sm font-mono text-white">
@@ -763,7 +763,7 @@ const ParamCard = ({ paramName, pendingValue, onPendingChange, onApply, onReset 
       </div>
 
       {/* Range labels */}
-      <div className="flex justify-between text-xs text-white/30 mt-1">
+      <div className="flex justify-between text-xs text-kozmo-muted mt-1">
         <span>{min}</span>
         <span className="text-white/20">default: {param.default}</span>
         <span>{max}</span>
@@ -800,7 +800,7 @@ const ScoreBar = ({ label, score, color = 'amber' }) => {
         <span className="text-white/60">{label}</span>
         <span className="text-white/80">{(score * 100).toFixed(1)}%</span>
       </div>
-      <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+      <div className="h-2 bg-kozmo-border rounded-full overflow-hidden">
         <div
           className={`h-full ${colorClasses[color]} transition-all duration-500`}
           style={{ width: `${score * 100}%` }}

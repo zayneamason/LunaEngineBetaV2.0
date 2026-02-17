@@ -208,10 +208,10 @@ const VoicePanel = ({ voiceHook }) => {
           {/* Hands-free toggle */}
           <button
             onClick={toggleHandsFree}
-            className={`px-2 py-1 text-xs rounded-lg border transition-all ${
+            className={`px-2 py-1 text-xs rounded border transition-all ${
               wantHandsFree
-                ? 'bg-violet-500/20 border-violet-500/50 text-violet-400'
-                : 'bg-white/5 border-white/10 text-white/40'
+                ? 'bg-kozmo-accent/20 border-kozmo-accent/50 text-kozmo-accent'
+                : 'bg-kozmo-surface border-kozmo-border text-kozmo-muted'
             }`}
             title={wantHandsFree ? 'Hands-free (always listening)' : 'Push-to-talk'}
           >
@@ -221,10 +221,10 @@ const VoicePanel = ({ voiceHook }) => {
           {/* Power toggle */}
           <button
             onClick={toggleVoice}
-            className={`px-3 py-1 text-xs rounded-lg border transition-all ${
+            className={`px-3 py-1 text-xs rounded border transition-all ${
               isRunning
                 ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/30'
-                : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20 hover:text-white/60'
+                : 'bg-kozmo-surface border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80 hover:text-white/60'
             }`}
           >
             {isRunning ? 'ON' : 'OFF'}
@@ -260,11 +260,11 @@ const VoicePanel = ({ voiceHook }) => {
         {/* Hands-free indicator */}
         {handsFree && isRunning && (
           <div className="mt-2 space-y-2">
-            <div className="flex items-center justify-center gap-2 text-xs text-violet-400">
-              <span className="w-2 h-2 bg-violet-500 rounded-full animate-pulse" />
+            <div className="flex items-center justify-center gap-2 text-xs text-kozmo-accent">
+              <span className="w-2 h-2 bg-kozmo-accent rounded-full animate-pulse" />
               Open mic - always listening
             </div>
-            <div className="text-xs text-white/40 text-center">
+            <div className="text-xs text-kozmo-muted text-center">
               Speak naturally, Luna will respond when you pause
             </div>
           </div>
@@ -283,11 +283,11 @@ const VoicePanel = ({ voiceHook }) => {
 
         {/* Speaking indicator */}
         {isSpeaking && (
-          <div className="mt-2 flex items-center justify-center gap-2 text-xs text-cyan-400">
+          <div className="mt-2 flex items-center justify-center gap-2 text-xs text-kozmo-accent">
             <span className="flex gap-0.5">
-              <span className="w-1 h-3 bg-cyan-400 rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
-              <span className="w-1 h-4 bg-cyan-400 rounded-full animate-pulse" style={{ animationDelay: '100ms' }} />
-              <span className="w-1 h-2 bg-cyan-400 rounded-full animate-pulse" style={{ animationDelay: '200ms' }} />
+              <span className="w-1 h-3 bg-kozmo-accent rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
+              <span className="w-1 h-4 bg-kozmo-accent rounded-full animate-pulse" style={{ animationDelay: '100ms' }} />
+              <span className="w-1 h-2 bg-kozmo-accent rounded-full animate-pulse" style={{ animationDelay: '200ms' }} />
             </span>
             Luna is speaking...
           </div>
@@ -296,7 +296,7 @@ const VoicePanel = ({ voiceHook }) => {
 
       {/* Push-to-Talk Button */}
       {isRunning && !handsFree && (
-        <div className="flex flex-col items-center py-4 border-t border-white/10">
+        <div className="flex flex-col items-center py-4 border-t border-kozmo-border">
           <div className="text-xs text-white/50 mb-3">
             Hold to speak
           </div>
@@ -347,7 +347,7 @@ const VoicePanel = ({ voiceHook }) => {
               </div>
 
               {/* Visual indicator that audio is being captured */}
-              <div className="flex items-center justify-center gap-2 text-xs text-violet-400">
+              <div className="flex items-center justify-center gap-2 text-xs text-kozmo-accent">
                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                 Capturing audio...
               </div>
@@ -356,7 +356,7 @@ const VoicePanel = ({ voiceHook }) => {
 
           {/* Last action feedback */}
           {lastAction && !isListening && (
-            <div className={`mt-3 px-3 py-2 rounded-lg text-xs text-center ${
+            <div className={`mt-3 px-3 py-2 rounded text-xs text-center ${
               lastAction.type === 'success'
                 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                 : lastAction.type === 'no_speech'
@@ -372,19 +372,19 @@ const VoicePanel = ({ voiceHook }) => {
 
       {/* Transcription & Response */}
       {(transcription || response) && (
-        <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+        <div className="mt-4 pt-4 border-t border-kozmo-border space-y-3">
           {/* User transcription */}
           {transcription && (
-            <div className="p-3 rounded-lg bg-white/5">
-              <div className="text-xs text-white/40 mb-1">You said:</div>
+            <div className="p-3 rounded bg-kozmo-surface">
+              <div className="text-xs text-kozmo-muted mb-1">You said:</div>
               <div className="text-sm text-white/80">{transcription}</div>
             </div>
           )}
 
           {/* Luna's response */}
           {response && (
-            <div className="p-3 rounded-lg bg-violet-500/10 border border-violet-500/20">
-              <div className="text-xs text-violet-400 mb-1">Luna:</div>
+            <div className="p-3 rounded bg-kozmo-accent/10 border border-kozmo-accent/20">
+              <div className="text-xs text-kozmo-accent mb-1">Luna:</div>
               <div className="text-sm text-white/90">{response}</div>
             </div>
           )}
@@ -393,34 +393,35 @@ const VoicePanel = ({ voiceHook }) => {
 
       {/* Error display */}
       {error && (
-        <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
+        <div className="mt-4 p-3 rounded bg-red-500/10 border border-red-500/30 text-red-400 text-xs">
           {error}
         </div>
       )}
 
       {/* Inactive state hint */}
       {!isRunning && (
-        <div className="text-center text-xs text-white/30 mt-2">
+        <div className="text-center text-xs text-kozmo-muted mt-2">
           Click ON to enable voice interaction
         </div>
       )}
 
       {/* Debug Info */}
-      <div className="mt-4 pt-4 border-t border-white/10">
-        <div className="text-xs text-white/40 mb-2">Debug Info:</div>
+      <div className="mt-4 pt-4 border-t border-kozmo-border">
+        <div className="text-xs text-kozmo-muted mb-2">Debug Info:</div>
         <div className="text-xs font-mono bg-black/30 rounded p-2 space-y-1">
-          <div>voiceState: <span className="text-cyan-400">{voiceState}</span></div>
+          <div>voiceState: <span className="text-kozmo-accent">{voiceState}</span></div>
           <div>isRunning: <span className={isRunning ? 'text-green-400' : 'text-red-400'}>{String(isRunning)}</span></div>
           <div>isListening: <span className={isListening ? 'text-green-400' : 'text-white/60'}>{String(isListening)}</span></div>
           <div>isThinking: <span className={isThinking ? 'text-amber-400' : 'text-white/60'}>{String(isThinking)}</span></div>
-          <div>isSpeaking: <span className={isSpeaking ? 'text-cyan-400' : 'text-white/60'}>{String(isSpeaking)}</span></div>
-          <div>mode: <span className={handsFree ? 'text-violet-400' : 'text-white/60'}>{handsFree ? 'Open Mic' : 'Push-to-talk'}</span></div>
-          <div>isHolding: <span className={isHolding ? 'text-violet-400' : 'text-white/60'}>{String(isHolding)}</span></div>
-          <div>recordingDuration: <span className="text-violet-400">{recordingDuration.toFixed(1)}s</span></div>
-          <div>audioLevel: <span className="text-cyan-400">{audioLevel.toFixed(2)}</span></div>
+
+          <div>isSpeaking: <span className={isSpeaking ? 'text-kozmo-accent' : 'text-white/60'}>{String(isSpeaking)}</span></div>
+          <div>mode: <span className={handsFree ? 'text-kozmo-accent' : 'text-white/60'}>{handsFree ? 'Open Mic' : 'Push-to-talk'}</span></div>
+          <div>isHolding: <span className={isHolding ? 'text-kozmo-accent' : 'text-white/60'}>{String(isHolding)}</span></div>
+          <div>recordingDuration: <span className="text-kozmo-accent">{recordingDuration.toFixed(1)}s</span></div>
+          <div>audioLevel: <span className="text-kozmo-accent">{audioLevel.toFixed(2)}</span></div>
           {lastAction && <div>lastAction: <span className={lastAction.type === 'success' ? 'text-green-400' : lastAction.type === 'no_speech' ? 'text-amber-400' : 'text-red-400'}>{lastAction.type} ({lastAction.duration}s)</span></div>}
           {transcription && <div>transcription: <span className="text-green-400">"{transcription}"</span></div>}
-          {response && <div>response: <span className="text-violet-400">"{response.slice(0, 50)}..."</span></div>}
+          {response && <div>response: <span className="text-kozmo-accent">"{response.slice(0, 50)}..."</span></div>}
           {error && <div>error: <span className="text-red-400">{error}</span></div>}
         </div>
       </div>
