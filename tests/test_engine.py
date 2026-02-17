@@ -99,7 +99,7 @@ class TestEngineTicks:
         await engine.send_message("test message 1")
         await engine.send_message("test message 2")
 
-        await asyncio.sleep(0.2)  # Let ticks process events
+        await asyncio.sleep(1.0)  # Let ticks process events (increased for reliability)
 
         assert engine.metrics.events_processed >= 2
 

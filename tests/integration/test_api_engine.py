@@ -17,7 +17,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 # Import for type hints
 from luna.engine import LunaEngine, EngineConfig
@@ -90,7 +90,7 @@ class TestAPIRoutesToEngine:
 
         mock_engine.send_message = AsyncMock(side_effect=trigger_response)
 
-        async with AsyncClient(app=app_with_mock_engine, base_url="http://test") as ac:
+        async with AsyncClient(transport=ASGITransport(app=app_with_mock_engine), base_url="http://test") as ac:
             # Note: This test requires the full app lifecycle which is complex
             # For unit testing, we verify the route exists
             pass
