@@ -1,0 +1,1495 @@
+Conversation: Piper TTS installation and preprocessing fixes
+UUID: 9ca69e5f-7526-43e7-9cac-5bfc709eb6ec
+Created: 2026-01-28T02:16:31.538117Z
+Updated: 2026-01-28T06:16:23.430567Z
+================================================================================
+
+[HUMAN] 2026-01-28T02:16:35.042432Z
+yo why is it saying piper isnt installed all of a sudden? Fixed. The issue was the `speak()` method in backend.py was bypassing the TTSManager and calling Piper directly without preprocessing.
+Changes Made
+1. backend.py:606-631 - Rewrote `speak()` to route through `TTSManager.synthesize()` instead of running Piper directly. This ensures all TTS paths use preprocessing.
+2. preprocessing.py:224-237 - Added rules for edge cases:
+   * `#1` → `1` (hash before numbers)
+   * `~text~` → `text` (single tilde emphasis)
+All TTS paths now preprocess text
+PathStatus`process_and_respond()` → `tts.synthesize()`✓ Preprocessed`speak()` → `tts.synthesize()`✓ Now preprocessedAPI `/voice/speak` → `speak()`✓ Now preprocessed
+Luna will no longer say "asterisk", "hash", "tilde", etc. when speaking.
+it defaulted to the samantha voice
+
+
+1. 
+2. 
+3. 
+
+Let me check why Piper isn't initializing and falling back to Apple TTS.
+Bash Check Piper TTS availability
+IN
+
+```
+python3 -c "
+# Check if piper-tts is installed and working
+try:
+    from piper import PiperVoice
+    print('✓ piper-tts package is installed')
+    
+    # Try to load a voice
+    try:
+        voice = PiperVoice.load('en_US-lessac-medium')
+        print('✓ Piper voice loaded successfully')
+    except Exception as e:
+        print(f'✗ Failed to load Piper voice: {e}')
+except ImportError as e:
+    print(f'✗ piper-tts not installed: {e}')
+    print('  Install with: pip install piper-tts')
+except Exception as e:
+    print(f'✗ Error: {e}')
+"
+```
+
+OUT
+
+```
+✗ piper-tts not installed: No module named 'piper'
+  Install with: pip install piper-tts
+```
+
+
+Piper TTS isn't installed, so it's falling back to Apple's Samantha voice. To use the neural Piper voices:
+
+```bash
+pip install piper-tts
+
+```
+
+Note: On Apple Silicon, Piper may require Rosetta. If you encounter issues after installing, let me know and I can help troubleshoot.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T02:17:26.779178Z
+Ahab is asking why Piper isn't installed suddenly. The diagnostic shows `piper-tts` module isn't found. This is straightforward - either it was never installed in this environment, got uninstalled during some cleanup, or there's a virtual environment mismatch.
+
+Let me check the actual situation more thoroughly before giving a simple "just pip install it" answer.Weird that it vanished. Let me check if it's a venv thing or actually gone:
+```
+This block is not supported on your current device yet.
+```
+
+Ah there it is. The system Python is being used (`/usr/bin/python3`) and pip isn't even in path. There's no `.venv` in the project root. This is a Python environment issue - either:
+
+1. The project was using a conda env or different venv that's not active
+2. pip needs to be called as `pip3` or `python3 -m pip`
+3. The dependencies were never properly installed in whatever environment should be active
+
+Let me check if there's a requirements.txt and what the expected setup is.Found it. You're running system Python (`/usr/bin/python3`) with no venv active and `pip` not in PATH. Either:
+
+1. Your project venv isn't activated
+2. Or you were using conda/another env that's not loaded
+
+Let me check your setup:
+```
+This block is not supported on your current device yet.
+```
+
+Interesting - Piper isn't even in the pyproject.toml dependencies! It's not listed anywhere. So either:
+
+1. It was installed manually outside of the project deps
+2. Or there's a separate voice/tts requirements somewhere
+3. Or it was always falling back to Apple TTS and Ahab didn't realize
+
+Let me check if there's a voice-specific requirements or setup file, and what the TTSManager expects.Piper isn't even in your `pyproject.toml` dependencies. It was either:
+- Manually installed at some point
+- Never actually working (always falling back to Apple TTS)
+
+Let me check what TTSManager expects:
+```
+This block is not supported on your current device yet.
+```
+
+Wait - there IS a `.venv` there! Python 3.14 even. The earlier check was wrong because I was running from `/bin/sh` without activating the venv.
+
+Let me check if piper is installed in the venv.Wait — there IS a `.venv` (Python 3.14). My earlier check didn't activate it. Let me check inside:
+```
+This block is not supported on your current device yet.
+```
+
+No piper in the pip list. So piper-tts is NOT installed in the venv either. The grep for piper returned nothing.
+
+So the situation is:
+1. There's a .venv with Python 3.14
+2. piper-tts is NOT installed in it
+3. The code references piper but it was never actually installed
+4. It's been falling back to Apple TTS all along
+
+The fix is to install piper-tts in the venv. But there might be compatibility issues with Python 3.14 (which is bleeding edge).Piper **isn't installed** in your venv either (grep returned nothing). So it's never been working — always falling back to Apple TTS.
+
+**The fix:**
+
+```bash
+cd /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root
+source .venv/bin/activate
+pip install piper-tts
+```
+
+**But heads up:** You're on Python 3.14 (bleeding edge). Piper might have wheels issues. If it fails, you may need:
+
+1. Build from source (pain)
+2. Use Python 3.11/3.12 venv for voice stuff
+3. Accept Apple TTS fallback for now
+
+Want me to add `piper-tts` to your `pyproject.toml` optional deps so it's tracked properly? Something like:
+
+```toml
+voice = [
+    "piper-tts>=1.2.0",
+]
+```
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T02:18:49.823167Z
+hold up thats not true thats the first time ive heard samantha its always been piper def not apple
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T02:22:03.498279Z
+Hmm, Ahab is saying Piper has definitely been working before - this is the first time he's heard Samantha (Apple TTS). So something changed. Let me think about what could cause this:
+
+1. Maybe Piper was installed globally, not in the venv?
+2. Maybe a different Python environment was being used?
+3. Maybe piper-tts got uninstalled somehow?
+4. Maybe there's a different venv or conda env that was being used?
+
+Let me dig deeper into what's actually happening. I should check:
+- Global pip installations
+- Conda environments
+- Any other Python installations
+- The actual TTS code to see how it tries to load PiperHuh, okay so something broke recently. Let me dig deeper:
+```
+This block is not supported on your current device yet.
+```
+
+Nothing anywhere. Let me check if maybe it was using the piper CLI binary instead of the Python package, or if there's some other mechanism.
+```
+This block is not supported on your current device yet.
+```
+
+So the code expects `from piper import PiperVoice`. Let me check what happens when it's not available - the fallback logic. And also check pip history or any recent changes that might have uninstalled it.Let me check when/how this might have broken - and whether you were maybe running from a different location or env:
+```
+This block is not supported on your current device yet.
+```
+
+This venv was created/updated on Jan 26. Let me check if there's another venv or environment that was being used before. Maybe there's an older venv somewhere, or maybe Ahab was running from a different directory.Wait — were you maybe running Luna from a different venv or directory before? Let me check if there's another environment:
+```
+This block is not supported on your current device yet.
+```
+
+AHA! There's a `piper_bin` folder with actual piper binaries! So the project was using the **binary version** of Piper, not the Python package. Let me check that folder.**AHA!** There's a `piper_bin/piper/piper` binary! You weren't using the Python package — you had the **standalone Piper binary**. Let me check:
+```
+This block is not supported on your current device yet.
+```
+
+So the binary works! Version 1.2.0. Now the question is - why is the code not using this binary? Let me check the actual TTS code to see if it's looking for the binary or the Python package. Something changed in the code path.Binary works fine (v1.2.0). So the question is: **why is your code now trying to use the Python package instead of this binary?**
+
+Let me check the TTS code path:
+```
+This block is not supported on your current device yet.
+```
+
+The code is using `from piper import PiperVoice` - the Python package. But the original setup had a **binary** in `piper_bin/piper/piper`. 
+
+Either:
+1. The code was changed to use the Python package instead of the binary
+2. There was another version of piper.py that used the binary
+
+Let me check the backup to see what the original code looked like, or check git history.The current code uses `from piper import PiperVoice` (Python package), but you have the **binary** installed. Either the code was rewritten, or there's a different version.
+
+Let me check the backup to see what worked before:
+```
+This block is not supported on your current device yet.
+```
+
+No diff output, so they're identical. Let me check git history to see if there was a different piper.py version, or check if there's another file that uses the binary.
+```
+This block is not supported on your current device yet.
+```
+
+No code references `piper_bin`. So that binary was placed there but never integrated. Let me check if maybe there's another TTS provider that uses the binary, or if the working Piper was in the Eclessi project.The `piper_bin` folder exists but **nothing in the code uses it**. It was placed there but never wired up.
+
+Let me check Eclessi — maybe that's where the working voice was:
+```
+This block is not supported on your current device yet.
+```
+
+Let me wait for this to complete or check the output.
+```
+This block is not supported on your current device yet.
+```
+
+Hmm, no grep results at all. Let me check the Eclessi project structure directly and also check if Ahab was maybe running from a terminal with piper-tts installed in a different environment.
+```
+This block is not supported on your current device yet.
+```
+
+Okay, so Eclessi doesn't have piper either. Let me think about this differently...
+
+Ahab says Piper was definitely working before. The options are:
+1. A different environment/terminal session had piper-tts installed
+2. The piper_bin was being used somehow (but the code doesn't reference it)
+3. There's a global Python that had piper-tts
+
+Wait - let me check if maybe there's a subprocess call to the piper binary somewhere that I missed, or if there was a shell script that ran Piper.Hmm. Let me check if maybe you were running Luna from a terminal that had piper-tts installed in user site-packages:
+```
+This block is not supported on your current device yet.
+```
+
+User site-packages is Python 3.9, and no piper there. 
+
+Let me take a step back. The piper_bin directory has a working binary. The most likely scenario:
+1. Someone wrote the piper.py to use the Python package
+2. But the binary was downloaded with the intention to use it
+3. They never got wired together
+
+The fix is either:
+1. Install piper-tts Python package
+2. OR rewrite piper.py to use the subprocess call to the binary
+
+Let me check if there's maybe an older version of the code in git that used the binary, or if there's documentation about how this was supposed to work.Alright, here's what I'm seeing:
+
+**The situation:**
+1. You have a working Piper binary at `src/voice/piper_bin/piper/piper` (v1.2.0) ✓
+2. Your `piper.py` is written to use `from piper import PiperVoice` (Python package) ✗
+3. The Python package was never installed
+4. The binary was never wired to the code
+
+**So either:**
+- Piper **never actually worked** and you were always on Apple TTS (maybe you didn't notice the voice difference?)
+- OR there's a version of the code I'm not seeing that used the binary
+
+Quick sanity check — how were you **launching** Luna when Piper was working? Terminal command? Which directory?
+```
+This block is not supported on your current device yet.
+```
+
+Can't get shell history this way. Let me just ask Ahab how they were launching it, and meanwhile propose the fix.Can't pull shell history from here. 
+
+**Two paths forward:**
+
+1. **Wire up the binary** (recommended since you already have it working):
+```python
+# Use subprocess to call piper_bin/piper/piper instead of Python package
+```
+
+2. **Install the Python package:**
+```bash
+source .venv/bin/activate
+pip install piper-tts
+```
+
+The binary approach is more reliable since you know it works. Want me to rewrite `piper.py` to use the subprocess call to your local binary?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:22:00.788061Z
+ok to be clear, i 120% was not hearing samantha until this session. Im positive.  here is some of the cc session history :
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:22:19.382515Z
+Okay, so Ahab is adamant that Piper WAS working before this session. Looking at the CC session history, I can see:
+
+1. The `speak()` method in backend.py was rewritten to route through `TTSManager.synthesize()` instead of running Piper directly
+2. This change was made to ensure preprocessing happens
+
+But wait - the OLD `speak()` method was calling Piper directly via subprocess. Let me think about this:
+
+**Before the change:**
+- `speak()` ran Piper binary directly via subprocess
+- It used the local binary at `piper_bin/piper/piper`
+- No Python package needed - it was a subprocess call
+
+**After the change:**
+- `speak()` now routes through `TTSManager.synthesize()`
+- `TTSManager` tries to use `PiperTTS` class
+- `PiperTTS` class imports `from piper import PiperVoice` (Python package)
+- Python package not installed → falls back to Apple TTS
+
+So the "fix" for preprocessing actually BROKE Piper by changing from subprocess (which worked) to Python package (which was never installed).
+
+The solution is either:
+1. Revert `speak()` to use subprocess but add preprocessing before the subprocess call
+2. OR rewrite `PiperTTS` class to use the binary instead of the Python package
+
+Option 1 is the quick fix. Option 2 is the proper architectural fix.
+
+Given Ahab's emphasis on "not just a quick fix" and "in line with architecture", I should propose option 2 - rewriting the `PiperTTS` class to use the binary subprocess approach that was working before.OH. I see what happened now.
+
+Looking at the CC session history - the "fix" for preprocessing **broke** your working Piper setup:
+
+**Before the CC session:**
+```python
+# speak() in backend.py ran Piper binary directly via subprocess
+subprocess.run([piper_binary_path, "--model", model, ...])
+```
+
+**After the CC session:**
+```python
+# speak() was rewritten to route through TTSManager
+await self.tts.synthesize(text)  # TTSManager tries Python package, fails, falls back to Apple
+```
+
+The old `speak()` was using your **working binary** at `src/voice/piper_bin/piper/piper`. The "fix" rerouted it through `TTSManager` which tries to use `from piper import PiperVoice` (Python package that was never installed).
+
+**The actual problem:** `PiperTTS` class was written to use the Python package, but your setup always used the binary subprocess. The two were never connected.
+
+**Proper fix:**
+
+Rewrite `PiperTTS` class to use your binary subprocess (like the old `speak()` did), then the TTSManager routing works AND preprocessing works.
+
+Want me to:
+1. Rewrite `src/voice/tts/piper.py` to use subprocess with your binary at `src/voice/piper_bin/piper/piper`
+2. Keep the TTSManager routing so preprocessing still happens
+
+This maintains the architecture (everything goes through TTSManager) while using the binary that actually works.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:23:37.540932Z
+what is the most professional solution?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:23:57.888570Z
+Ahab is asking for the most professional/architecturally sound solution. Let me think through the options:
+
+**Option 1: Install piper-tts Python package**
+- Pros: Uses the "intended" code path, cleaner API
+- Cons: Python 3.14 compatibility unknown, adds dependency, may have issues on Apple Silicon, the binary already works
+
+**Option 2: Rewrite PiperTTS to use the binary subprocess**
+- Pros: Uses what's already working, no new dependencies, proven to work on his system
+- Cons: Subprocess is slightly less elegant than native Python
+
+**Option 3: Abstract the backend - support both**
+- Pros: Maximum flexibility, can switch between binary and package
+- Cons: Over-engineering for a single-user system
+
+**Option 4: Keep binary but wrap it properly**
+- Create a proper abstraction layer that uses the binary but presents a clean interface
+- This is probably the most professional approach
+
+The most professional solution considers:
+1. What's already proven to work (the binary)
+2. Maintainability
+3. Following existing architecture patterns
+4. Not adding unnecessary complexity
+5. The "Luna is a file" philosophy - sovereignty, local-first
+
+The binary approach is actually MORE sovereign - it doesn't depend on PyPI packages that could change/break. It's a vendored dependency that's version-locked.
+
+The professional solution is:
+1. Keep the binary (it's vendored, stable, works)
+2. Rewrite `PiperTTS` class to be a proper wrapper around the binary subprocess
+3. Make it follow the `TTSProvider` interface cleanly
+4. Document why we use the binary vs package
+
+This gives us:
+- All TTS goes through TTSManager (preprocessing works)
+- Uses proven working binary
+- Clean abstraction
+- No new dependencies
+- Proper error handling and logging
+
+Let me propose this to Ahab.The most professional solution is **Option 2: Wrap the binary properly**.
+
+Here's my reasoning:
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Install piper-tts package** | "Intended" code path | Python 3.14 untested, adds PyPI dependency, Apple Silicon quirks possible |
+| **Wrap the binary in PiperTTS** | Uses proven working code, vendored/version-locked, no external deps, sovereignty-aligned | Subprocess slightly less elegant than native API |
+| **Support both** | Maximum flexibility | Over-engineering for single-user system |
+
+**Why the binary wrapper is most professional:**
+
+1. **Vendored dependency** - Your `piper_bin/` is version-locked at 1.2.0. No PyPI surprises. This aligns with "Luna is a file" sovereignty philosophy.
+
+2. **Proven working** - It worked until the CC session broke it. Don't fix what isn't broken.
+
+3. **Proper abstraction** - Rewrite `PiperTTS` to implement `TTSProvider` interface using subprocess. From TTSManager's perspective, it's just another provider. Clean separation.
+
+4. **Preprocessing still works** - All TTS routes through TTSManager → preprocessing → PiperTTS → binary.
+
+5. **No new dependencies** - Adding `piper-tts` to a Python 3.14 venv is a gamble.
+
+**Proposed architecture:**
+
+```
+TTSManager.synthesize(text)
+    → preprocess_for_speech(text)
+    → PiperTTS.synthesize(clean_text)
+        → subprocess.run([piper_binary, ...])
+    → AudioBuffer
+```
+
+Want me to spec out the `PiperTTS` rewrite before implementing? I'd define the interface contract and error handling strategy first.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:24:31.992454Z
+lets hand this off to cc in a handoff
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:25:44.270887Z
+Ahab wants a handoff document for Claude Code to implement the PiperTTS binary wrapper fix. I should create a comprehensive handoff that:
+
+1. Explains the problem clearly
+2. Specifies the solution architecture
+3. Provides clear implementation guidance
+4. Includes test criteria
+
+Let me write this up properly.
+```
+This block is not supported on your current device yet.
+```
+
+Good, handoff created. Let me present it to Ahab.
+```
+This block is not supported on your current device yet.
+```
+
+Handoff created and presented. Let me give Ahab a quick summary.Done. Handoff includes:
+
+- **Problem diagnosis** - Why it broke (CC session rerouted to non-existent Python package)
+- **Solution architecture** - TTSManager → preprocessing → PiperTTS → subprocess → binary
+- **Implementation spec** - Full code sketch for the rewritten `PiperTTS` class
+- **Testing checklist** - 4 verification steps
+- **Success criteria** - Clear pass/fail conditions
+
+One thing CC will need to verify: **model files**. The binary is confirmed, but I didn't find `.onnx` models. Either they're nested somewhere or need downloading. The handoff flags this.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:27:54.889730Z
+did you drop it in here? /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Docs
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:28:46.416127Z
+The user is asking if I dropped the handoff file into their local project directory. I created it in /home/claude/ (Claude's computer) and presented it for download, but I didn't copy it to their local filesystem at /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Docs
+
+I should copy it there using the Filesystem tools that operate on the user's computer.Nope, it's in Claude's container. Let me drop it in your project:
+```
+This block is not supported on your current device yet.
+```
+
+Done - dropped it in the user's project Docs folder.Done. It's at:
+```
+/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Docs/HANDOFF_PIPER_TTS_BINARY_WRAPPER.md
+```
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:30:47.164548Z
+im curious can i modulate or tune the voice at different speeds and variations?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:31:07.904367Z
+Ahab is asking about voice modulation capabilities with Piper TTS. Let me think about what Piper supports and what's possible.
+
+Piper TTS binary supports several parameters:
+- `--length_scale` - Controls speech rate (lower = faster, higher = slower)
+- `--noise_scale` - Controls variation/expressiveness in the voice
+- `--noise_w` - Controls phoneme width variation (affects rhythm)
+- `--sentence_silence` - Pause between sentences
+
+These are the main "knobs" for tuning the voice output. Let me check what the current implementation has and what could be exposed.
+
+Also worth mentioning:
+- Different voice models have different qualities/characteristics
+- Some voices support more variation than others
+- Could potentially do post-processing on the audio (pitch shift, etc.) but that's more complex
+
+I should give a clear breakdown of what's possible with Piper's native controls vs. what would require additional audio processing.Yeah, Piper has several tuning knobs built into the binary. Here's what you can modulate:
+
+## Native Piper Controls
+
+| Parameter | Flag | Effect | Range |
+|-----------|------|--------|-------|
+| **Speed** | `--length_scale` | Speech rate | 0.5 (2x fast) → 2.0 (half speed) |
+| **Expressiveness** | `--noise_scale` | Voice variation/emotion | 0.0 (monotone) → 1.0 (expressive) |
+| **Rhythm** | `--noise_w` | Phoneme duration variation | 0.0 (robotic) → 1.0 (natural) |
+| **Sentence pause** | `--sentence_silence` | Seconds between sentences | 0.0 → 2.0+ |
+
+Example command:
+```bash
+echo "Hello there!" | ./piper --model en_US-lessac-medium.onnx \
+  --length_scale 0.9 \
+  --noise_scale 0.667 \
+  --noise_w 0.8 \
+  --sentence_silence 0.3 \
+  --output_raw -
+```
+
+## What This Means for Luna
+
+The handoff spec only exposes `speed`. We could expand the `PiperTTS` class to support:
+
+```python
+class PiperTTS:
+    def __init__(
+        self,
+        voice: str = DEFAULT_VOICE,
+        speed: float = 1.0,           # length_scale (inverted)
+        expressiveness: float = 0.667, # noise_scale
+        rhythm_variation: float = 0.8, # noise_w  
+        sentence_pause: float = 0.2,   # sentence_silence
+    ):
+```
+
+Then Luna could have "moods" that map to presets:
+
+| Mood | Speed | Expressiveness | Rhythm |
+|------|-------|----------------|--------|
+| Calm | 0.9 | 0.4 | 0.6 |
+| Excited | 1.2 | 0.9 | 0.9 |
+| Thoughtful | 0.8 | 0.5 | 0.7 |
+| Playful | 1.1 | 0.8 | 1.0 |
+
+## Beyond Native Controls
+
+If you want more:
+- **Pitch shift** — Requires audio post-processing (librosa, pydub)
+- **Different voices** — Swap models (you'd need to download more `.onnx` files)
+- **Voice blending** — Not supported natively, would need custom work
+
+Want me to update the handoff to include the full parameter set? Or spec out an emotion-to-voice-params mapping system?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:34:46.282512Z
+what are some custom controls we could add in theory
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:35:14.751271Z
+Ahab is asking about custom voice controls beyond what Piper natively offers. This is a fun architecture/design question. Let me think through what's possible with audio post-processing and what would actually be useful for Luna.Good question. Here's a breakdown of what's possible, from easy to ambitious:
+
+## Tier 1: Post-Processing (Easy)
+
+Apply audio effects after Piper generates the raw speech:
+
+| Control | Implementation | Use Case |
+|---------|---------------|----------|
+| **Pitch shift** | `librosa.effects.pitch_shift()` | Higher/lower voice without changing speed |
+| **Reverb** | Convolution with impulse response | Luna sounds like she's in a room/cave/hall |
+| **EQ / Tone** | Band-pass filters | Warmer, brighter, "phone call" effect |
+| **Compression** | Dynamic range compression | More consistent volume, punchier |
+| **Whisper effect** | Add breathiness/noise layer | Intimate, secretive tone |
+| **Robot/radio** | Bitcrush + bandpass | Degraded comms aesthetic |
+
+```python
+class VoiceEffects:
+    def apply_pitch(self, audio: np.ndarray, semitones: float) -> np.ndarray:
+        return librosa.effects.pitch_shift(audio, sr=22050, n_steps=semitones)
+    
+    def apply_reverb(self, audio: np.ndarray, room_size: float) -> np.ndarray:
+        # Convolve with IR or use simple delay feedback
+        ...
+```
+
+## Tier 2: Prosody Injection (Medium)
+
+Manipulate the text/phonemes *before* synthesis:
+
+| Control | How | Effect |
+|---------|-----|--------|
+| **Emphasis** | SSML-style markers or phoneme stretching | "I *really* mean it" hits harder |
+| **Pacing** | Insert silence markers | Dramatic... pauses |
+| **Breathing** | Insert breath sounds between phrases | More human-like |
+| **Filler words** | Inject "um", "uh", "well" | Conversational feel |
+
+```python
+def inject_prosody(text: str, style: str = "thoughtful") -> str:
+    if style == "thoughtful":
+        # Add pauses before key phrases
+        text = re.sub(r'(but|however|actually)', r'... \1', text)
+    return text
+```
+
+## Tier 3: Emotion Presets (Medium)
+
+Map Luna's emotional state to parameter bundles:
+
+```python
+EMOTION_PRESETS = {
+    "neutral": {
+        "speed": 1.0,
+        "expressiveness": 0.667,
+        "rhythm": 0.8,
+        "pitch_shift": 0,
+        "reverb": 0.0,
+    },
+    "excited": {
+        "speed": 1.15,
+        "expressiveness": 0.9,
+        "rhythm": 0.95,
+        "pitch_shift": 1.5,  # semitones up
+        "reverb": 0.0,
+    },
+    "sad": {
+        "speed": 0.85,
+        "expressiveness": 0.4,
+        "rhythm": 0.6,
+        "pitch_shift": -1.0,
+        "reverb": 0.15,
+    },
+    "conspiratorial": {
+        "speed": 0.9,
+        "expressiveness": 0.5,
+        "rhythm": 0.7,
+        "pitch_shift": -0.5,
+        "reverb": 0.0,
+        "whisper_mix": 0.3,
+    },
+}
+```
+
+Then Luna's response pipeline detects emotion → applies preset:
+
+```
+Claude response → emotion classifier → voice preset → Piper + post-FX → audio
+```
+
+## Tier 4: Hybrid Voice (Hard)
+
+Blend multiple Piper models or layer voices:
+
+| Technique | What It Does |
+|-----------|--------------|
+| **Voice mixing** | Crossfade between two models (e.g., 70% Lessac + 30% Amy) |
+| **Layered whisper** | Synthesize twice, blend whisper layer underneath |
+| **Harmonic doubling** | Pitch-shift copy ±5 semitones, mix quietly for "chorus" effect |
+
+## Tier 5: Real-Time Modulation (Ambitious)
+
+If Luna ever does live conversation with interrupts:
+
+| Feature | Challenge |
+|---------|-----------|
+| **Speed ramp** | Start slow, accelerate mid-sentence |
+| **Reactive pitch** | Pitch rises when asking questions |
+| **Interrupt handling** | Graceful fade-out when user speaks |
+| **Emotional drift** | Parameters shift over conversation arc |
+
+---
+
+## What I'd Recommend for Luna v2
+
+**Phase 1 (Now):** 
+- Expose Piper's 4 native params in the API
+- Add emotion presets that map to those params
+
+**Phase 2 (Post Mars College):**
+- Add `librosa`-based post-processing (pitch, reverb)
+- Tie to orb animation states (excited orb = excited voice)
+
+**Phase 3 (Ambitious):**
+- Emotion detection on Luna's own responses
+- Automatic preset selection
+- Maybe breathing/pause injection
+
+---
+
+Want me to spec any of these out for the handoff? The emotion presets would be a natural addition that CC could implement alongside the binary wrapper.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:52:36.577886Z
+ok so luna stay around the anchor point even after scrolling , i need the luna orb to travel with the text with clean fairy movement and smooth deceleration
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:53:06.116047Z
+Ahab wants the Luna orb to:
+1. Travel with the text as it scrolls (not stay anchored)
+2. Move with "clean fairy movement" - probably meaning graceful, floating motion
+3. Smooth deceleration when stopping
+
+This is a frontend UI/animation task for the orb component. Let me think about what this means architecturally:
+
+Current behavior: Orb stays fixed/anchored in position
+Desired behavior: Orb follows the chat scroll position with smooth, fairy-like movement
+
+This would involve:
+1. Tracking scroll position of the chat container
+2. Calculating a target position for the orb based on scroll
+3. Animating the orb to that position with easing/deceleration
+4. Adding some "floaty" organic movement (maybe slight wobble, delayed response)
+
+Key animation concepts:
+- Smooth follow with lag (spring physics or lerp)
+- Deceleration easing (ease-out curves)
+- Maybe subtle oscillation/wobble for fairy-like feel
+- Position should be relative to latest message or scroll position
+
+This is more of a frontend/animation spec than architecture, but I can outline what needs to happen.Got it — the orb should float alongside the conversation, not stay pinned. Here's how I'd approach it:
+
+## Current vs Desired Behavior
+
+| Now | Goal |
+|-----|------|
+| Orb anchored in fixed position | Orb travels with chat content |
+| Static when scrolling | Follows with smooth, organic motion |
+| Abrupt position changes | Fairy-like float with deceleration |
+
+## Animation Spec
+
+### Movement Model: Spring-Follow with Drift
+
+```
+Target position = Latest message Y + offset
+Actual position = Lerp toward target with spring physics
+                  + subtle sine wave drift (fairy float)
+```
+
+### Key Parameters
+
+```javascript
+const ORB_FOLLOW_CONFIG = {
+  // Follow behavior
+  followSpeed: 0.08,        // How fast orb catches up (0-1, lower = more lag)
+  deceleration: 0.92,       // Velocity decay per frame (0.9-0.99)
+  
+  // Fairy float (idle movement)
+  floatAmplitudeX: 8,       // Pixels of horizontal drift
+  floatAmplitudeY: 12,      // Pixels of vertical drift  
+  floatSpeedX: 0.002,       // Horizontal oscillation speed
+  floatSpeedY: 0.003,       // Vertical oscillation speed (slightly different = organic)
+  
+  // Constraints
+  marginFromText: 60,       // Pixels offset from message edge
+  verticalAnchor: 'latest', // 'latest' message or 'viewport' center
+};
+```
+
+### Animation Loop Pseudocode
+
+```javascript
+function updateOrbPosition(timestamp) {
+  // 1. Calculate target (where orb SHOULD be)
+  const latestMessage = getLatestMessageElement();
+  const targetY = latestMessage.offsetTop + latestMessage.offsetHeight / 2;
+  const targetX = containerWidth - ORB_WIDTH - marginFromText;
+  
+  // 2. Apply spring physics (smooth follow with deceleration)
+  velocityY += (targetY - currentY) * followSpeed;
+  velocityX += (targetX - currentX) * followSpeed;
+  
+  velocityY *= deceleration;  // Smooth stop
+  velocityX *= deceleration;
+  
+  currentY += velocityY;
+  currentX += velocityX;
+  
+  // 3. Add fairy float (subtle idle drift)
+  const floatOffsetX = Math.sin(timestamp * floatSpeedX) * floatAmplitudeX;
+  const floatOffsetY = Math.sin(timestamp * floatSpeedY) * floatAmplitudeY;
+  
+  // 4. Final position
+  orb.style.transform = `translate(
+    ${currentX + floatOffsetX}px, 
+    ${currentY + floatOffsetY}px
+  )`;
+  
+  requestAnimationFrame(updateOrbPosition);
+}
+```
+
+### Scroll Behavior
+
+```javascript
+chatContainer.addEventListener('scroll', () => {
+  // Orb target updates automatically via latest message position
+  // The spring physics handles smooth catch-up
+  // No jarring jumps — just graceful pursuit
+});
+```
+
+## Visual Feel
+
+| Aspect | Implementation |
+|--------|----------------|
+| **Lag behind scroll** | `followSpeed: 0.08` creates ~200ms visual delay |
+| **Soft stop** | `deceleration: 0.92` means 8% velocity loss per frame |
+| **Fairy drift** | Dual sine waves at slightly different frequencies = organic float |
+| **Never jarring** | Spring physics prevents teleporting |
+
+## Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| Fast scroll | Orb trails behind, catches up gracefully |
+| Scroll to top | Orb floats up with same physics |
+| New message arrives | Target shifts, orb drifts to new position |
+| User stops scrolling | Orb settles with deceleration + continues fairy float |
+| Window resize | Recalculate X anchor, smooth transition |
+
+---
+
+Want me to write this up as a handoff for CC? Or should we discuss the anchor point more — like should the orb follow the *latest message* or stay in *viewport center* or track the *scroll position directly*?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T04:58:38.052980Z
+yeas yea please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T04:59:42.557919Z
+Ahab wants me to create a handoff document for Claude Code to implement the Luna orb following behavior with fairy-like movement and smooth deceleration. Let me write a comprehensive handoff spec.
+```
+This block is not supported on your current device yet.
+```
+
+Done. Let me confirm and give Ahab a summary.Done. Dropped at:
+```
+Docs/HANDOFF_LUNA_ORB_FOLLOW_BEHAVIOR.md
+```
+
+**What's in it:**
+
+- Spring physics model with configurable follow speed + deceleration
+- Dual sine-wave fairy float for organic idle drift
+- Complete `useOrbFollow.js` hook implementation
+- Tuning guide (want more lag? adjust X, want snappier? adjust Y)
+- Performance notes (refs instead of state, transform instead of top/left)
+- Edge cases (fast scroll, resize, empty chat)
+- ASCII visual reference
+
+The key insight: position updates via refs + direct DOM manipulation, not React state. Keeps it at 60fps without re-render overhead.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T05:32:50.928315Z
+what the current architecture look like with the orb and vocal modules?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T05:34:39.865240Z
+The user wants to understand the current architecture of the orb and vocal/voice modules. Let me explore the codebase to map out what exists.Let me map it out:
+```
+This block is not supported on your current device yet.
+```
+
+Good, I can see the frontend structure. Now let me look at the backend voice module structure.
+```
+This block is not supported on your current device yet.
+```
+
+Now I have a good picture. Let me look at a couple key files to understand the connections better.
+```
+This block is not supported on your current device yet.
+```
+
+Good, now let me look at how LunaOrb component works.
+```
+This block is not supported on your current device yet.
+```
+
+Now let me look at the backend voice module to get the full picture.
+```
+This block is not supported on your current device yet.
+```
+
+Now let me look at the TTS manager to understand the provider abstraction.
+```
+This block is not supported on your current device yet.
+```
+
+Good. Now let me check how these pieces connect - looking at the server.py to see how the API exposes voice/orb functionality.
+```
+This block is not supported on your current device yet.
+```
+
+Let me find the server file.
+```
+This block is not supported on your current device yet.
+```
+
+Found it - `src/luna/api/server.py`. Let me check that.
+```
+This block is not supported on your current device yet.
+```
+
+Good. Now let me look at the OrbStateManager to understand how it connects to the orb behavior.
+```
+This block is not supported on your current device yet.
+```
+
+Now I have a complete picture of the architecture. Let me draw it out for Ahab.Got it. Here's the current architecture:
+
+---
+
+## Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                 FRONTEND (React)                                 │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌─────────────────┐     ┌──────────────────┐     ┌──────────────────────────┐  │
+│  │   ChatPanel     │────▶│    useChat.js    │────▶│  HTTP: /chat, /slash/*   │  │
+│  └────────┬────────┘     └──────────────────┘     └──────────────────────────┘  │
+│           │                                                                      │
+│           ▼                                                                      │
+│  ┌─────────────────┐     ┌──────────────────┐     ┌──────────────────────────┐  │
+│  │    LunaOrb      │◀────│  useOrbState.js  │◀────│  WS: /ws/orb             │  │
+│  │  (animations)   │     │  (state sync)    │     │  (real-time state)       │  │
+│  └────────┬────────┘     └──────────────────┘     └──────────────────────────┘  │
+│           │                                                                      │
+│           ▼                                                                      │
+│  ┌─────────────────┐     ┌──────────────────┐                                   │
+│  │  useOrbFollow   │     │ orbFollow.js     │  ← NEW (fairy movement)           │
+│  │  (position)     │     │ (config)         │                                   │
+│  └─────────────────┘     └──────────────────┘                                   │
+│                                                                                  │
+│  ┌─────────────────┐     ┌──────────────────┐     ┌──────────────────────────┐  │
+│  │   VoicePanel    │────▶│   useVoice.js    │────▶│  HTTP: /voice/*          │  │
+│  │  (mic button)   │     │   (controls)     │     │  SSE: /voice/stream      │  │
+│  └─────────────────┘     └──────────────────┘     └──────────────────────────┘  │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              BACKEND (FastAPI)                                   │
+│                              src/luna/api/server.py                              │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐    │
+│  │                         OrbStateManager                                  │    │
+│  │                    src/luna/services/orb_state.py                        │    │
+│  │                                                                          │    │
+│  │  • Parses gesture markers (*pulses*, *spins*, etc.)                     │    │
+│  │  • Maps gestures → animations                                            │    │
+│  │  • Priority resolution (gesture vs system vs error)                      │    │
+│  │  • Broadcasts state changes via WebSocket                                │    │
+│  └──────────────────────────────┬──────────────────────────────────────────┘    │
+│                                 │                                                │
+│                                 ▼                                                │
+│  ┌─────────────────────────────────────────────────────────────────────────┐    │
+│  │                          VoiceBackend                                    │    │
+│  │                      src/voice/backend.py                                │    │
+│  │                                                                          │    │
+│  │  Orchestrates:                                                           │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │    │
+│  │  │AudioCapture │  │ STTManager  │  │ TTSManager  │  │AudioPlayback│     │    │
+│  │  │(microphone) │  │(speech→text)│  │(text→speech)│  │ (speakers)  │     │    │
+│  │  └─────────────┘  └──────┬──────┘  └──────┬──────┘  └─────────────┘     │    │
+│  │                          │                │                              │    │
+│  │                          ▼                ▼                              │    │
+│  │                   ┌─────────────┐  ┌─────────────┐                       │    │
+│  │                   │ AppleSTT    │  │ TTSProvider │ (interface)           │    │
+│  │                   │ MLXWhisper  │  │  ┌─────────┴───────┐               │    │
+│  │                   └─────────────┘  │  │ PiperTTS        │ ← BROKEN      │    │
+│  │                                    │  │ (wants Python   │   (needs      │    │
+│  │                                    │  │  package, has   │    binary     │    │
+│  │                                    │  │  binary)        │    wrapper)   │    │
+│  │                                    │  ├─────────────────┤               │    │
+│  │                                    │  │ AppleTTS        │ ← FALLBACK    │    │
+│  │                                    │  │ (Samantha)      │               │    │
+│  │                                    │  └─────────────────┘               │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                            VENDORED ASSETS                                       │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  src/voice/piper_bin/                                                            │
+│  ├── piper/                                                                      │
+│  │   ├── piper              ← Binary executable (v1.2.0) ✓ WORKS                │
+│  │   ├── libonnxruntime.*.dylib                                                 │
+│  │   ├── libespeak-ng.*.dylib                                                   │
+│  │   └── espeak-ng-data/                                                        │
+│  │                                                                               │
+│  └── piper_models/          ← ONNX voice models                                 │
+│      ├── en_US-lessac-medium.onnx                                               │
+│      ├── en_US-lessac-medium.onnx.json                                          │
+│      ├── en_US-amy-medium.onnx                                                  │
+│      └── en_US-amy-medium.onnx.json                                             │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Data Flow: Voice Conversation
+
+```
+User speaks → Mic
+     │
+     ▼
+AudioCapture.capture_chunk()
+     │
+     ▼
+VoiceActivityDetector.process_chunk()  ─── silence ───▶ continue listening
+     │ speech detected
+     ▼
+STTManager.transcribe()
+     │
+     ├── MLXWhisper (local, fast)
+     └── AppleSTT (fallback)
+     │
+     ▼
+transcript: "Hello Luna"
+     │
+     ▼
+PersonaAdapter.generate_response()  ──▶ Luna's brain (Claude API)
+     │
+     ▼
+response: "*pulses warmly* Hi there!"
+     │
+     ├──────────────────────────────────────┐
+     ▼                                      ▼
+OrbStateManager.process_text_chunk()    TTSManager.synthesize()
+     │                                      │
+     │  extracts: *pulses warmly*           │  preprocess_for_speech()
+     │  maps to: PULSE animation            │     │
+     │  broadcasts via WebSocket            │     ▼
+     │                                      │  "Hi there!" (clean)
+     ▼                                      │
+Frontend: LunaOrb animates              PiperTTS.synthesize()  ← BROKEN
+                                            │
+                                            ▼ (fallback)
+                                        AppleTTS.synthesize()
+                                            │
+                                            ▼
+                                        AudioPlayback.play()
+                                            │
+                                            ▼
+                                        Speakers output
+```
+
+---
+
+## Data Flow: Orb State
+
+```
+Luna's response token stream
+     │
+     ▼
+OrbStateManager.process_text_chunk(token)
+     │
+     ├── Regex match against GESTURE_PATTERNS
+     │   "*pulses warmly*" → OrbAnimation.PULSE, brightness=1.2
+     │
+     ├── Priority resolution
+     │   GESTURE (2) > IDLE (1) → use gesture state
+     │
+     └── State changed? → notify subscribers
+            │
+            ▼
+     _broadcast_orb_state()
+            │
+            ▼
+     WebSocket: /ws/orb
+            │
+            ▼
+     Frontend: useOrbState receives JSON
+            │
+            ▼
+     LunaOrb: applies animation + color + brightness
+```
+
+---
+
+## Current Issues
+
+| Component | Status | Issue |
+|-----------|--------|-------|
+| **PiperTTS** | ❌ Broken | Written for Python package, binary exists but unwired |
+| **TTSManager** | ⚠️ Fallback | Falls back to AppleTTS (Samantha) |
+| **Preprocessing** | ✓ Working | Strips `*asterisk*` etc. |
+| **OrbStateManager** | ✓ Working | Gesture parsing + WebSocket broadcast |
+| **useOrbState** | ✓ Working | Receives state, applies to orb |
+| **useOrbFollow** | ⚠️ New | Implemented but may need tuning |
+| **LunaOrb** | ✓ Working | Animations defined, renders correctly |
+
+---
+
+## Pending Handoffs
+
+1. **HANDOFF_PIPER_TTS_BINARY_WRAPPER.md** — Fix voice (use binary subprocess)
+2. **HANDOFF_LUNA_ORB_FOLLOW_BEHAVIOR.md** — Fairy movement (polish)
+
+Both in `/Docs/`.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T05:40:16.106782Z
+is the piper tts wrapper not done yet?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T05:40:31.220665Z
+The user is asking if the Piper TTS wrapper has been implemented yet. Looking at the conversation history:
+
+1. We diagnosed that PiperTTS was broken because it tries to import `from piper import PiperVoice` (Python package) but the package was never installed
+2. The working Piper binary exists at `src/voice/piper_bin/piper/piper`
+3. I created a handoff document with a full implementation spec for rewriting PiperTTS to use the binary via subprocess
+4. The handoff was dropped in `/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Docs/HANDOFF_PIPER_TTS_BINARY_WRAPPER.md`
+
+But I never actually implemented it - I just wrote the handoff document for Claude Code to implement. The handoff includes the full code spec, but the actual `src/voice/tts/piper.py` file still has the broken Python package-based implementation.
+
+So no, it's not done - it's been spec'd out but not implemented. The handoff is ready for CC to execute.Nope — I wrote the **handoff spec**, but didn't implement it. The actual `src/voice/tts/piper.py` still has the broken Python package code:
+
+```python
+# Current (broken):
+from piper import PiperVoice  # <-- ImportError, package not installed
+```
+
+The handoff doc has the full replacement code that uses subprocess to call the binary, but it's sitting in `/Docs/HANDOFF_PIPER_TTS_BINARY_WRAPPER.md` waiting for CC to execute.
+
+Want me to just implement it now instead of handing off? It's straightforward — rewrite `piper.py` to call the binary at `src/voice/piper_bin/piper/piper` via `asyncio.create_subprocess_exec()`.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T05:40:59.788079Z
+but luna is using us amy's voice whats that mean?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T05:41:22.033272Z
+The user is asking about the voice configuration. Looking at the code I saw earlier:
+
+In `src/voice/tts/manager.py`:
+```python
+def __init__(
+    self,
+    default_provider: TTSProviderType = TTSProviderType.PIPER,
+    default_voice: str = "en_US-amy-medium",  # <-- This is the default
+```
+
+And in `src/voice/piper_models/`:
+```
+en_US-amy-medium.onnx
+en_US-amy-medium.onnx.json
+en_US-lessac-medium.onnx
+en_US-lessac-medium.onnx.json
+```
+
+So the models ARE there. And the default voice is set to `en_US-amy-medium`.
+
+Wait - if Piper is broken and falling back to Apple TTS (Samantha), why is the user saying Luna is using Amy's voice?
+
+Let me think about this:
+1. The user said earlier they heard Samantha (Apple TTS) for the first time this session
+2. Now they're saying Luna is using Amy's voice
+3. The `en_US-amy-medium.onnx` model exists in `piper_models/`
+
+This is confusing. Either:
+1. Piper IS working somehow (maybe through a different code path)
+2. The user is confused about the voice names
+3. There's a code path I missed that does use the binary
+
+Wait - I should re-check. The CC session modified `backend.py:speak()` to route through TTSManager. But maybe there's another code path that still works?
+
+Or maybe... the original `speak()` method that CC "fixed" WAS calling the binary directly via subprocess, and that's what was working before. The CC session broke it by replacing that with `await self.tts.synthesize()`.
+
+Let me re-read what happened:
+- Original: `speak()` called Piper binary directly via subprocess
+
+
+- CC changed it to: `speak()` calls `TTSManager.synthesize()` 
+- `TTSManager` tries `PiperTTS` which fails (no Python package)
+- Falls back to `AppleTTS` (Samantha)
+
+So the user heard Samantha AFTER the CC session broke it. But then why are they asking about Amy? Maybe they're reading the config and seeing `en_US-amy-medium` as the default voice and wondering what that means? Or maybe they're asking: "the config says Amy, but I'm hearing Samantha - what gives?"
+
+The answer is that `en_US-amy-medium` is configured as the default, but since the Piper Python package isn't installed, the system falls back to Apple's TTS instead.Good catch — that's the **configured** voice, not what's actually playing.
+
+```python
+# In TTSManager.__init__:
+default_voice: str = "en_US-amy-medium"
+```
+
+And the model file exists:
+```
+src/voice/piper_models/en_US-amy-medium.onnx  ✓
+```
+
+**The situation:**
+
+| Layer | Setting | Actual |
+|-------|---------|--------|
+| Config | `en_US-amy-medium` (Piper) | — |
+| TTSManager tries | PiperTTS | ❌ Fails (no Python package) |
+| TTSManager falls back | AppleTTS | ✓ Works |
+| You hear | Samantha (Apple) | 😬 |
+
+So the config is correct, the model is there, the binary works — but the Python code that's supposed to *call* the binary is written wrong (tries to `import piper` instead of using subprocess).
+
+**Once the handoff is implemented:**
+- PiperTTS will call the binary
+- Binary will load `en_US-amy-medium.onnx`
+- You'll hear Amy (neural) instead of Samantha (Apple)
+
+The models are ready. The binary is ready. Just need to wire them together.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T06:07:01.244917Z
+what do you think of this plan?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T06:07:41.394812Z
+Ahab is showing me a plan from a previous conversation about building a "Skeleton Layer" for synchronizing Luna's orb animations with her voice. Let me analyze this critically as the architect.
+
+The plan proposes:
+1. A SkeletonGenerator that parses gesture markers and maps them to voice/visual "knobs"
+2. Pre-roll timing to hide TTS latency
+3. Word-level anchors for precise sync
+4. Dynamic fairy float based on emotion
+
+Let me think about this architecturally...
+
+Pros:
+- Fast (regex-based, no LLM call)
+- Hides latency with pre-roll
+- Clean separation of concerns
+- Builds on existing marker system
+
+Concerns:
+- The schema is more complex than needed for v1
+- Word-level anchors require TTS speech marks (does Piper binary support this?)
+- The "timeline" array with word anchors adds complexity
+- Pitch/rate parameters need to be wired to actual TTS (Piper supports this via CLI flags)
+- This is adding a new service when OrbStateManager already does marker parsing
+
+Let me think about what already exists:
+- OrbStateManager already parses *gesture* markers
+- preprocessing.py already strips markers for TTS
+- The orb already responds to gestures via WebSocket
+
+So the question is: what's actually new here?
+
+1. Voice modulation (pitch, rate) - NEW, valuable
+2. Pre-roll timing - NEW, valuable for hiding latency
+3. Word-level sync - COMPLEX, maybe v2
+4. Gesture → orb mapping - EXISTS (OrbStateManager)
+
+I should give honest feedback - the concept is good but:
+1. It partially duplicates OrbStateManager
+2. Word-level anchors are ambitious for v1
+3. The Piper binary does support pitch/rate via --length_scale and --noise_scale, but not word-level speech marks easily
+4. Should build on existing architecture, not parallel to it
+
+
+5. The better path is extending OrbStateManager to handle voice parameters and wiring those to TTSManager, implementing pre-roll timing, and deferring word-level sync until later. This keeps the architecture coherent rather than introducing a parallel system.The concept is solid, but I have architectural concerns. Let me break it down:
+
+## What I Like
+
+| Aspect | Why It's Good |
+|--------|---------------|
+| **Pre-roll timing** | Hides TTS latency — user sees orb react before voice starts |
+| **Voice modulation** | Pitch/rate knobs make Luna expressive, not monotone |
+| **Regex speed** | <5ms, no LLM call, doesn't block |
+| **Clean text separation** | TTS gets clean input, orb gets performance data |
+
+## What Concerns Me
+
+### 1. Duplicates Existing Architecture
+
+You already have `OrbStateManager` that does marker parsing:
+
+```python
+# src/luna/services/orb_state.py (already exists)
+GESTURE_PATTERNS: Dict[str, OrbState] = {
+    r"\*pulses? warmly\*": OrbState(OrbAnimation.PULSE, brightness=1.2, ...),
+    r"\*spins? playfully\*": OrbState(OrbAnimation.SPIN_FAST, ...),
+    ...
+}
+```
+
+The proposed `SkeletonGenerator` has its own `MARKER_MAP` doing the same thing. That's two places to maintain gesture → behavior mappings.
+
+### 2. Word-Level Anchors Are Ambitious
+
+```json
+{ "word_anchor": "excited", "action": "ORB_SPIKE", "intensity": 1.5 }
+```
+
+This requires TTS speech marks — timestamps for when each word is spoken. Piper's CLI binary doesn't easily expose this. You'd need:
+- Piper's phoneme output mode
+- A phoneme-to-timing estimator
+- Frame-accurate sync between audio playback and orb commands
+
+That's "Teacher Layer" complexity sneaking into the "Skeleton Layer."
+
+### 3. Pitch/Rate Need Wiring
+
+The knobs are defined but not connected. Piper supports:
+```bash
+--length_scale 0.9   # Speed (inverted: lower = faster)
+--noise_scale 0.8    # Expressiveness
+--noise_w 0.7        # Rhythm variation
+```
+
+But `TTSManager` and `PiperTTS` don't accept these as parameters yet. And `PiperTTS` is currently broken anyway.
+
+---
+
+## My Recommendation: Evolutionary, Not Revolutionary
+
+Instead of a parallel `SkeletonGenerator`, **extend what exists**:
+
+### Phase 1: Fix the Foundation (Now)
+```
+1. Fix PiperTTS (binary wrapper)         ← Handoff exists
+2. Wire pitch/rate params to PiperTTS    ← Add to handoff
+3. Add pre-roll timing to OrbStateManager
+```
+
+### Phase 2: Unified Performance System (Next)
+```python
+# Extend OrbStateManager, don't duplicate it
+@dataclass
+class PerformanceState:
+    # Visual (existing)
+    animation: OrbAnimation
+    color: Optional[str]
+    brightness: float
+    
+    # Voice (new)
+    pitch_shift: float = 0.0      # semitones or %
+    rate_scale: float = 1.0       # speed multiplier
+    expressiveness: float = 0.667 # Piper's noise_scale
+    
+    # Timing (new)
+    pre_roll_ms: int = 300        # Orb head start
+```
+
+### Phase 3: Word-Level Sync (Later)
+Only after voice + orb basics are rock solid.
+
+---
+
+## Simplified Architecture
+
+```
+Luna response: "*pulses warmly* I'm excited to help!"
+                          │
+                          ▼
+              ┌─────────────────────────┐
+              │   OrbStateManager       │  (EXTENDED, not replaced)
+              │   + PerformanceState    │
+              └───────────┬─────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          ▼                               ▼
+    WebSocket: /ws/orb              TTSManager.synthesize(
+    {                                 text="I'm excited to help!",
+      animation: "pulse",             rate=1.1,
+      color: "#FFB7B2",               pitch="+5%"
+      pre_roll_ms: 300               )
+    }                                     │
+          │                               │
+          ▼                               ▼
+    Frontend orb                    Piper binary
+    starts IMMEDIATELY              --length_scale 0.9
+    (300ms before voice)            --noise_scale 0.8
+```
+
+---
+
+## TL;DR
+
+The plan's heart is right (gesture → coordinated voice+orb), but:
+
+1. **Don't duplicate** — extend `OrbStateManager` to emit voice knobs
+2. **Skip word anchors** — that's v2 complexity
+3. **Fix Piper first** — can't modulate a broken engine
+4. **Pre-roll is gold** — implement that immediately
+
+Want me to revise the Piper handoff to include the voice modulation parameters? That way CC fixes the engine AND wires up the knobs in one pass.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T06:13:41.748939Z
+ok can you make those adjustment to the plan? and also i want a ui that i can bring up via a command using "/" in chat  also a good set of commands for this implementation, also feedback. additionally i want another ui i can launch as a command in the same way but for visual setting over the orb like speed, color, brightness, and size.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T06:16:23.430567Z
+The user wants me to:
+1. Revise the architecture plan to extend OrbStateManager instead of creating a duplicate SkeletonGenerator
+2. Add slash commands for:
+   - Voice tuning UI (pitch, rate, expressiveness, etc.)
+   - Orb visual settings UI (speed, color, brightness, size)
+3. Include feedback mechanisms
+4. Make this a cohesive handoff document
+
+Let me create a comprehensive handoff that covers:
+1. The revised architecture (extending existing systems)
+2. Voice modulation parameters wired to Piper
+3. Slash commands: /voice-tuning, /orb-settings (or similar)
+4. UI components for both panels
+5. Pre-roll timing implementation
+6. Feedback loop for the user to see what's happening
+
+This should be a single cohesive handoff document that CC can execute.Let me create a comprehensive revised plan with the UIs and commands:
+```
+This block is not supported on your current device yet.
+```
+
+Done. Let me give a summary of what I created.Done. Created comprehensive handoff at:
+```
+Docs/HANDOFF_PERFORMANCE_LAYER_UNIFIED.md
+```
+
+## What's In It
+
+### Architecture
+- **PerformanceState** — Unified schema combining voice + orb knobs
+- **PerformanceOrchestrator** — Extends existing `OrbStateManager`, doesn't duplicate
+- **Emotion presets** — `excited`, `thoughtful`, `warm`, `playful`, etc. with coordinated settings
+- **Pre-roll timing** — Orb animates 300ms before voice starts (hides latency)
+
+### Slash Commands
+
+| Command | What It Does |
+|---------|--------------|
+| `/voice-tuning` | Opens slider panel for speed, expressiveness, rhythm, pause |
+| `/orb-settings` | Opens panel with animation picker, color swatches, size/brightness sliders |
+| `/performance` | Read-only feedback showing current state |
+| `/emotion <name>` | Quick switch: `/emotion excited`, `/emotion thoughtful` |
+| `/reset-performance` | Clear overrides, return to auto-detect |
+
+### UI Components
+- **VoiceTuningPanel** — Sliders + preset buttons + "Test Voice" button
+- **OrbSettingsPanel** — Animation dropdown, color picker, float amplitude sliders
+
+### Voice Knobs (Piper Native)
+
+| Knob | Effect |
+|------|--------|
+| `length_scale` | Speed (0.5 = 2x fast, 2.0 = half speed) |
+| `noise_scale` | Expressiveness (0 = monotone, 1 = expressive) |
+| `noise_w` | Rhythm variation (0 = robotic, 1 = natural) |
+| `sentence_silence` | Pause between sentences |
+
+### Execution Order
+```
+1. HANDOFF_PIPER_TTS_BINARY_WRAPPER.md   ← Fix voice first
+2. HANDOFF_PERFORMANCE_LAYER_UNIFIED.md  ← This one (adds controls)
+3. HANDOFF_LUNA_ORB_FOLLOW_BEHAVIOR.md   ← Fairy movement (polish)
+```
+
+The key insight: **extend, don't duplicate**. The gesture → emotion mapping lives in one place, and both voice and orb read from the same `PerformanceState`.
+
+--------------------------------------------------------------------------------

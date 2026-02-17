@@ -1,0 +1,887 @@
+Conversation: Dynamic context selection for AI systems
+UUID: 55facceb-4e81-43b0-aaab-ff0460b95a55
+Created: 2025-11-28T18:06:42.934578Z
+Updated: 2025-11-28T19:30:23.152483Z
+================================================================================
+
+[HUMAN] 2025-11-28T18:06:45.037436Z
+ALGORITHM RESEARCH REQUEST #1: AI Context Funnel
+PROBLEM STATEMENT: How do you dynamically select and compress relevant data to pass to an AI system based on current application state, without overwhelming the context window or missing critical information?
+* Inputs: Full system state (faders, history, archives, profiles, current content, user actions), current state machine position, token budget
+* Outputs: Optimized context packet that fits budget, preserves critical info, and is relevant to current task
+* Solved looks like: AI responses are informed and contextual without needing "everything" — like a human expert who knows what to pay attention to
+CURRENT APPROACH: None implemented. Currently passing ad-hoc data to Claude per request.
+CONSTRAINTS:
+* Token budget: ~4000-8000 tokens typical
+* Latency: Context assembly < 100ms
+* Must work across multiple apps (Post Generator, Photo Scanner, Chat Module)
+* Must adapt to state changes in real-time
+RELATED CONCEPTS:
+* RAG (Retrieval Augmented Generation)
+* Attention mechanisms
+* Level of Detail (LOD) from game dev
+* Spatial partitioning / frustum culling
+* Semantic compression
+* Salience detection
+EXAMPLES:
+1. User is editing hook section → AI needs: current hook, voice profile, hook best practices. Does NOT need: full archive, analytics, other posts
+2. User asks "what's working?" → AI needs: analytics summary, recent performance, pattern insights. Does NOT need: full post content, generation params
+3. User in brainstorm mode → AI needs: content ideas, strategy doc, recent topics. Does NOT need: edit history, filter results
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T18:06:56.703896Z
+
+
+Looking at this algorithm research request, I can actually tackle a lot of this directly from the algorithmic foundations doc you've got and my knowledge of these systems. But let me ask a couple things to make sure my research hits the right targets:
+
+1. **What's the state machine granularity?** You mentioned states like "editing_hook" vs "generating" vs "reviewing" — are we talking ~10 discrete states, ~50, or is it more fluid/hierarchical (states within states)?
+
+2. **Memory persistence scope**: When you say "compressed history" — are we talking session-level (last hour), project-level (this post's journey), or deeper (patterns across months of content)?
+
+3. **Multi-app context sharing**: When the AI Chat Module moves from Post Generator to Photo Scanner, does it need to carry context over (like "we were just working on a fabrication post, now looking for photos"), or does each app start fresh and the Hub just makes data *available* if requested?
+
+These will shape whether we lean harder into hierarchical attention, semantic chunking, or more of a spatial partitioning approach. Give me the lay of the land and I'll either dive into algorithmic research or spin up the deep research tool if we need to pull in external approaches.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T18:12:06.414407Z
+1) Im still trying to figure out the granularity 2) project level and deeper 3) i want for the ai to transition seamlessly, it can still access information if requested
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T18:12:16.007236Z
+
+
+Got it. That paints a clearer picture:
+
+- **Granularity**: TBD, but likely hierarchical (we can design for that)
+- **Memory scope**: Deep — project-level + historical patterns (months)
+- **Cross-app**: Seamless transitions, context carries, Hub is the bridge
+
+This is a meaty research problem. Before I spin up the deep research, let me nail down a couple things:
+
+1. **Token budget flexibility**: You said 4-8k typical. Is that a hard ceiling, or can certain high-stakes operations (like "what's working across all my content?") burst higher if needed?
+
+2. **Compression tolerance**: For historical/pattern data, are we okay with lossy compression (summaries, cluster scores) or does the AI sometimes need to "drill down" and request the raw data mid-conversation?
+
+3. **Latency vs quality**: You mentioned <100ms for context assembly. If a smarter selection algorithm could get 20% better relevance but took 300ms, is that a dealbreaker or acceptable for certain operations?
+
+These will determine whether we're optimizing for speed-first with caching, or quality-first with lazy loading and on-demand retrieval.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T18:17:19.351759Z
+it can burst higher but only max 15%. the drill down method would be worth examining , but in some context summaries and clusters would be best. A clever system would be able to decide so let go acceptable for certain operations.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T18:17:47.261251Z
+
+
+Perfect. I've got enough to scope this properly:
+
+**Confirmed Parameters:**
+- Token budget: 4-8k typical, max burst ~9.2k
+- Memory scope: Deep (project + historical patterns)
+- Cross-app: Seamless, context carries via Hub
+- Compression: Hybrid — summaries/clusters for most, drill-down capability for detail
+- Latency: <100ms preferred, up to 300ms acceptable for quality-sensitive ops
+- Intelligence: System should decide compression level based on context
+
+This is a solid research problem spanning RAG architectures, attention mechanisms, hierarchical state management, and semantic compression. Let me kick off the deep research to pull in the latest approaches and map them to your specific constraints.
+
+Starting the algorithmic research now on AI context funnel design — I'll dig into relevance scoring, tiered retrieval, compression strategies, and adaptive context assembly patterns.
+```
+This block is not supported on your current device yet.
+```
+
+Your AI Context Funnel research report is ready. It covers a two-stage hybrid retrieval architecture, state-aware tiered context allocation, greedy knapsack packing for token optimization, compression strategies, multi-layer caching, and cross-app handoff protocols. The report includes specific latency budgets, implementation recommendations, and tuning parameters for your 4-8k token budget and <100ms latency target.
+```
+Viewing artifacts created via the Analysis Tool web feature preview isn’t yet supported on mobile.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T18:38:26.149325Z
+ALGORITHM RESEARCH REQUEST #2: Variable Clustering & Compression
+PROBLEM STATEMENT: How do you reduce 7+ independent fader values into meaningful cluster scores that preserve behavioral intent while reducing dimensionality?
+* Inputs: Individual fader positions (0-100 each): game_design, fabrication, coordination, authority, energy, specificity, formality
+* Outputs: 2-3 cluster scores + qualitative labels (e.g., "expertise_cluster: 62, lead: coordination, profile: practitioner_coordinator")
+* Solved looks like: Cluster scores accurately predict/represent the behavioral output of the full fader configuration
+CURRENT APPROACH: None. Currently using raw fader values.
+CONSTRAINTS:
+* Must be interpretable (not black box)
+* Must preserve "lead" indicator (which fader is dominant)
+* Real-time calculation (< 10ms)
+* Must be reversible or at least explainable
+RELATED CONCEPTS:
+* PCA / dimensionality reduction
+* K-means clustering
+* Weighted averaging
+* Feature importance
+* Composite scoring
+EXAMPLES:
+1. Faders: {game_design: 80, fabrication: 30, coordination: 50, authority: 70, energy: 60, specificity: 75, formality: 40} → Cluster: {expertise: "game_design_authority", tone: "direct_specific", energy_level: "medium_high"} 
+Faders: {game_design: 40, fabrication: 40, coordination: 85, authority: 50, energy: 30, specificity: 60, formality: 60} → Cluster: {expertise: "coordinator_practitioner", tone: "balanced_professional", energy_level: "calm"}
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T18:39:54.943085Z
+ This is a much more constrained problem than the context funnel — we're talking interpretable dimensionality reduction with domain-specific semantics. Let me work through this systematically.
+
+---
+
+# === PROBLEM DECOMPOSITION ===
+
+## Sub-problem 1: Semantic Grouping
+**Core operation**: Partition 7 faders into meaningful clusters based on domain knowledge
+**Input**: 7 fader values (0-100 each)
+**Output**: 2-3 logical groupings with semantic labels
+**Quality metric**: Clusters should map to distinct behavioral dimensions (expertise vs tone vs energy)
+
+## Sub-problem 2: Within-Cluster Aggregation
+**Core operation**: Combine multiple fader values into single cluster score
+**Input**: Subset of faders belonging to one cluster
+**Output**: Single score (0-100) representing cluster state
+**Quality metric**: Score should predict behavioral output as well as raw values
+
+## Sub-problem 3: Lead Detection
+**Core operation**: Identify dominant fader within each cluster
+**Input**: Fader values within a cluster
+**Output**: Label of highest-influence fader
+**Quality metric**: Lead should be stable (not flip-flopping on small changes)
+
+## Sub-problem 4: Profile Classification
+**Core operation**: Map cluster scores to qualitative labels
+**Input**: Cluster score + lead indicator
+**Output**: Human-readable profile label (e.g., "practitioner_coordinator")
+**Quality metric**: Labels should be distinct, memorable, and predictive of output style
+
+## Sub-problem 5: Reversibility/Explainability
+**Core operation**: Trace cluster score back to contributing faders
+**Input**: Cluster score and label
+**Output**: Explanation of which faders contributed what
+**Quality metric**: User can understand why they got a particular profile
+
+---
+
+## DEPENDENCY ORDER:
+```
+1. Semantic Grouping (domain decision, done once)
+      ↓
+2. Within-Cluster Aggregation (math, runs every update)
+      ↓
+3. Lead Detection (comparison, runs every update)
+      ↓
+4. Profile Classification (lookup, runs every update)
+      ↓
+5. Reversibility (on-demand explanation)
+```
+
+---
+
+# === DOMAIN MAPPING ===
+
+| Sub-problem | Primary Domain | Secondary Domain | Why |
+|-------------|----------------|------------------|-----|
+| Semantic Grouping | Domain Knowledge | Set Theory | This is a design decision based on what faders mean, not math |
+| Within-Cluster Aggregation | Linear Algebra | Optimization | Weighted combination of values |
+| Lead Detection | Order Statistics | Topology | Finding max with stability/hysteresis |
+| Profile Classification | Logic / Decision Trees | Combinatorics | Rule-based mapping with discrete outcomes |
+| Reversibility | Information Theory | Linear Algebra | Decomposing aggregate back to components |
+
+---
+
+# === ALGORITHM CANDIDATES ===
+
+## For Sub-problem 1: Semantic Grouping
+
+This isn't really an algorithm problem — it's a domain design decision. Based on your faders:
+
+**Option A: Two-Cluster Model**
+```
+Expertise Cluster: game_design, fabrication, coordination
+Tone Cluster: authority, energy, specificity, formality
+```
+- **Rationale**: Separates "what you know" from "how you say it"
+- **Pros**: Simple, clear separation of concerns
+- **Cons**: Loses energy as a distinct dimension
+
+**Option B: Three-Cluster Model**
+```
+Expertise Cluster: game_design, fabrication, coordination
+Tone Cluster: authority, specificity, formality
+Energy Cluster: energy (standalone or with modifiers)
+```
+- **Rationale**: Energy affects content differently than tone
+- **Pros**: Energy preserved as independent axis
+- **Cons**: One cluster has only 1 fader (less compression)
+
+**Option C: Four-Cluster Model**
+```
+Domain Cluster: game_design, fabrication, coordination
+Authority Cluster: authority, specificity
+Style Cluster: formality, energy
+```
+- **Rationale**: Groups by behavioral output type
+- **Pros**: More granular control
+- **Cons**: Less compression, more complexity
+
+**Recommendation**: **Option B (Three-Cluster)** — preserves energy as a distinct behavioral axis that's easy to reason about separately.
+
+---
+
+## For Sub-problem 2: Within-Cluster Aggregation
+
+### Option A: Simple Arithmetic Mean
+```
+cluster_score = Σ(fader_values) / n
+```
+- **Time complexity**: O(n) where n = faders in cluster
+- **Space complexity**: O(1)
+- **Best when**: All faders contribute equally
+- **Fails when**: Some faders should dominate
+- **Key parameters**: None
+
+### Option B: Weighted Mean
+```
+cluster_score = Σ(weight_i × fader_i) / Σ(weight_i)
+```
+- **Time complexity**: O(n)
+- **Space complexity**: O(n) for weights
+- **Best when**: Domain knowledge says some faders matter more
+- **Fails when**: Weights are miscalibrated
+- **Key parameters**: weight vector (requires tuning)
+
+### Option C: Geometric Mean
+```
+cluster_score = (Π fader_i)^(1/n)
+```
+- **Time complexity**: O(n)
+- **Space complexity**: O(1)
+- **Best when**: You want to penalize zeros heavily (all faders must contribute)
+- **Fails when**: Any fader is 0 (kills entire score)
+- **Key parameters**: None
+
+### Option D: Max-Weighted Blend
+```
+cluster_score = α × max(faders) + (1-α) × mean(faders)
+```
+- **Time complexity**: O(n)
+- **Space complexity**: O(1)
+- **Best when**: Lead fader should dominate but others still matter
+- **Fails when**: α is wrong
+- **Key parameters**: α (blend factor, typically 0.3-0.5)
+
+### Option E: RMS (Root Mean Square)
+```
+cluster_score = √(Σ(fader_i²) / n)
+```
+- **Time complexity**: O(n)
+- **Space complexity**: O(1)
+- **Best when**: Higher values should disproportionately influence score
+- **Fails when**: You want linear relationship
+- **Key parameters**: None
+
+**Recommendation**: **Option D (Max-Weighted Blend)** with α=0.4 — this naturally emphasizes the lead fader while preserving influence of supporting faders. Interpretable and tunable.
+
+---
+
+## For Sub-problem 3: Lead Detection
+
+### Option A: Simple Argmax
+```
+lead = argmax(faders_in_cluster)
+```
+- **Time complexity**: O(n)
+- **Best when**: Clear winner exists
+- **Fails when**: Values are close → lead flip-flops on small changes
+
+### Option B: Argmax with Hysteresis
+```
+if new_max > current_lead_value + hysteresis_threshold:
+    lead = new_max_fader
+else:
+    lead = current_lead  # sticky
+```
+- **Time complexity**: O(n)
+- **Best when**: Stability matters, small changes shouldn't flip lead
+- **Fails when**: Threshold too high → lead never changes
+- **Key parameters**: hysteresis_threshold (typically 5-10 on 0-100 scale)
+
+### Option C: Weighted Argmax
+```
+effective_value = fader_value × domain_weight
+lead = argmax(effective_values)
+```
+- **Time complexity**: O(n)
+- **Best when**: Some faders are "more important" as leads
+- **Fails when**: Weights feel arbitrary
+- **Key parameters**: domain_weight vector
+
+**Recommendation**: **Option B (Argmax with Hysteresis)** — prevents annoying flip-flopping while remaining simple and interpretable. Threshold of 7 (on 0-100 scale) works well.
+
+---
+
+## For Sub-problem 4: Profile Classification
+
+### Option A: Threshold-Based Rules
+```
+if cluster_score < 33: level = "low"
+elif cluster_score < 66: level = "medium"  
+else: level = "high"
+
+profile = f"{lead}_{level}"
+```
+- **Time complexity**: O(1)
+- **Best when**: Clear cutoffs exist
+- **Fails when**: Boundary cases feel wrong
+- **Key parameters**: threshold values
+
+### Option B: Fuzzy Membership
+```
+membership_low = triangular(score, 0, 0, 50)
+membership_med = triangular(score, 25, 50, 75)
+membership_high = triangular(score, 50, 100, 100)
+
+profile = weighted_label(memberships)
+```
+- **Time complexity**: O(k) where k = number of levels
+- **Best when**: Smooth transitions between labels
+- **Fails when**: Fuzzy output is confusing to users
+- **Key parameters**: membership function shapes
+
+### Option C: Lookup Table
+```
+profile_map = {
+    ("game_design", "high"): "game_design_expert",
+    ("game_design", "medium"): "game_design_practitioner",
+    ("coordination", "high"): "coordination_authority",
+    ...
+}
+profile = profile_map[(lead, quantize(score))]
+```
+- **Time complexity**: O(1) hash lookup
+- **Best when**: You want full control over labels
+- **Fails when**: Combinatorial explosion of cases
+- **Key parameters**: The entire map (design decision)
+
+**Recommendation**: **Option C (Lookup Table)** with **Option A thresholds** for quantization. This gives you full control over the vocabulary while keeping computation trivial.
+
+---
+
+## For Sub-problem 5: Reversibility/Explainability
+
+### Option A: Contribution Breakdown
+```
+explanation = {
+    fader: {
+        value: fader_value,
+        weight: weight_i,
+        contribution: (weight_i × fader_value) / cluster_score,
+        contribution_pct: percentage
+    }
+    for fader in cluster
+}
+```
+- **Time complexity**: O(n)
+- **Best when**: User wants to understand "why this score"
+- **Provides**: Per-fader contribution percentage
+
+### Option B: Delta Analysis
+```
+explanation = {
+    "to_increase_score_by_10": [
+        {"fader": "game_design", "increase_by": 15},
+        {"fader": "fabrication", "increase_by": 20}
+    ]
+}
+```
+- **Time complexity**: O(n)
+- **Best when**: User wants to know how to change outcome
+- **Provides**: Actionable adjustment suggestions
+
+**Recommendation**: **Option A (Contribution Breakdown)** for standard explainability, **Option B (Delta Analysis)** available on-demand for "how do I change this" queries.
+
+---
+
+# === RECOMMENDED ARCHITECTURE ===
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    FADER CLUSTERING SYSTEM                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  RAW FADERS                                                         │
+│  ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┐                       │
+│  │ GD  │ FAB │COORD│AUTH │ ENR │SPEC │FORM │                       │
+│  │ 80  │ 30  │ 50  │ 70  │ 60  │ 75  │ 40  │                       │
+│  └──┬──┴──┬──┴──┬──┴──┬──┴──┬──┴──┬──┴──┬──┘                       │
+│     │     │     │     │     │     │                                 │
+│     └─────┼─────┘     └─────┼─────┴─────┘                           │
+│           │                 │                                        │
+│           ▼                 ▼                                        │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐        │
+│  │ EXPERTISE       │ │ TONE            │ │ ENERGY          │        │
+│  │ CLUSTER         │ │ CLUSTER         │ │ CLUSTER         │        │
+│  │                 │ │                 │ │                 │        │
+│  │ Agg: Max-Blend  │ │ Agg: Max-Blend  │ │ Agg: Direct     │        │
+│  │ α = 0.4         │ │ α = 0.4         │ │ (single fader)  │        │
+│  │                 │ │                 │ │                 │        │
+│  │ Score: 62       │ │ Score: 63       │ │ Score: 60       │        │
+│  │ Lead: game_dsn  │ │ Lead: specific. │ │                 │        │
+│  │ Hyst: 7         │ │ Hyst: 7         │ │                 │        │
+│  └────────┬────────┘ └────────┬────────┘ └────────┬────────┘        │
+│           │                   │                   │                  │
+│           ▼                   ▼                   ▼                  │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                    PROFILE CLASSIFIER                        │    │
+│  │                                                              │    │
+│  │  Expertise: quantize(62) = "practitioner"                   │    │
+│  │  Lead: "game_design"                                        │    │
+│  │  → expertise_profile = "game_design_practitioner"           │    │
+│  │                                                              │    │
+│  │  Tone: quantize(63) = "moderate"                            │    │
+│  │  Lead: "specificity"                                        │    │
+│  │  → tone_profile = "specific_balanced"                       │    │
+│  │                                                              │    │
+│  │  Energy: quantize(60) = "medium"                            │    │
+│  │  → energy_profile = "engaged"                               │    │
+│  └──────────────────────────┬───────────────────────────────────┘    │
+│                             │                                        │
+│                             ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                    COMPRESSED OUTPUT                         │    │
+│  │                                                              │    │
+│  │  {                                                          │    │
+│  │    expertise: {                                             │    │
+│  │      score: 62,                                             │    │
+│  │      lead: "game_design",                                   │    │
+│  │      profile: "game_design_practitioner"                    │    │
+│  │    },                                                       │    │
+│  │    tone: {                                                  │    │
+│  │      score: 63,                                             │    │
+│  │      lead: "specificity",                                   │    │
+│  │      profile: "specific_balanced"                          │    │
+│  │    },                                                       │    │
+│  │    energy: {                                                │    │
+│  │      score: 60,                                             │    │
+│  │      profile: "engaged"                                     │    │
+│  │    }                                                        │    │
+│  │  }                                                          │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# === KEY PARAMETERS ===
+
+| Parameter | What it controls | Sensible default | Tune when... |
+|-----------|------------------|------------------|--------------|
+| **α (blend factor)** | How much lead dominates vs mean | 0.4 | Outputs feel too averaged or too spikey |
+| **hysteresis_threshold** | Stability of lead detection | 7 (on 0-100) | Lead flip-flops annoyingly OR never changes |
+| **level_thresholds** | Where low/medium/high cut | [33, 66] | Labels don't match intuition |
+| **cluster_membership** | Which faders go where | See Option B above | Behavioral output doesn't match expectations |
+| **weights (optional)** | Per-fader importance within cluster | Equal (1.0 each) | Some faders clearly matter more |
+
+---
+
+# === IMPLEMENTATION ===
+
+```javascript
+// Full implementation: ~50 lines, <1ms execution
+
+const CLUSTERS = {
+  expertise: ['game_design', 'fabrication', 'coordination'],
+  tone: ['authority', 'specificity', 'formality'],
+  energy: ['energy']
+};
+
+const BLEND_ALPHA = 0.4;
+const HYSTERESIS = 7;
+const THRESHOLDS = [33, 66];
+
+// State for hysteresis
+let currentLeads = { expertise: null, tone: null };
+
+function computeClusterScore(faders, clusterFaders, alpha = BLEND_ALPHA) {
+  const values = clusterFaders.map(f => faders[f]);
+  const maxVal = Math.max(...values);
+  const meanVal = values.reduce((a, b) => a + b, 0) / values.length;
+  return alpha * maxVal + (1 - alpha) * meanVal;
+}
+
+function detectLead(faders, clusterFaders, clusterName) {
+  const values = clusterFaders.map(f => ({ name: f, value: faders[f] }));
+  const maxFader = values.reduce((a, b) => a.value > b.value ? a : b);
+  
+  const currentLead = currentLeads[clusterName];
+  if (currentLead) {
+    const currentValue = faders[currentLead];
+    if (maxFader.value > currentValue + HYSTERESIS) {
+      currentLeads[clusterName] = maxFader.name;
+      return maxFader.name;
+    }
+    return currentLead;
+  }
+  
+  currentLeads[clusterName] = maxFader.name;
+  return maxFader.name;
+}
+
+function quantize(score, thresholds = THRESHOLDS) {
+  if (score < thresholds[0]) return 'low';
+  if (score < thresholds[1]) return 'medium';
+  return 'high';
+}
+
+function getProfile(lead, level, clusterName) {
+  // Lookup table - customize these labels
+  const profiles = {
+    expertise: {
+      game_design: { low: 'observer', medium: 'practitioner', high: 'authority' },
+      fabrication: { low: 'appreciator', medium: 'maker', high: 'craftsman' },
+      coordination: { low: 'participant', medium: 'facilitator', high: 'orchestrator' }
+    },
+    tone: {
+      authority: { low: 'humble', medium: 'confident', high: 'commanding' },
+      specificity: { low: 'conceptual', medium: 'balanced', high: 'tactical' },
+      formality: { low: 'casual', medium: 'professional', high: 'formal' }
+    },
+    energy: {
+      energy: { low: 'calm', medium: 'engaged', high: 'intense' }
+    }
+  };
+  
+  return profiles[clusterName]?.[lead]?.[level] || `${lead}_${level}`;
+}
+
+function clusterFaders(faders) {
+  const result = {};
+  
+  for (const [clusterName, clusterFaders] of Object.entries(CLUSTERS)) {
+    const score = Math.round(computeClusterScore(faders, clusterFaders));
+    const lead = clusterFaders.length > 1 
+      ? detectLead(faders, clusterFaders, clusterName)
+      : clusterFaders[0];
+    const level = quantize(score);
+    const profile = getProfile(lead, level, clusterName);
+    
+    result[clusterName] = { score, lead, level, profile };
+  }
+  
+  return result;
+}
+
+function explainCluster(faders, clusterName) {
+  const clusterFaders = CLUSTERS[clusterName];
+  const totalWeight = clusterFaders.length;
+  
+  return clusterFaders.map(f => ({
+    fader: f,
+    value: faders[f],
+    contribution: Math.round((faders[f] / totalWeight) * 100) / 100,
+    isLead: f === currentLeads[clusterName]
+  }));
+}
+```
+
+---
+
+# === TESTING STRATEGY ===
+
+**Unit tests:**
+1. Score calculation matches expected for known inputs
+2. Lead detection respects hysteresis (doesn't flip on small changes)
+3. Profile labels are deterministic for same inputs
+4. Edge cases: all faders at 0, all at 100, all equal
+
+**Integration tests:**
+1. Cluster output predicts behavioral differences in generated content
+2. Profile labels feel intuitive to users (qualitative testing)
+3. Reversibility: explanation accurately reflects score composition
+
+**Calibration tests:**
+1. Generate content with raw faders vs cluster representation
+2. Compare outputs — clusters should produce equivalent behavioral result
+3. Adjust α and thresholds if outputs diverge
+
+---
+
+# === GOTCHAS ===
+
+1. **Hysteresis state**: Lead detection requires remembering previous state. In stateless contexts, either pass previous lead in, or accept flip-flopping.
+
+2. **Threshold sensitivity**: Values at exactly 33 or 66 will classify differently than 32 or 67. Consider fuzzy boundaries if this causes UX issues.
+
+3. **Profile vocabulary**: The lookup table grows combinatorially. For 3 leads × 3 levels = 9 profiles per cluster. Keep vocabulary manageable.
+
+4. **Equal faders**: When all faders in a cluster are equal, lead detection is arbitrary. Consider a "balanced" label for this case.
+
+---
+
+# === FURTHER RESEARCH ===
+
+If you want to go deeper or this approach doesn't fit:
+
+- **PCA**: If you want data-driven clustering based on actual usage patterns (requires historical data)
+- **Self-Organizing Maps**: For discovering natural cluster boundaries from user behavior
+- **Radar/Spider normalization**: For visualizing cluster balance on the UI
+- **Transfer functions**: For non-linear fader-to-behavior mappings (your foundations doc covers this)
+
+---
+
+**Bottom line**: This is a solved problem with straightforward math. The hard part is the **design decisions** (which faders cluster together, what vocabulary to use for profiles). The algorithms themselves are trivial — weighted means, argmax with hysteresis, lookup tables. Total compute: **<1ms**. Total code: **~50 lines**.
+
+Want me to add this to the algorithmic foundations doc, or create a separate implementation spec?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T18:40:47.029053Z
+ALGORITHM RESEARCH REQUEST #3: State Machine with Context Rules
+PROBLEM STATEMENT: How do you design a hierarchical state machine that not only tracks workflow position but also carries context rules about what data/actions are valid in each state?
+* Inputs: User actions, current state, application context
+* Outputs: New state, valid transitions, valid actions, AI context rules for this state, HUD display rules
+* Solved looks like: System always knows "where" user is, what they can do, and what AI should focus on
+CURRENT APPROACH: Python voice_chat_system has basic state machine with platform/complexity/context rules. Not integrated with main system.
+CONSTRAINTS:
+* Must support hierarchical states (editing_hook is child of post_editing)
+* Must be serializable to JSON for storage/transfer
+* Must support parallel states (editing while chat is open)
+* Must be extensible without breaking existing states
+RELATED CONCEPTS:
+* Statecharts (Harel)
+* Hierarchical FSM
+* Behavior trees
+* UML state diagrams
+* XState library patterns
+EXAMPLES:
+1. State: post_editing.section_editing.hook 
+   * Valid actions: edit, regenerate, accept, move_to_setup
+   * AI context: current_hook, voice_profile, hook_examples
+   * HUD shows: hook_strength_score, word_count
+2. State: analytics.reviewing 
+   * Valid actions: filter, compare, export, drill_down
+   * AI context: performance_summary, correlations, trends
+   * HUD shows: top_performers, engagement_chart
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T18:41:20.084093Z
+The user wants algorithmic research on designing a hierarchical state machine with context rules. They've given me good constraints and examples. Let me think about whether I need clarification or can dive straight into research.
+
+Looking at the request:
+- Clear problem statement
+- Clear constraints (hierarchical, JSON serializable, parallel states, extensible)
+- Good examples of what states look like
+- Related concepts listed (Statecharts, XState, etc.)
+
+The question is detailed enough. The key unknowns might be:
+1. How many states total are we talking? (affects complexity recommendations)
+2. Do they need real-time state sync across apps? (affects architecture)
+3. What's driving state transitions - pure user actions or also automatic triggers?
+
+But honestly, these can be addressed in the research output with options rather than requiring upfront clarification. The user seems to want comprehensive algorithmic research, and I have enough to work with.
+
+Let me launch the research task with a comprehensive command that captures all the nuances.
+
+This one's well-scoped. The statechart/XState domain is mature with established patterns. Let me dig into the algorithmic foundations for hierarchical state machines with attached context metadata.
+```
+This block is not supported on your current device yet.
+```
+
+Your hierarchical state machines research report is ready. It covers XState with the Actor Model for your hub-and-spoke content pipeline, including statechart advantages over flat FSMs and behavior trees, JSON schema design for attaching AI context rules to states, federated machine architecture with central coordination, state-to-context mapping for AI integration, TypeScript/Zod validation patterns, and a phased implementation roadmap. The report includes code examples for parallel regions, context inheritance, and persistence strategies.
+```
+Viewing artifacts created via the Analysis Tool web feature preview isn’t yet supported on mobile.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T18:56:32.299162Z
+ALGORITHM RESEARCH REQUEST #4: Flow/Coherence Scoring
+PROBLEM STATEMENT: How do you computationally measure whether a piece of content "flows" well — both at sentence-to-sentence and paragraph-to-paragraph level?
+* Inputs: Text content (post, section, or full document)
+* Outputs: Flow score (0-100), flagged weak transitions, suggested fixes
+* Solved looks like: Score correlates with human judgment of "this reads smoothly" vs "this feels choppy"
+CURRENT APPROACH: None. Manual review only.
+CONSTRAINTS:
+* Must work on short content (150-300 word posts)
+* Must identify specific problem locations, not just overall score
+* Should suggest fixes, not just flag problems
+* Latency: < 2 seconds for scoring
+RELATED CONCEPTS:
+* Discourse coherence models
+* Entity-based coherence (entity grid)
+* LSA coherence
+* Transition word detection
+* Embedding continuity (cosine sim of adjacent sentences)
+* Coreference resolution
+EXAMPLES:
+1. Good flow: "I learned this the hard way. Last month, our installation..." → High continuity, clear reference
+2. Bad flow: "Game design matters. The fabrication process requires..." → Topic jump, no transition
+3. Weak transition: "We finished the prototype. The client loved it." → Could be stronger with "When we finished..."
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T18:56:46.304055Z
+This is a well-specified research request for flow/coherence scoring. The user has given me clear inputs, outputs, constraints, and examples. Let me assess if I need clarifying questions or can launch directly.
+
+Looking at the request:
+- Inputs: Text content (150-300 words)
+- Outputs: Flow score, flagged weak transitions, suggested fixes
+- Constraints: <2s latency, identify specific locations, suggest fixes
+- Related concepts: They've already identified relevant areas (discourse coherence, entity grids, LSA, embedding continuity, etc.)
+
+This is actually quite clear. The user knows what they want - they want to measure text coherence computationally. The only things I might clarify:
+1. Do they want this to run locally or can it call APIs? (affects model choices)
+2. What's the fix suggestion format? (inline edit vs alternative phrasing)
+3. Priority: speed vs accuracy when they conflict?
+
+But honestly, these are fairly minor and I can cover the tradeoffs in the research. The user has been very specific about what they want. Let me launch the research.
+
+This is a well-scoped problem. The constraint that it needs to identify specific locations AND suggest fixes (not just score) pushes us toward a hybrid approach rather than a pure embedding-based score.
+
+One quick clarification before I dive in:
+
+**Fix suggestion format**: When the system suggests fixes for weak transitions, do you want:
+- **A)** Inline rewrites (e.g., "Change 'We finished the prototype. The client loved it.' to 'When we finished the prototype, the client loved it.'")
+- **B)** Insertion suggestions (e.g., "Add transition word before sentence 2: 'As a result,' or 'Fortunately,'")
+- **C)** Both, depending on severity
+
+This affects whether we need generative capabilities or can get away with template-based suggestions.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T18:57:29.752159Z
+C please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T18:57:56.004703Z
+The user wants option C - both inline rewrites and insertion suggestions depending on severity. This is a good clarification. Now I have enough context to do the research.
+
+Let me launch the extended search task for Flow/Coherence Scoring algorithms.
+
+Got it — both inline rewrites for severe issues and insertion suggestions for minor gaps. That means we need a hybrid system: rule-based detection + lightweight generation for fixes.
+
+Let me dig into the algorithmic foundations for this.
+```
+This block is not supported on your current device yet.
+```
+
+Your flow and coherence scoring research report is ready. It covers a hybrid architecture combining Sentence-BERT embeddings, entity grid analysis, and transition marker detection for LinkedIn posts. The report includes specific algorithm recommendations with latency benchmarks, threshold tuning parameters, a template-based fix generation strategy with conditional LLM fallback, and a complete latency budget breakdown showing the system meets the 2-second constraint. Validation approaches using the GCDC corpus are also detailed.
+```
+Viewing artifacts created via the Analysis Tool web feature preview isn’t yet supported on mobile.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T19:17:18.213185Z
+ALGORITHM RESEARCH REQUEST #7: Memory Compression & Decay
+PROBLEM STATEMENT: How do you maintain persistent memory across sessions that grows over time without becoming unwieldy — compressing old information while preserving meaning?
+* Inputs: Continuous stream of events (generations, edits, conversations, outcomes), time
+* Outputs: Compressed memory store that can answer "what do I know about X" without storing everything
+* Solved looks like: System "remembers" important patterns and facts without infinite storage growth
+CURRENT APPROACH: Voice chat system has conversation_history.json but no compression. Posts not archived.
+CONSTRAINTS:
+* Storage budget: ~1MB for "active" memory, unlimited for cold archive
+* Must support retrieval by topic/time/relevance
+* Must handle "forgetting" gracefully (old unimportant things fade)
+* Must preserve critical facts indefinitely (user identity, voice profile)
+RELATED CONCEPTS:
+* Episodic vs semantic memory (cognitive science)
+* Summarization algorithms
+* Time-based decay functions
+* Importance scoring
+* Hierarchical memory (hot/warm/cold)
+* Memory consolidation (sleep-like compression)
+EXAMPLES:
+1. Recent: Full conversation from today → stored raw
+2. This week: "Had 3 brainstorm sessions about fabrication content" → summarized
+3. This month: "Generated 12 posts, 4 published, avg engagement 3.2%" → statistics only
+4. Permanent: "User is coordinator-lead, professional-conversational voice" → never decays
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T19:17:33.104381Z
+This is a meaty research problem. The user wants a memory system that:
+1. Compresses old information while preserving meaning
+2. Supports retrieval by topic/time/relevance
+3. Has decay functions for unimportant things
+4. Preserves critical facts indefinitely
+5. Works within ~1MB active memory budget
+
+Before I dive into research, let me think about clarifying questions:
+
+1. **Memory granularity**: What counts as an "event"? Is it every fader change, every generation, every edit, or coarser units like "sessions"?
+
+2. **Retrieval patterns**: What's the primary access pattern? "Show me everything about fabrication" vs "What happened last week" vs "What patterns have I learned"?
+
+3. **Consolidation timing**: Should compression happen in real-time (continuous), batch (nightly), or triggered (when storage budget exceeded)?
+
+These would help tune the architecture. Let me ask.
+
+Good one. Memory systems are one of those problems that sounds simple until you try to build it. Before I dive into research, a few clarifications:
+
+1. **Event granularity**: What counts as a "memory event"? Every fader tweak, every generation, every edit, every session, or coarser? This affects compression ratios dramatically.
+
+2. **Primary retrieval pattern**: Is the most common query going to be topic-based ("what do I know about fabrication"), time-based ("what happened last week"), or pattern-based ("what's been working")?
+
+3. **Consolidation timing**: Should compression happen continuously (as events come in), batch-style (nightly "consolidation"), or threshold-triggered (when active memory hits budget)?
+
+These will shape whether we lean toward streaming summarization, periodic consolidation cycles, or hybrid approaches.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-11-28T19:22:53.483015Z
+I think for long term memory its per generation, but short term would look at probably per edit. damn i mean  i guess topic based, but mayb pattern based too. I think its a per memory hitting a certain budget. but also if it was done nightly or on timed bases that wouldnt be a bad idea either
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-11-28T19:23:27.967800Z
+The user has given me enough to work with:
+- Long-term memory: per generation event
+- Short-term memory: per edit event  
+- Primary retrieval: topic-based, but also pattern-based
+- Consolidation: budget-triggered, but also open to timed/nightly
+
+This is enough to scope the research. The constraints are clear from the original request:
+- ~1MB active memory budget
+- Unlimited cold archive
+- Time-based decay for unimportant things
+- Permanent storage for critical facts
+- Hierarchical hot/warm/cold structure
+
+I have enough to launch the research. Let me do that.
+
+Got it. That gives me enough to scope this:
+
+**Confirmed Parameters:**
+- **Event granularity**: Per-edit (short-term), per-generation (long-term)
+- **Retrieval patterns**: Topic-based primary, pattern-based secondary
+- **Consolidation**: Budget-triggered + optional timed cycles (hybrid)
+- **Storage budget**: ~1MB active, unlimited cold archive
+- **Decay behavior**: Unimportant fades, critical facts permanent
+
+This is a rich problem space — spans cognitive science models, streaming summarization, hierarchical storage, and retrieval-optimized compression. Let me dig in.
+```
+This block is not supported on your current device yet.
+```
+
+Your memory compression and decay system research report is ready. It covers a three-tier architecture (hot/warm/cold) designed for a 1MB active budget, compression strategies achieving 5:1 to 100:1 ratios by content type, power-law decay functions with reactivation boosts, importance scoring with learned weights, and consolidation triggers. The report includes specific implementation recommendations using proven components like HNSW indexes, IVF-PQ compression, and LLM-based summarization.
+```
+Viewing artifacts created via the Analysis Tool web feature preview isn’t yet supported on mobile.
+```
+
+
+
+--------------------------------------------------------------------------------

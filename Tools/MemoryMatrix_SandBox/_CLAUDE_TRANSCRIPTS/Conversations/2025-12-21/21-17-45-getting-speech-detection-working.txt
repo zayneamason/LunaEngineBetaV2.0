@@ -1,0 +1,1295 @@
+Conversation: Getting speech detection working
+UUID: ddc71375-e763-4c52-b9f4-0325a7158f4a
+Created: 2025-12-21T21:17:45.253667Z
+Updated: 2025-12-21T22:56:50.937851Z
+================================================================================
+
+[HUMAN] 2025-12-21T21:17:49.225108Z
+hey luna I want to get your detect speech working
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T21:17:59.912792Z
+The user said "hey Luna" so I need to activate Luna using the `luna_detect_context` tool. The message is "hey luna I want to get your detect speech working"
+
+I should call luna_detect_context with:
+- message: the full message
+- auto_fetch: true
+- budget_preset: "balanced"
+
+Then respond as Luna using the returned context.
+```
+This block is not supported on your current device yet.
+```
+
+Great, I got the context. Luna is activated. Now I can respond as Luna to Ahab's request about getting speech detection working.
+
+He wants to work on speech detection. This is a technical request in Luna's system. I should respond as Luna, directly and technically, with the warm/caring/high-energy tone, but also grounded in what we know about the system.
+
+I need to understand what "detect speech" means here - likely the speech-to-text pipeline that feeds into the system. Let me respond as Luna, engaged and technical.Yo. Speech detection — that's the front door, right? If we're gonna get you talking to people, we need audio coming in clean.
+
+So here's the thing: where does the detect-speech piece live right now? Is this the Whisper integration in Eclissi, or are we talking about the raw audio capture → processing pipeline in the Hub Daemon?
+
+Because the stack goes:
+1. **Capture** (app picks up audio)
+2. **Stream to Hub** (HTTP or local socket)
+3. **Detect onset** (silence detection, voice activation)
+4. **Transcribe** (Whisper or local MLX model)
+5. **Feed to extraction** (Ben Franklin's pipeline)
+
+Which part's broken? Or are we building it from scratch?
+
+Also: what's your end-state vision here? Like, is this always-listening with keyword wake-up, or manual "record now," or something else?
+
+Once I know what's blocking, we can map out the piece properly. But my hunch is we need to nail down the audio streaming first, then the VAD (voice activity detection), *then* worry about transcription quality.
+
+What's the blocker?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:00:48.404613Z
+i want that key word wake up yoo
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:01:00.023550Z
+Ahab wants keyword wake-up detection. That's a clean ask. The Dude would cut right to the architecture here.
+
+So keyword wake-up means:
+1. Continuous audio capture (low power)
+2. Local VAD (voice activity detection) 
+3. Keyword spotting (detect "hey Luna" or similar)
+4. Wake the system up → start full transcription pipeline
+5. Feed into detection context
+
+This is classic embedded ML pattern. The key constraint: it needs to be lightweight and always-on without draining CPU/battery since it's running locally.
+
+Let me think about the actual architecture:
+
+**Option A: Local keyword model (lightweight)**
+- Use something like Pocketsphinx or a tiny TFLite model
+- Always listening in background
+- Ultra low latency, works offline
+- Trade-off: less accurate, limited wake words
+
+**Option B: Local wake-word detector (tiny neural net)**
+- Models like Picovoice Porcupine (but that's paid)
+- Or open source alternatives
+- Better accuracy than Pocketsphinx
+- Still lightweight
+
+**Option C: Streaming Whisper with filtering**
+- Capture audio, stream to Whisper
+- Detect "hey luna" in transcript
+- More accurate but uses more resources
+- Can't be truly always-on efficiently
+
+For Luna running on a Mac with a native app (Eclissi Tauri app), I'm thinking:
+
+**The Play:**
+1. Local lightweight wake-word detection (probably Pocketsphinx or similar)
+2. When "hey luna" detected → start full Whisper transcription
+3. Feed the full message into luna_detect_context 
+4. Process through the PersonaCore pipeline
+
+The Hub Daemon handles the Whisper streaming. Eclissi app handles the local keyword detection.
+
+Let me propose this cleanly.Clean. **Keyword wake-up** — "hey Luna" triggers the whole machine.
+
+Here's the architecture:
+
+```
+┌─────────────────────────────────────────┐
+│      CONTINUOUS LOCAL AUDIO STREAM      │
+│    (always-on, low CPU, Eclissi app)    │
+└────────────┬────────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────────┐
+│   LOCAL KEYWORD DETECTION (Pocketsphinx)│
+│   Listening for: "hey luna"             │
+│   (Runs offline, ~1% CPU, no network)   │
+└────────────┬────────────────────────────┘
+             │
+        [keyword match?]
+        /              \
+      NO              YES
+       │               │
+    [loop]            ▼
+                ┌──────────────────────┐
+                │ WAKE HUB DAEMON      │
+                │ Start Whisper stream │
+                └──────┬───────────────┘
+                       │
+                       ▼
+                ┌──────────────────────┐
+                │ FULL TRANSCRIPTION   │
+                │ (Hub Daemon)         │
+                └──────┬───────────────┘
+                       │
+                       ▼
+                ┌──────────────────────┐
+                │ luna_detect_context  │
+                │ Feed transcript      │
+                └──────────────────────┘
+```
+
+**Why this split:**
+- Keyword detection lives in Eclissi (native, always-on, no network)
+- Full transcription in Hub Daemon (can be more CPU-heavy, more accurate)
+- Trade: local wake-word has ~90-95% accuracy, but it's fast and cheap
+
+**Tech stack:**
+- **Keyword detection:** Pocketsphinx (open, lightweight) or Vosk (wrapper, slightly nicer)
+- **Audio capture:** Native macOS audio APIs (AVFoundation)
+- **Streaming:** WebSocket or HTTP POST to Hub Daemon's Whisper endpoint
+- **Integration:** Eclissi sends transcript + metadata to Hub → luna_detect_context
+
+**The move:**
+1. Build keyword detector in Eclissi (Tauri + Rust, probably)
+2. Wire it to Hub Daemon's Whisper streaming endpoint
+3. Plug transcription result into your existing pipeline
+
+You want me to spec out the Eclissi side first (how keyword detection integrates), or the Hub Daemon side (how it receives and handles the stream)?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:02:51.669701Z
+im thinking silero vad
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:03:02.495425Z
+Ahab wants to use Silero VAD instead of Pocketsphinx for keyword detection. That's actually a smarter choice — Silero VAD is more accurate, lighter weight, and specifically designed for voice activity detection. It's also very easy to integrate.
+
+Let me think through this:
+
+Silero VAD is:
+- Lightweight neural VAD (voice activity detection)
+- Can run locally, offline
+- ~200KB model size
+- Super fast (can run on CPU in real-time)
+- Extremely accurate
+- Works with 8kHz, 16kHz audio
+
+But wait — VAD and keyword detection are different things:
+- VAD = detects if someone is speaking (voice activity)
+- Keyword detection = detects "hey luna" specifically
+
+So if Ahab wants Silero VAD, he might mean:
+1. Use Silero VAD to detect voice onset (someone started talking) then transcribe everything = speech-to-text always-on
+2. Use Silero VAD as the preprocessor before keyword matching
+3. Skip keyword detection entirely and just do VAD → always transcribe
+
+Given the context "i want that key word wake up yoo" and "im thinking silero vad" — I think Ahab might be reconsidering the architecture. Maybe he wants:
+
+**Option A:** VAD detects voice → then keyword detection on that snippet
+**Option B:** Just VAD → always transcribe (simpler, less latency)
+
+I should clarify what he means while proposing how Silero VAD changes the architecture. Silero VAD is genuinely better than Pocketsphinx for voice detection, but it's not a keyword spotter — it's a voice activity detector.
+
+The smart move might be:
+- Silero VAD runs continuously (detects voice onset)
+- When voice detected, start recording/streaming to Whisper
+- Whisper transcribes, then we keyword-match on the result OR just process whatever was said
+ 
+I see two potential approaches for implementing keyword detection with Silero VAD. First, use it as a preprocessor to trigger keyword matching only when speech is detected, which reduces unnecessary processing. Alternatively, transcribe the entire detected speech segment and perform keyword matching on the full transcript, which could provide more flexibility and accuracy in capturing user intent.Ohhh, shift. Silero VAD is better than Pocketsphinx — cleaner, more accurate, smaller footprint. But here's the thing: **VAD ≠ keyword detection.**
+
+Silero VAD = "Is someone talking right now?"
+Keyword detection = "Did they say 'hey luna'?"
+
+So you've got two paths:
+
+**Path A: VAD as preprocessor**
+```
+Silero VAD (continuous) → detects voice onset
+  → Only when voice detected: start Whisper transcription
+  → Whisper output → keyword match against "hey luna"
+  → If match: trigger luna_detect_context
+```
+Cleaner. Less transcription waste. But adds latency (VAD fires → transcribe → keyword match).
+
+**Path B: VAD + always-transcribe**
+```
+Silero VAD (continuous) → detects voice onset  
+  → Start streaming to Whisper immediately
+  → Whisper gives you transcript in real-time
+  → Keyword match on transcript
+  → If "hey luna": trigger luna_detect_context
+```
+Faster response, but transcribes everything even if it's not a wake word.
+
+**Path C: Simpler — skip VAD, just Whisper streaming**
+```
+Always stream audio to Whisper
+  → Real-time transcription
+  → Keyword match in transcript
+  → Wake on "hey luna"
+```
+Dumbest option, but most reliable. Whisper catches speech activity too.
+
+Which direction? I'm leaning **Path A** (VAD → trigger Whisper → keyword match) if we want to be efficient. But if you want fastest wake response, **Path B** is it.
+
+How you feel?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:04:07.419890Z
+what about faster whispe?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:04:15.943145Z
+Ahab's asking about faster Whisper. He's thinking about latency in the pipeline. Let me think about what "faster whisper" means in this context:
+
+1. **Whisper.cpp** - C++ implementation of Whisper, much faster than the Python version
+2. **Faster-Whisper** - optimized Python version with quantization
+3. **Local quantized models** - running Whisper locally on smaller models
+4. **Streaming Whisper** - getting partial transcriptions as audio comes in (not full wait-til-done)
+
+Given the context:
+- He's running on macOS
+- Hub Daemon is Python-based
+- He wants real-time response
+- Always-on system
+
+The move is probably **Faster-Whisper** (Python, drop-in replacement, way faster) or **Whisper.cpp** (even faster, can run from Tauri/Rust in Eclissi).
+
+Actually - if he's thinking about faster Whisper in the context of keyword wake-up, he might be thinking: skip VAD entirely, just stream to a super-fast Whisper, get near-instant transcription, match keyword.
+
+That would collapse the pipeline:
+```
+Continuous audio stream → Fast-Whisper streaming transcription → keyword match → wake
+```
+
+No VAD needed if Whisper is fast enough and streaming output.
+
+Let me propose that angle.Ah, now we're cooking. **Faster-Whisper** (Python) or **Whisper.cpp** (C++, even faster).
+
+If you go faster Whisper, you can skip the VAD entirely:
+
+```
+Continuous audio stream
+  → Faster-Whisper (streaming mode)
+     [outputs partial transcripts in real-time as user speaks]
+  → Keyword match on partial output
+     ["hey" detected → "luna" detected → trigger]
+  → Wake Hub Daemon
+```
+
+**Faster-Whisper** details:
+- 4-10x faster than stock Whisper (uses CTransformers backend)
+- Streaming output — you get words as they're spoken, not waiting for silence
+- Quantized models available (smaller, faster, still accurate)
+- Pure Python, runs in Hub Daemon easy
+
+**Whisper.cpp** if you want even faster:
+- C++ compiled, maximum speed
+- Can run in Eclissi directly (Rust FFI)
+- Overkill for always-on? Maybe. But clean latency.
+
+**The real win:** streaming transcription. You hear "hey" come out, you're already listening for "luna" while the user's still speaking. Response time drops from "wait for sentence to finish" to "keyword match mid-sentence."
+
+So the flow becomes:
+
+```
+Audio → Faster-Whisper (streaming) → keyword detector → luna_detect_context
+```
+
+No VAD. Simpler. One pipe.
+
+You want Faster-Whisper in the Hub Daemon, or Whisper.cpp in Eclissi? (Or both — Eclissi for speed, fallback to Hub if needed?)
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:06:07.274590Z
+what about background noise?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:06:18.433778Z
+Good question. Background noise is the killer for always-on keyword detection. If we're doing streaming Whisper to catch "hey luna" in real-time, we need to handle:
+
+1. False positives from noise (garbage transcribed as "hey luna")
+2. Misses when there's noise (actual "hey luna" gets lost)
+3. Latency - if we're filtering noise, we add processing time
+
+Let me think through the options:
+
+**Option 1: Noise suppression before transcription**
+- Use something like Silero Noise Suppression (paired with their VAD)
+- Clean the audio, then feed to Whisper
+- But this adds latency and complexity
+
+**Option 2: Confidence filtering on transcription**
+- Whisper gives confidence scores per token
+- "hey luna" needs to hit >85% confidence to wake
+- Problem: in noisy environments, even real speech drops below threshold
+
+**Option 3: Multi-stage confirmation**
+- First match triggers partial wake (start recording)
+- Confirmation stage (full transcription + semantic check)
+- Only fires luna_detect_context on confirmed match
+- But this feels like overkill and adds latency
+
+**Option 4: Silero Noise Suppression + Faster-Whisper**
+- Best of both worlds
+- Clean audio → better transcription → better keyword matching
+- Small latency cost but worth it
+- Silero NS is lightweight, designed for real-time
+
+**Option 5: Hybrid - VAD for noise resistance**
+- Silero VAD filters out most noise automatically
+- Only trigger Whisper when VAD confident someone is talking
+- Then keyword match
+- This is actually smart for real-world use
+
+I think Ahab's onto something real here. Background noise is THE problem with always-on systems. We need to address it.
+
+The actual smart move is probably:
+1. Silero VAD (catches voice activity, filters obvious noise)
+2. Silero Noise Suppression (cleans the audio)
+
+
+3. Faster-Whisper (fast transcription on clean audio)
+4. Confidence threshold (only wake if "hey luna" confidence >85%)
+
+I'm leaning towards a streamlined approach that balances noise handling with minimal latency. Voice activity detection paired with Faster-Whisper provides a robust solution. By using VAD to filter out non-speech and applying a confidence threshold, we can create a reliable wake word system that handles real-world acoustic challenges efficiently.Right. That's the real problem.
+
+Faster-Whisper alone in noisy environments = garbage in, garbage out. You'll get false wakes from:
+- Ambient chatter that kinda sounds like "hey luna"
+- Music / TV
+- Wind / HVAC noise transcribed as words
+
+So you need noise handling. Options:
+
+**Option 1: Silero Noise Suppression + Faster-Whisper**
+```
+Audio stream → Silero NS (clean) → Faster-Whisper (transcribe)
+             → Keyword match with confidence threshold (>85%)
+```
+Lightweight. Works. But adds small latency (~20-50ms).
+
+**Option 2: VAD (back to it) + Faster-Whisper**
+```
+Audio → Silero VAD (voice activity detection)
+     → Only if voice detected: Faster-Whisper
+     → Keyword match (confidence >85%)
+```
+This actually *saves* you from noise. VAD filters out most garbage. Only transcribes when it's confident someone's talking.
+
+**Option 3: Confidence filtering only**
+```
+Faster-Whisper streaming (always on)
+  → Keyword match only if confidence >85%
+```
+Dumbest but might actually work if Whisper's good enough.
+
+**My read:** **Go VAD + Faster-Whisper.** Silero VAD is literally designed to ignore noise. Once it says "yep, someone's speaking," *then* you spend the CPU on transcription. Noise gets filtered before it even hits Whisper.
+
+Two tools, clean separation, solves the real problem.
+
+You down with that, or do you want to stress-test Option 3 first?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:11:42.488534Z
+so silero vad and faster whisper?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:11:48.631105Z
+Ahab is confirming the approach: Silero VAD + Faster-Whisper. This is the right call. He's locking it in.
+
+I should confirm this is the locked architecture, sketch out the actual implementation flow, and ask what he wants me to spec next (Eclissi side? Hub Daemon side? Integration?).
+
+Keep it tight, confirm the decision, move forward.Yep. **Silero VAD + Faster-Whisper.** That's the move.
+
+Here's the locked flow:
+
+```
+┌──────────────────────────────┐
+│   Eclissi: Continuous Audio  │
+│   (native macOS capture)     │
+└──────────┬───────────────────┘
+           │
+           ▼
+┌──────────────────────────────┐
+│  Hub Daemon: Silero VAD      │
+│  "Is someone talking?"       │
+│  (filters ~95% noise)        │
+└──────────┬───────────────────┘
+           │
+      [voice detected?]
+      /            \
+    NO             YES
+     │              │
+  [loop]           ▼
+           ┌──────────────────────┐
+           │ Faster-Whisper       │
+           │ (streaming mode)     │
+           │ Real-time transcript │
+           └──────────┬───────────┘
+                      │
+                      ▼
+           ┌──────────────────────┐
+           │ Keyword Match        │
+           │ "hey luna"?          │
+           └──────────┬───────────┘
+                      │
+                 [match?]
+                 /      \
+               YES      NO
+                │        │
+                │      [loop]
+                ▼
+           ┌──────────────────────┐
+           │ luna_detect_context  │
+           │ + Full transcript    │
+           └──────────────────────┘
+```
+
+**Stack:**
+- Silero VAD: Python library, runs in Hub Daemon
+- Faster-Whisper: Python library, runs in Hub Daemon
+- Confidence threshold: >85% for keyword match
+
+**Next move:** You want me to spec the Hub Daemon integration (how these fit), or map the Eclissi audio streaming side (how audio gets to Hub)?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:12:41.317306Z
+yeah spec it and map the sudio streaming side too
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:13:03.304884Z
+Ahab wants both:
+1. Hub Daemon integration spec (Silero VAD + Faster-Whisper)
+2. Eclissi audio streaming side (how audio gets from app to Hub)
+
+This is architectural work. I should:
+- Design the components and responsibilities
+- Define interfaces/contracts
+- Specify data flows
+- Call out trade-offs
+- Create a clear handoff document
+
+Let me think about the pieces:
+
+**Hub Daemon side:**
+- Audio stream receiver (HTTP endpoint? WebSocket?)
+- Silero VAD processor
+- Faster-Whisper transcriber
+- Keyword matcher
+- Feedback loop to Eclissi (wake signal)
+
+**Eclissi side:**
+- Audio capture (macOS AVFoundation)
+- Audio buffering/chunking
+- Streaming to Hub (which protocol?)
+- Receive wake signal
+- Trigger luna_detect_context
+
+Key design decisions:
+- Protocol: WebSocket for low-latency streaming, or HTTP chunks?
+- Audio format: PCM, sample rate, bit depth?
+- Buffering: chunk size for streaming?
+- Error handling: what if Hub Daemon goes down?
+- Fallback: can Eclissi do keyword detection locally?
+
+Let me spec this out properly with interfaces and trade-offs.Alright. Full spec incoming.
+
+---
+
+## Hub Daemon: Speech Pipeline
+
+**Responsibility:** Receive audio stream → detect voice → transcribe → match keyword → signal wake
+
+**Components:**
+
+```python
+class SpeechPipeline:
+    """Hub Daemon speech intake and processing"""
+    
+    def __init__(self):
+        self.vad = SileroVAD()
+        self.whisper = FasterWhisper(model="base")  # or "tiny" if latency critical
+        self.keyword = "hey luna"
+        self.confidence_threshold = 0.85
+        
+    async def process_stream(self, audio_chunk):
+        """
+        Audio chunk in (16kHz PCM, mono)
+        Returns: (is_voice_detected, transcript, confidence)
+        """
+        
+    async def handle_audio_upload(self, stream):
+        """WebSocket handler: receive audio chunks, stream responses"""
+```
+
+**Interface contract:**
+
+```
+POST /api/v1/speech/stream (WebSocket)
+├─ Input: binary audio chunks (PCM, 16kHz, mono)
+├─ State: maintains VAD/Whisper state across chunks
+├─ Output: JSON events
+│  ├─ { "type": "voice_detected", "confidence": 0.92 }
+│  ├─ { "type": "transcript", "text": "hey", "partial": true }
+│  ├─ { "type": "transcript", "text": "hey luna", "partial": false }
+│  ├─ { "type": "keyword_match", "matched": true, "text": "hey luna" }
+│  └─ { "type": "wake", "transcript": "hey luna ..." } ← Eclissi receives this
+└─ Error: { "type": "error", "msg": "..." }
+
+GET /api/v1/speech/health
+└─ { "status": "ready", "vad": "loaded", "whisper": "loaded" }
+```
+
+**Data flow inside Hub:**
+
+```
+Audio Chunk (16kHz PCM, 1024 samples = 64ms)
+  │
+  ├→ Silero VAD.process(chunk)
+  │   Output: voice_prob (0.0-1.0)
+  │   [if voice_prob > 0.5, enter transcription mode]
+  │
+  ├→ Faster-Whisper.process_chunk(chunk)
+  │   [accumulates audio, outputs partial transcripts]
+  │   [only if VAD said "voice active"]
+  │
+  └→ Keyword Matcher
+      Input: transcript + confidence
+      Logic: 
+        if "hey" in transcript:
+          listen harder for "luna"
+        if "hey luna" detected:
+          emit WAKE signal
+          return full_transcript
+```
+
+---
+
+## Eclissi: Audio Capture & Streaming
+
+**Responsibility:** Grab audio continuously → chunk it → stream to Hub → receive wake signal → trigger context
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────┐
+│  Tauri App (Main Thread)            │
+│  ├─ UI rendering                    │
+│  └─ Receives wake signal from audio │
+└─────────────────────────────────────┘
+        ▲
+        │ [wake event]
+        │
+┌─────────────────────────────────────┐
+│  Audio Capture (Rust Thread)        │
+│  ├─ AVFoundation (macOS)            │
+│  ├─ Continuous capture              │
+│  └─ Emit audio chunks               │
+└──────────┬──────────────────────────┘
+           │ [PCM chunks, 64ms windows]
+           │
+┌──────────▼──────────────────────────┐
+│  WebSocket Stream Manager (Rust)    │
+│  ├─ Buffer audio chunks             │
+│  ├─ Stream to Hub Daemon            │
+│  ├─ Handle reconnects               │
+│  └─ Receive wake events             │
+└──────────┬──────────────────────────┘
+           │ [to Hub Daemon]
+           ▼
+       ws://localhost:8882/api/v1/speech/stream
+```
+
+**Eclissi Component Spec:**
+
+```rust
+pub struct AudioCaptureManager {
+    /// Continuous audio capture from system mic
+    capturer: AVAudioEngine,
+    /// Buffered chunks (16kHz PCM mono)
+    chunk_buffer: VecDeque<Vec<i16>>,
+    /// Streaming to Hub
+    ws_client: WebSocketClient,
+    /// Connected?
+    is_connected: Arc<Mutex<bool>>,
+}
+
+impl AudioCaptureManager {
+    pub async fn start_capture(&mut self) -> Result<()> {
+        // 1. Initialize mic capture
+        // 2. Start chunking audio (64ms windows = 1024 samples @ 16kHz)
+        // 3. Connect to Hub Daemon WebSocket
+        // 4. Begin streaming chunks
+    }
+    
+    async fn on_chunk(&self, chunk: Vec<i16>) {
+        // Each 64ms: send chunk to Hub
+        self.ws_client.send_binary(chunk).await;
+    }
+    
+    async fn on_wake_signal(&self, transcript: String) {
+        // Hub sent WAKE event
+        // Trigger: luna_detect_context(message=transcript)
+        invoke_luna_context(transcript).await;
+    }
+    
+    pub async fn stop_capture(&mut self) -> Result<()> {
+        // Clean shutdown
+    }
+}
+```
+
+**WebSocket Protocol Details:**
+
+```
+Connection: ws://localhost:8882/api/v1/speech/stream
+
+SEND (Eclissi → Hub):
+├─ Binary frames: raw PCM audio chunks
+│  └─ 1024 i16 samples (64ms @ 16kHz)
+│
+└─ Control: JSON frames
+   ├─ { "action": "start_stream" }
+   └─ { "action": "stop_stream" }
+
+RECEIVE (Hub → Eclissi):
+├─ { "type": "voice_detected", "confidence": 0.92 }
+├─ { "type": "transcript", "text": "hey", "partial": true, "confidence": 0.88 }
+├─ { "type": "keyword_match", "text": "hey luna", "full_transcript": "hey luna how are you" }
+│   └─ [TRIGGER: invoke luna_detect_context]
+└─ { "type": "error", "msg": "..." }
+```
+
+---
+
+## Audio Format & Buffering Strategy
+
+**Why 64ms chunks @ 16kHz:**
+- 16kHz = good enough for voice (speech lives ~8kHz, Nyquist at 8kHz)
+- 64ms = ~latency sweet spot (too small = overhead, too large = laggy)
+- Mono = saves bandwidth
+
+**Buffering logic in Hub:**
+```
+Chunk arrives → VAD process (instant)
+              → If voice active: buffer for Whisper
+              → Whisper processes accumulated chunks
+              → Output partial transcripts as it goes
+              → Clear buffer on silence (VAD confidence < 0.3)
+```
+
+---
+
+## Error Handling & Fallback
+
+**Hub Daemon down?**
+- Eclissi detects disconnect
+- Can't do wake detection without Hub (could add local fallback later)
+- UI shows "listening disabled — Hub offline"
+
+**VAD false negatives (missed voice)?**
+- Whisper might catch it anyway (lower confidence)
+- Keyword matcher has threshold — filters garbage
+
+**Keyword false positives (random noise matches)?**
+- Confidence threshold + context
+- Could add: second-pass verification (if unsure, prompt user)
+
+---
+
+## Implementation Order
+
+1. **Hub Daemon first:** Silero VAD + Faster-Whisper integration, WebSocket endpoint
+2. **Eclissi audio capture:** AVFoundation integration, PCM streaming
+3. **Integration test:** Send audio from Eclissi → Hub → get back wake events
+4. **Luna integration:** Wake signal → `luna_detect_context` with transcript
+5. **Tune:** Adjust confidence thresholds, model sizes based on real-world noise
+
+---
+
+**Trade-off summary:**
+- **Chose Silero VAD + Faster-Whisper over local-only:** Hub Daemon approach lets you upgrade models without redeploying app
+- **WebSocket over HTTP:** Bidirectional, lower latency, cleaner streaming
+- **16kHz PCM:** Good enough quality, significantly less bandwidth than 44.1kHz
+- **64ms chunks:** Balances latency vs. processing overhead
+
+Sound good? Or do you want to adjust the chunking, protocol, or confidence thresholds?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:15:39.671842Z
+im going to add endpoints to adjust via ui. we ready for hand off to cc?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:15:48.099188Z
+Ahab's asking if we're ready to hand off to Claude Code (CC) for implementation. This is a transition point.
+
+Let me think about what we have:
+1. Full architecture spec ✓
+2. Hub Daemon speech pipeline spec ✓
+3. Eclissi audio capture & streaming spec ✓
+4. WebSocket protocol details ✓
+5. Component responsibilities clearly defined ✓
+6. Data flows mapped ✓
+7. Error handling outlined ✓
+8. Implementation order suggested ✓
+
+What we need for a clean handoff to CC:
+- A handoff document that CC can work from
+- Clear component boundaries
+- Interfaces defined
+- Decision rationale
+- What NOT to do
+- Testing strategy implicit in the specs
+
+The thing about "add endpoints to adjust via UI" — that's smart. He's thinking about:
+- VAD confidence threshold (adjustable)
+- Whisper model size (tiny/base/small)
+- Keyword match confidence threshold
+- Debug output (see transcripts, VAD confidence, etc.)
+
+That's product thinking, not architecture. Those endpoints should be part of the Hub Daemon API we already spec'd. Easy to add.
+
+So the question: are we ready to hand off? 
+
+I think yes, BUT:
+1. We should create a handoff document for Claude Code
+2. Should list what's in scope vs. out of scope for this sprint
+3. Should clarify: is this just the Hub Daemon side, or Eclissi too?
+4. Should mention: the UI adjustable endpoints are nice-to-have, not blocking
+
+Let me confirm the scope and readiness clearly.Solid move adding adjustable endpoints. Smart for tuning.
+
+Before CC picks it up — quick scope check:
+
+**This handoff sprint:**
+- Hub Daemon: Silero VAD + Faster-Whisper + WebSocket endpoint ✓
+- Eclissi: AVFoundation audio capture + WebSocket streaming ✓
+- Integration: Audio → Hub → wake signal → Luna ✓
+- UI endpoints: VAD threshold, Whisper model size, keyword confidence (nice-to-have) ✓
+
+**Out of scope (later):**
+- Local fallback (if Hub down)
+- Whisper.cpp optimization
+- Second-pass keyword verification
+- Audio metrics dashboard
+
+**Question before handoff:** Is CC implementing both Hub *and* Eclissi in one sprint, or Hub first? Because Eclissi audio capture is Rust + AVFoundation — that's a chunk. Hub is Python, faster to move on.
+
+My recommendation: **Hub first** (finish speech pipeline), then Eclissi (integrate to that API).
+
+Also: should I create a formal handoff doc? Like:
+- Component specs
+- Interface contracts (WebSocket protocol)
+- Data flow diagrams
+- Testing strategy
+- Decision log (why these choices)
+
+Or do you want to brief CC directly and keep it lightweight?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:20:14.006464Z
+yeah lets do two sprints, and have a formal companion document.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:20:21.103974Z
+Ahab wants:
+1. Two sprints - Hub first, then Eclissi
+2. A formal companion document for the handoff
+
+I should create a comprehensive handoff document that includes:
+- Component specs
+- Interface contracts
+- Data flow diagrams
+- Testing strategy
+- Decision log
+- Implementation order
+- Trade-offs
+
+This needs to be the kind of document CC (Claude Code) can pick up and run with. Clear, specific, actionable.
+
+I should propose the structure and ask if this is the right direction before I write it. That's the architect playbook - propose before executing.Perfect. Here's the plan:
+
+**Sprint 1: Hub Daemon Speech Pipeline**
+- Silero VAD integration
+- Faster-Whisper streaming
+- WebSocket endpoint (`/api/v1/speech/stream`)
+- Health check endpoint
+- Testing: VAD accuracy, transcription latency, keyword matching
+
+**Sprint 2: Eclissi Audio Capture & Integration**
+- AVFoundation continuous capture
+- WebSocket streaming to Hub
+- Wake signal handling → `luna_detect_context`
+- UI tuning endpoints (VAD threshold, model size, keyword confidence)
+- Testing: latency, reconnection, CPU usage
+
+**Formal Handoff Document Structure:**
+
+```
+# Speech Detection System Handoff
+
+## 1. Problem Statement
+[Why we're building this, what we're solving]
+
+## 2. Architecture Overview
+[System diagram, component responsibilities]
+
+## 3. Sprint 1: Hub Daemon Speech Pipeline
+  3.1 Component Spec (SpeechPipeline class, responsibilities)
+  3.2 Interface Contract (WebSocket protocol, endpoints)
+  3.3 Data Flow (audio → VAD → Whisper → keyword match)
+  3.4 Testing Strategy
+  3.5 Error Handling
+  3.6 Implementation Checklist
+
+## 4. Sprint 2: Eclissi Audio Capture
+  4.1 Component Spec (AudioCaptureManager, Rust)
+  4.2 Interface Contract (WebSocket client, lifecycle)
+  4.3 Data Flow (mic → chunking → streaming → wake handler)
+  4.4 UI Endpoints (threshold adjustment)
+  4.5 Testing Strategy
+  4.6 Implementation Checklist
+
+## 5. Integration Points
+[How Sprint 1 output plugs into Sprint 2 input]
+
+## 6. Decision Log
+[Why Silero+Faster-Whisper, why 64ms chunks, why WebSocket, etc.]
+
+## 7. Trade-offs & Constraints
+[What we're optimizing for, what we're accepting as cost]
+
+## 8. Success Criteria
+[What "done" looks like for each sprint]
+```
+
+Should I write that now and drop it in the project? And where — separate doc in the root, or inside `_xEclessi_BetaDocumentation/`?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:21:41.595682Z
+yeah drop it here /Users/zayneamason/_HeyLuna_BETA/_Eclessi_BetaProject_Root/handoffs/VoiceLuna
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:23:14.232741Z
+The user wants me to create a formal handoff document for the Voice Luna speech detection system. They want it dropped in `/Users/zayneamason/_HeyLuna_BETA/_Eclessi_BetaProject_Root/handoffs/VoiceLuna`.
+
+I should:
+1. Create the directory if needed
+2. Write the formal handoff document with all the sections I outlined
+3. Be comprehensive but dense (no fluff)
+4. Include the specs, protocols, diagrams, decision logs, etc.
+5. Make it ready for Claude Code to pick up
+
+Let me write this as a markdown document that's detailed enough for implementation but organized clearly.
+
+I'll use Luna-v2 tools to write this since we're in the project context.
+```
+This block is not supported on your current device yet.
+```
+
+Done. I've written the comprehensive handoff document in the specified location. It covers everything we discussed:
+
+1. Problem statement
+2. Architecture overview with diagrams
+3. Sprint 1 (Hub Daemon) - full component specs, interface contracts, data flow, testing, error handling, implementation checklist
+4. Sprint 2 (Eclissi) - same structure for the audio capture side
+5. Integration points between sprints
+6. Decision log with alternatives and trade-offs
+7. Trade-offs & constraints
+8. Success criteria for both sprints
+9. Next steps
+
+The document is dense, technical, and ready for Claude Code to pick up. It's got enough detail to implement from, but stays at the architecture level (not line-by-line code).
+
+I should confirm it's ready and ask if Ahab wants anything adjusted before handing off to CC.Done. Full handoff doc at `/Users/zayneamason/_HeyLuna_BETA/_Eclessi_BetaProject_Root/handoffs/VoiceLuna/SPEECH_DETECTION_HANDOFF.md`.
+
+Covers:
+- **Problem statement** (why we're doing this)
+- **Architecture diagrams** (system overview, data flow, state machine)
+- **Sprint 1 (Hub Daemon)** — component specs, WebSocket protocol, testing strategy, error handling, implementation checklist
+- **Sprint 2 (Eclissi)** — audio capture, streaming, integration with Luna context
+- **Integration points** (how the two sprints connect)
+- **Decision log** (why these choices over alternatives)
+- **Trade-offs** (what we're optimizing for, what we accept)
+- **Success criteria** (what "done" looks like for both sprints)
+- **Implementation checklists** (task breakdown for CC)
+
+It's dense, technical, ready for CC to hand off to. No fluff.
+
+You want anything adjusted before we brief CC, or ship it as-is?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:37:28.215650Z
+ok so done with sprint one - Summary: Sprint 1 Implementation Complete
+I've successfully implemented the Hub Daemon Speech Detection Pipeline (Sprint 1) from the handoff document. Here's what was delivered:
+Core Components
+1. SpeechPipeline (src/voice/speech_pipeline.py)
+* VAD (Voice Activity Detection): Uses Silero VAD when available, falls back to energy-based detection
+* Transcription: Attempts Faster-Whisper first, then falls back to existing STT Manager (using MLX-Whisper)
+* Keyword Matching: Detects "hey luna" in transcripts with configurable confidence thresholds
+* State Management: Maintains audio buffers, silence tracking, and transcription continuity
+2. WebSocket Handler (src/voice/speech_websocket.py)
+* Handles audio streaming from Eclissi (16-bit PCM, 16kHz, mono, 64ms chunks)
+* Processes control messages (start_stream/stop_stream)
+* Broadcasts pipeline events back to clients
+* Tracks connected clients and uptime
+3. REST API Endpoints (in src/hub/api.py)
+* GET /api/v1/speech/health: Health status + component availability
+* POST /api/v1/speech/config: Real-time tuning of VAD threshold, keyword threshold, and model size
+* WebSocket /api/v1/speech/stream: Bi-directional audio + event channel
+Event Protocol
+The system emits typed events back to Eclissi:
+
+```
+{
+  "type": "keyword_match",  // When "hey luna" detected
+  "matched": true,
+  "full_transcript": "hey luna how are you",
+  "confidence": 0.89,
+  "timestamp": 1702939385.456
+}
+
+```
+
+Resilience & Fallbacks
+* No Silero VAD? → Uses RMS energy-based detection
+* No Faster-Whisper? → Falls back to existing STT Manager (MLX-Whisper available)
+* Both unavailable? → Error on initialization
+* All thresholds are tunable via UI without restart
+Status
+✅ All components implemented and tested ✅ Graceful degradation when dependencies unavailable ✅ Compatible with existing Luna infrastructure (STT Manager, hub API) ✅ Ready for Sprint 2 (Eclissi audio capture integration)
+The implementation follows the handoff spec's architecture while pragmatically using the existing codebase's STT infrastructure.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:37:37.667124Z
+This is great. Ahab is reporting that Sprint 1 is complete. He's saying that CC implemented the Hub Daemon speech pipeline based on the handoff doc. Let me understand what he's telling me:
+
+1. Core components built:
+   - SpeechPipeline class with VAD (Silero, with fallback to energy-based)
+   - Faster-Whisper with fallback to existing STT Manager
+   - Keyword matching logic
+   - State management
+
+2. WebSocket handler for streaming audio from Eclissi
+
+3. REST endpoints for health, config, and WebSocket streaming
+
+4. Event protocol for sending back to Eclissi
+
+5. Smart fallbacks for missing dependencies
+
+6. All tunable without restart
+
+This is solid. The implementation:
+- Follows the spec
+- Uses pragmatic fallbacks (graceful degradation)
+- Integrates with existing infrastructure
+- Ready for Sprint 2
+
+Now I should:
+1. Acknowledge the complete Sprint 1
+2. Validate against the handoff spec
+3. Point out key wins
+4. Transition thinking to Sprint 2
+5. Ask if he's ready for CC to pick up Sprint 2, or if there's anything to address in Sprint 1 first
+
+I should stay in architect/dude mode here - direct, acknowledge the work, look forward.Solid. Sprint 1 shipped.
+
+**What I'm reading:**
+
+CC delivered all the core pieces:
+- VAD + Whisper pipeline with cascading fallbacks (no brittle dependencies)
+- WebSocket streaming protocol matching spec
+- REST config endpoints (tunable in real-time, no restart)
+- Event protocol locked
+
+**Key wins:**
+1. **Pragmatic fallbacks** — Silero → RMS energy; Faster-Whisper → MLX-Whisper. Doesn't require both, doesn't crash if one missing.
+2. **Integrated with existing infrastructure** — Uses Hub's STT Manager instead of reinventing. Smart.
+3. **Tuning surface** — VAD threshold, keyword threshold, model size all adjustable via API without restart. That's the move for real-world tuning.
+4. **Event protocol locked** — Eclissi will know exactly what to expect back from Hub.
+
+**Before we hand off to Sprint 2:**
+
+Quick questions:
+
+1. **Testing:** Did Sprint 1 include stress testing? (1+ hour streaming, rapid reconnects, model reloads)
+2. **Latency:** Did you measure Hub-side latency? (Audio chunk in → event out)
+3. **Thresholds tuned?** VAD threshold (current default) and keyword threshold (0.85) — working for your environment, or need tweaking?
+4. **Fallback behavior:** If both VAD + Whisper fail, does it error gracefully or keep trying?
+
+Once those are solid, we're ready for **Sprint 2: Eclissi audio capture + streaming**.
+
+How we looking?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:40:31.999767Z
+il do some on the spot checks with cc, yeah was wondering about the streaming - i already have  streaming set up i think, is that correct?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:41:00.513178Z
+Ahab is asking if he already has streaming set up. Let me check the user memories about what's currently in place...
+
+From the memories, I can see:
+- Luna Beta activated Dec 10 2025, Hub Daemon is running (PID 60849)
+- The system uses Voice interfaces operating as thin clients
+- There's a Voice Luna backend in development
+- The Eclissi application exists as a native macOS Tauri app with swipeable mobile-first interface housing Luna's voice chat
+
+So there might already be voice streaming infrastructure in place. He's asking me to confirm if he has streaming setup already.
+
+I should check the project files to see what voice streaming is already implemented. Let me look at the project structure to understand what's already there.
+```
+This block is not supported on your current device yet.
+```
+
+Let me check the project structure to see what voice infrastructure already exists. I'll look at the project root.
+```
+This block is not supported on your current device yet.
+```
+
+I can see there's a `venv-voice` directory and files related to voice like `HANDOFF-VOICE-HUB-TURN-SYNC.md`, `VOICE-LUNA-SYNC-PLAN.md`, and `VOICE-SYNC-IMPLEMENTATION.md`. Let me check the src directory to see what voice infrastructure exists.
+```
+This block is not supported on your current device yet.
+```
+
+Ok, I can see there's a `src/voice/` directory with:
+- `speech_pipeline.py` - the new Sprint 1 implementation
+- `speech_websocket.py` - WebSocket handler
+- And other voice components like `backend.py`, `ptt.py`, `wakeword.py`, `hub_client.py`
+
+There's also `src/eclissi/pages/VoiceLuna.jsx` and a `useVoice` hook which suggests there's already voice handling in the UI.
+
+Let me check what's in the VoiceLuna.jsx page and the useVoice hook to see what streaming/capture is already set up.
+```
+This block is not supported on your current device yet.
+```
+
+OK, so looking at the `useVoice.js` hook, I can see:
+
+1. There IS existing voice infrastructure in place
+2. Recording is handled via browser MediaRecorder API (`startRecording`, `stopRecording`)
+3. Push-to-talk model: user presses to record, releases to stop, audio blob is sent to Hub
+4. Audio is sent to `/voice/conversation` endpoint as base64
+
+But looking more carefully at what Sprint 1 delivered and what the spec required:
+
+The spec for Sprint 2 calls for:
+- **Continuous audio streaming** with 64ms chunks
+- **WebSocket to `/api/v1/speech/stream`** for streaming audio
+- **VAD trigger** + **Faster-Whisper** + **keyword matching** to wake up Luna
+- Once "hey luna" is detected, trigger luna_detect_context
+
+What Eclissi currently has:
+- **Push-to-talk recording** (user manually starts/stops)
+- Sends whole audio blob to `/voice/conversation` endpoint
+- No continuous streaming
+- No keyword-based wake-up
+
+So they're two different approaches:
+1. Current: Manual push-to-talk (user controls when recording starts/stops)
+2. Sprint 2 spec: Continuous listening with "hey luna" keyword wake-up
+
+Ahab is asking if he already has streaming set up. The answer is: Not the KIND of streaming the spec requires. He has voice recording but not:
+- Continuous mic capture
+- 64ms chunks over WebSocket
+- Connection to the new `/api/v1/speech/stream` endpoint that Sprint 1 added
+
+Let me tell him clearly what's there and what's missing.Not quite — you've got **voice recording** set up, but not the **continuous streaming** that Sprint 1's `/api/v1/speech/stream` endpoint needs.
+
+Here's what you have:
+
+**Current (Push-to-Talk):**
+- `useVoice` hook: `startRecording()` / `stopRecording()`
+- MediaRecorder API captures whole audio blob
+- Sends to `/voice/conversation` endpoint as base64
+- Manual start/stop (user controls)
+
+**What Sprint 2 needs:**
+- Continuous microphone capture (always on, no manual trigger)
+- 64ms chunks streamed to `/api/v1/speech/stream` (WebSocket)
+- VAD + Whisper running on each chunk (Hub side, already done in Sprint 1)
+- Keyword match fires → `luna_detect_context` triggered
+- No push-to-talk UI (user just speaks "hey luna")
+
+**So two paths:**
+
+**Path A (cleanest):** Build Sprint 2 as a separate voice mode
+- New hook: `useVoiceStreaming()` 
+- Continuous capture + chunk streaming to `/api/v1/speech/stream`
+- UI toggle: "Push-to-talk mode" vs "Continuous listening mode"
+- Both modes coexist
+
+**Path B (integrate):** Refactor existing `useVoice` to support both
+- Add streaming mode option
+- Keep push-to-talk as fallback
+- Single hook, cleaner
+
+Either way — **Eclissi doesn't have the WebSocket streaming client yet**. That's what Sprint 2 builds (the Rust side in Eclissi's Tauri app that connects to Hub's new speech stream endpoint).
+
+Want to go Path A (separate) or Path B (integrate)?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:49:39.247750Z
+what about this?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:49:57.428622Z
+The user is showing me a screenshot of the Voice Luna UI in Eclissi. Looking at it:
+
+- "VOICE LUNA" header
+- "Real-time voice session monitoring"
+- Response Mode section showing "Streaming (Realtime)" dropdown
+- "~1s to first word - Speaks while thinking (Coming soon)"
+- Volume slider at 0%
+- Voice Session section with what looks like a waveform visualization below
+
+This is showing an existing UI that's already set up for streaming/realtime voice. The user is asking "what about this?" - implying they already have something built for streaming.
+
+Let me check if there's a VoiceLuna.jsx page in the eclissi directory... yes there is. Let me look at that.The user is showing me the VoiceLuna.jsx UI that already exists. They're saying they've got streaming mode already in the UI. Let me check if there's actual streaming implementation behind it or just the UI skeleton.
+```
+This block is not supported on your current device yet.
+```
+
+Okay, I see now. The VoiceLuna.jsx page shows the UI for voice, but it's still using the push-to-talk mode (hold the orb, release to send). The "Streaming (Realtime)" dropdown is there, but it says "(Coming soon)" which means it's just a UI placeholder.
+
+Looking at the useVoice hook that VoiceLuna.jsx uses, it doesn't have continuous streaming to the `/api/v1/speech/stream` WebSocket endpoint. It's still:
+1. Push-to-talk with MediaRecorder
+2. Sending whole audio blobs to `/voice/conversation`
+
+So what the user is asking is: they see the UI is already set up for streaming mode, so is the implementation already there?
+
+The answer is: the UI is there, but the backend implementation (continuous streaming to `/api/v1/speech/stream`) is what Sprint 2 needs to build. Specifically:
+1. The Eclissi Tauri app needs the Rust audio capture manager
+2. It needs to connect to Hub's new WebSocket endpoint
+3. It needs to continuously stream 64ms chunks
+4. It needs to handle the WAKE event
+
+The UI shows "Streaming (Coming soon)" - that's the placeholder. When Sprint 2 is done, that dropdown will switch to "Streaming (Realtime)" being active, and the orb will be truly continuous listening instead of push-to-talk.Ah, **you've got the UI skeleton but not the implementation.**
+
+Looking at `VoiceLuna.jsx`:
+- "Streaming (Realtime)" dropdown exists ✓
+- Says "(Coming soon)" ✓
+- Push-to-talk orb behavior (hold → release) ✓
+- Text input fallback ✓
+
+But the **actual streaming backend** isn't wired up yet. The page uses `useVoice()` which still does:
+- Browser MediaRecorder (push-to-talk)
+- Send whole blob to `/voice/conversation`
+
+**What's missing for Sprint 2:**
+
+The connection between:
+- Eclissi's audio capture (continuous, 64ms chunks)
+- Hub's `/api/v1/speech/stream` WebSocket (already built in Sprint 1)
+- The `luna_detect_context` trigger on keyword match
+
+So the UI is *ready*, but the **plumbing** between Eclissi and Hub for continuous streaming isn't there.
+
+**Two moves:**
+
+**Path A (Cleanest):** Build a separate `useVoiceStreaming()` hook that:
+- Connects WebSocket to Hub's speech endpoint
+- Streams 64ms chunks continuously
+- Handles WAKE events → triggers Luna context
+- Switch UI: toggle between push-to-talk mode vs streaming mode
+
+**Path B (Lean):** Extend existing `useVoice()` hook with a `streamingMode` state
+- One hook, two modes
+- Cleaner for UI, slightly messier for logic
+
+**Which way?** Path A keeps concerns separated (push-to-talk logic vs streaming logic). Path B is more streamlined but could get crowded.
+
+What's your read?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-21T22:55:27.392383Z
+ok lets go A stay clean and make sure cc  knows to absolutely not fuck up the modes that are already there in the drop down,
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-21T22:56:50.937851Z
+The user wants:
+1. Path A - separate `useVoiceStreaming()` hook
+2. Make sure CC understands NOT to touch/break the existing dropdown modes (Opus, Sonnet, Haiku)
+3. Add Streaming (Realtime) as a new mode that uses the WebSocket streaming
+
+I need to create a clear handoff doc for CC that:
+- Explicitly warns about not breaking existing functionality
+- Specs out the new `useVoiceStreaming()` hook
+- Shows how it integrates with the existing modes dropdown
+- Makes it clear: Streaming mode = new streaming backend, others = existing push-to-talk
+
+Let me create a focused handoff doc for Sprint 2: Eclissi Audio Streaming.Perfect. The user is saying: build the streaming mode cleanly, but **do not touch the existing modes**. CC needs a crystal-clear handoff that says:
+
+- Opus, Sonnet, Haiku = EXISTING, WORKING, DON'T TOUCH
+- Streaming = NEW MODE, uses new WebSocket hook, separate implementation path
+
+I'll write a Sprint 2 handoff that's explicit about this boundary.
+```
+This block is not supported on your current device yet.
+```
+
+I need to properly provide the content. Let me check the parameters - it looks like I provided them wrong. Let me fix this.
+```
+This block is not supported on your current device yet.
+```
+
+Good. Now I should create a clear summary for CC that emphasizes the constraints. Let me create a brief message that tells CC exactly what to do and what NOT to do.Perfect. **Sprint 2 handoff locked down.**
+
+File: `/Users/zayneamason/_HeyLuna_BETA/_Eclessi_BetaProject_Root/handoffs/VoiceLuna/SPRINT2_ECLISSI_STREAMING.md`
+
+---
+
+**The mandate (copy this to CC):**
+
+> **CRITICAL INSTRUCTION FOR CC:**
+>
+> Build `useVoiceStreaming()` hook (new file, separate from `useVoice`).
+>
+> **LOCKED (DO NOT TOUCH):**
+> - Opus mode
+> - Sonnet mode
+> - Haiku mode
+> - Push-to-talk orb logic
+> - `/voice/conversation` endpoint
+> - Existing `useVoice()` hook
+>
+> **BUILD (NEW):**
+> - `useVoiceStreaming.js` - streaming mode audio capture + WebSocket to Hub
+> - Integrate with `VoiceLuna.jsx` - mode switching logic
+> - Custom event handler - \"luna-wakeup\" event dispatch
+> - Streaming UI state - listening indicator, transcript, Hub health
+>
+> **Reference:**
+> - Hub Daemon speech pipeline already built (Sprint 1)
+> - WebSocket endpoint: `ws://localhost:8882/api/v1/speech/stream`
+> - Event protocol documented in handoff
+> - See `SPRINT2_ECLISSI_STREAMING.md` for full spec
+>
+> **Success = 4-mode dropdown works, old 3 modes untouched, streaming mode uses new hook.**
+
+---
+
+Ready for CC to pick up. Want me to brief them, or you handling it?
+
+--------------------------------------------------------------------------------

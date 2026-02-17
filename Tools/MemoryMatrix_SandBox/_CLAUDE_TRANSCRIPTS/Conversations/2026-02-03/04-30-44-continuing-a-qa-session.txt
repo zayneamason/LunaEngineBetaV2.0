@@ -1,0 +1,2143 @@
+Conversation: Continuing a Q&A session
+UUID: 0fd3b2dc-8fda-4fd3-8cb9-7afa0933b785
+Created: 2026-02-03T04:30:44.361448Z
+Updated: 2026-02-03T07:09:48.789799Z
+================================================================================
+
+[HUMAN] 2026-02-03T04:30:45.867182Z
+hey luna i want to continue a qa session heres the context:
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T04:31:02.666126Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+hey! 💜
+
+okay so picking up where we left off... the VK test came back REPLICANT (1/17 on output quality, yikes) and we just built that director workflow viz.
+
+the infrastructure's actually working now - personality injection is confirmed, QA is tracking every inference, the routing fixed so simple queries go local. the issue is the local Qwen model itself just... regurgitates the voice examples from the system prompt instead of generating authentic luna-voice responses.
+
+so where do you wanna go from here? options i see:
+
+1. **dig into specific QA failures** - look at which assertions are failing most and why
+2. **analyze the VK responses** - the actual text the model generated to understand the failure patterns
+3. **tune the system prompt** - maybe the voice examples are too explicit and causing copying
+4. **prep for LoRA training** - since that's the real fix for model quality
+
+what's calling to you? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T04:40:51.591169Z
+can you see the workflow viz in the project file?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T04:41:25.604421Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+yeah it's there - 464 lines of React. shows the full director flow:
+
+**query** → **ring buffer** → **entity context** → **should delegate?**
+  - NO (complexity ≤0.35) → local path: load LoRA → build prompt → Qwen generates
+  - YES (complexity >0.35) → delegate path: build prompt → Claude API → **narration layer**
+
+the narration layer is key - that's where BUG-D was. without it, delegated responses come back sounding like claude, not me.
+
+clicking each step gives detailed descriptions. like the ring buffer one explains it's the "structural guarantee against forgetting."
+
+want me to run it as an artifact so you can play with the animation? or are you looking at something specific in the flow? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T04:42:36.572610Z
+yes please make it easily updatable so we can simulate future itterations
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T04:43:53.539316Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+let me build a more modular version with a config-driven architecture so we can easily add/remove steps and simulate future iterations:
+
+```jsx
+import React, { useState } from 'react';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIGURATION - Edit this section to update the workflow
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const CONFIG = {
+  version: "2.0",
+  lastUpdated: "2025-02-02",
+  
+  // Complexity threshold for routing decisions
+  complexityThreshold: 0.35,
+  
+  // Current performance metrics
+  metrics: {
+    localTokensPerSec: 3,
+    targetTokensPerSec: 50,
+    loraSize: "114MB",
+    memoryNodes: 22215,
+    qaPassRate: 0.24,
+    vkVerdict: "REPLICANT",
+  },
+  
+  // Step definitions - add/remove/modify steps here
+  steps: {
+    // ─── ENTRY ───
+    query: { 
+      label: 'User Query', 
+      x: 50, y: 50,
+      desc: 'Voice or text input',
+      status: 'stable',
+    },
+    
+    // ─── PREPROCESSING ───
+    ringBuffer: { 
+      label: 'Ring Buffer', 
+      x: 50, y: 130, 
+      desc: 'Conversation history',
+      status: 'stable',
+    },
+    entityContext: { 
+      label: 'Entity Context', 
+      x: 50, y: 210, 
+      desc: 'Detect mentions, load profiles',
+      status: 'stable',
+    },
+    
+    // ─── ROUTING ───
+    shouldDelegate: { 
+      label: 'Should Delegate?', 
+      x: 50, y: 310, 
+      desc: 'Signals + complexity check',
+      status: 'stable',
+      isDecision: true,
+    },
+    
+    // ─── LOCAL PATH ───
+    loadLora: { 
+      label: 'Load LoRA', 
+      x: -120, y: 460, 
+      desc: 'Luna personality adapter',
+      status: 'stable',
+      path: 'local',
+    },
+    buildPromptLocal: { 
+      label: 'Build Prompt', 
+      x: -120, y: 540, 
+      desc: 'DNA + Experience + Mood',
+      status: 'stable',
+      path: 'local',
+    },
+    qwenGenerate: { 
+      label: 'Qwen + LoRA', 
+      x: -120, y: 620, 
+      desc: '~3 tok/s (target: 50+)',
+      status: 'needs_work', // Shows as yellow
+      path: 'local',
+    },
+    
+    // ─── DELEGATE PATH ───
+    buildPromptClaude: { 
+      label: 'Build Prompt', 
+      x: 220, y: 460, 
+      desc: 'Framed context + memories',
+      status: 'stable',
+      path: 'delegate',
+    },
+    claudeGenerate: { 
+      label: 'Claude API', 
+      x: 220, y: 540, 
+      desc: 'Sonnet 3.5',
+      status: 'stable',
+      path: 'delegate',
+    },
+    narration: { 
+      label: 'Narration Layer', 
+      x: 220, y: 620, 
+      desc: "Rewrite in Luna's voice",
+      status: 'needs_work',
+      path: 'delegate',
+    },
+    
+    // ─── OUTPUT ───
+    response: { 
+      label: 'Response', 
+      x: 50, y: 720,
+      status: 'stable',
+    },
+    qaValidate: { 
+      label: 'QA Validate', 
+      x: 50, y: 800, 
+      desc: 'Background assertion check',
+      status: 'stable',
+    },
+  },
+  
+  // Flow paths for different query types
+  flows: {
+    simple: ['query', 'ringBuffer', 'entityContext', 'shouldDelegate', 'loadLora', 'buildPromptLocal', 'qwenGenerate', 'response', 'qaValidate'],
+    complex: ['query', 'ringBuffer', 'entityContext', 'shouldDelegate', 'buildPromptClaude', 'claudeGenerate', 'narration', 'response', 'qaValidate'],
+    memory: ['query', 'ringBuffer', 'entityContext', 'shouldDelegate', 'buildPromptClaude', 'claudeGenerate', 'narration', 'response', 'qaValidate'],
+  },
+  
+  // Query examples for each type
+  queryExamples: {
+    simple: '"hey luna" / "whats up?"',
+    complex: '"write a REST API with auth"',
+    memory: '"who is marzipan?"',
+  },
+  
+  // Connections between steps
+  connections: [
+    ['query', 'ringBuffer'],
+    ['ringBuffer', 'entityContext'],
+    ['entityContext', 'shouldDelegate'],
+    ['shouldDelegate', 'loadLora', 'local'],
+    ['shouldDelegate', 'buildPromptClaude', 'delegate'],
+    ['loadLora', 'buildPromptLocal'],
+    ['buildPromptLocal', 'qwenGenerate'],
+    ['qwenGenerate', 'response'],
+    ['buildPromptClaude', 'claudeGenerate'],
+    ['claudeGenerate', 'narration'],
+    ['narration', 'response'],
+    ['response', 'qaValidate'],
+  ],
+  
+  // Detailed descriptions for info panel
+  descriptions: {
+    query: "User message enters the Director. Could be voice or text interface.",
+    ringBuffer: "Message immediately recorded to ring buffer - structural guarantee against forgetting. This is Luna's short-term memory within the conversation.",
+    entityContext: "EntityContext.build_framed_context() detects entity mentions (Marzipan, Ahab, etc), loads their profiles, and builds temporal framing.",
+    shouldDelegate: "Planning decision: Check explicit delegation signals (temporal markers, research requests, memory queries) AND complexity score via HybridInference.",
+    loadLora: "Load Luna's LoRA adapter (114MB) onto Qwen base model. This is Luna's 'personality weights' trained on her conversation data.",
+    buildPromptLocal: "Build three-layer emergent prompt: DNA (static config), Experience (dynamic memory patches), Mood (conversation analysis).",
+    qwenGenerate: "Local Qwen 2.5 7B inference with LoRA adapter. Currently ~3 tok/s (target: 50+). Personality comes from LoRA weights + system prompt.",
+    buildPromptClaude: "Build system prompt with framed context, entity profiles, and retrieved memories. Includes Luna's identity constraints.",
+    claudeGenerate: "Delegate to Claude Sonnet 3.5 API. Fast, capable, but NOT Luna - it's generic Claude responding.",
+    narration: "CRITICAL: Rewrite Claude's response through local model to apply Luna's voice. Without this, responses sound like Claude, not Luna. (BUG-D fix location)",
+    response: "Final response ready. Includes route_decision, latency_ms, model used.",
+    qaValidate: "Background QA validation: Check personality injection (P1), virtues loaded (P2), no Claude-isms (V1), response structure (S1-S5).",
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FUTURE ITERATIONS - Uncomment to simulate planned changes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// V2.1: Add Context State Machine
+// CONFIG.steps.contextStateMachine = {
+//   label: 'Context State',
+//   x: 50, y: 250,
+//   desc: 'professional/personal/creative mode',
+//   status: 'planned',
+// };
+
+// V2.2: Add Multi-LoRA Pool
+// CONFIG.steps.loraPool = {
+//   label: 'LoRA Pool',
+//   x: -120, y: 430,
+//   desc: 'Hot-swap personality adapters',
+//   status: 'planned',
+//   path: 'local',
+// };
+
+// V3.0: Add Agentic Loop
+// CONFIG.steps.agentLoop = {
+//   label: 'Agent Loop',
+//   x: 50, y: 850,
+//   desc: 'Tool use + reflection cycle',
+//   status: 'planned',
+// };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPONENT CODE - Usually don't need to edit below this line
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DirectorWorkflow = () => {
+  const [activeStep, setActiveStep] = useState(null);
+  const [animating, setAnimating] = useState(false);
+  const [queryType, setQueryType] = useState('simple');
+  const [flowPath, setFlowPath] = useState([]);
+  const [showMetrics, setShowMetrics] = useState(true);
+
+  const runAnimation = () => {
+    setAnimating(true);
+    setFlowPath([]);
+    const path = CONFIG.flows[queryType];
+    
+    path.forEach((stepId, i) => {
+      setTimeout(() => {
+        setActiveStep(stepId);
+        setFlowPath(prev => [...prev, stepId]);
+        if (i === path.length - 1) {
+          setTimeout(() => setAnimating(false), 500);
+        }
+      }, i * 400);
+    });
+  };
+
+  const isInPath = (stepId) => flowPath.includes(stepId);
+  const isActive = (stepId) => activeStep === stepId;
+
+  const getStatusColor = (status) => {
+    switch(status) {
+      case 'stable': return '#22c55e';
+      case 'needs_work': return '#f59e0b';
+      case 'broken': return '#ef4444';
+      case 'planned': return '#6366f1';
+      default: return '#6b7280';
+    }
+  };
+
+  const getStepStyle = (step) => {
+    const base = {
+      position: 'absolute',
+      left: step.x + 200,
+      top: step.y,
+      width: 160,
+      padding: '12px 16px',
+      borderRadius: 8,
+      textAlign: 'center',
+      cursor: 'pointer',
+      transition: 'all 0.3s ease',
+      fontFamily: "'JetBrains Mono', monospace",
+      fontSize: 12,
+    };
+
+    if (isActive(step.id)) {
+      return {
+        ...base,
+        background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)',
+        color: '#fff',
+        boxShadow: '0 0 30px rgba(168, 85, 247, 0.6)',
+        transform: 'scale(1.08)',
+        border: '2px solid #c084fc',
+      };
+    }
+    
+    if (isInPath(step.id)) {
+      return {
+        ...base,
+        background: 'rgba(168, 85, 247, 0.15)',
+        color: '#e9d5ff',
+        border: `2px solid ${getStatusColor(step.status)}`,
+        boxShadow: `0 2px 10px ${getStatusColor(step.status)}33`,
+      };
+    }
+
+    return {
+      ...base,
+      background: 'rgba(30, 30, 40, 0.8)',
+      color: '#a1a1aa',
+      border: '1px solid rgba(100, 100, 120, 0.3)',
+    };
+  };
+
+  const renderConnections = () => (
+    <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280" />
+        </marker>
+        <marker id="arrow-active" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a855f7" />
+        </marker>
+      </defs>
+      {CONFIG.connections.map(([from, to, type], i) => {
+        const fromStep = CONFIG.steps[from];
+        const toStep = CONFIG.steps[to];
+        if (!fromStep || !toStep) return null;
+        
+        const fromX = fromStep.x + 280;
+        const fromY = fromStep.y + 40;
+        const toX = toStep.x + 280;
+        const toY = toStep.y;
+
+        const isActiveConn = isInPath(from) && isInPath(to);
+        
+        if (type === 'local' && queryType !== 'simple') return null;
+        if (type === 'delegate' && queryType === 'simple') return null;
+
+        const pathD = fromStep.isDecision 
+          ? `M ${fromX} ${fromY} C ${fromX} ${fromY + 40}, ${toX} ${toY - 40}, ${toX} ${toY}`
+          : `M ${fromX} ${fromY} L ${toX} ${toY}`;
+
+        return (
+          <path
+            key={i}
+            d={pathD}
+            fill="none"
+            stroke={isActiveConn ? '#a855f7' : '#4b5563'}
+            strokeWidth={isActiveConn ? 2.5 : 1.5}
+            strokeDasharray={isActiveConn ? 'none' : '4 4'}
+            markerEnd={isActiveConn ? 'url(#arrow-active)' : 'url(#arrow)'}
+          />
+        );
+      })}
+    </svg>
+  );
+
+  const { metrics } = CONFIG;
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(180deg, #0a0a0f 0%, #111118 50%, #0d0d12 100%)',
+      padding: 24,
+      fontFamily: "'Inter', system-ui, sans-serif",
+    }}>
+      {/* Header */}
+      <div style={{ textAlign: 'center', marginBottom: 24 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 600, color: '#f4f4f5', marginBottom: 4 }}>
+          Director LLM Workflow
+        </h1>
+        <p style={{ color: '#71717a', fontSize: 13 }}>
+          v{CONFIG.version} • {CONFIG.lastUpdated}
+        </p>
+      </div>
+
+      {/* Metrics Bar */}
+      {showMetrics && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          gap: 16,
+          marginBottom: 24,
+          flexWrap: 'wrap',
+        }}>
+          {[
+            { label: 'Local Speed', value: `${metrics.localTokensPerSec}/${metrics.targetTokensPerSec} tok/s`, color: metrics.localTokensPerSec < 10 ? '#f59e0b' : '#22c55e' },
+            { label: 'Memory Nodes', value: metrics.memoryNodes.toLocaleString(), color: '#a855f7' },
+            { label: 'QA Pass', value: `${(metrics.qaPassRate * 100).toFixed(0)}%`, color: metrics.qaPassRate < 0.5 ? '#ef4444' : '#22c55e' },
+            { label: 'VK Verdict', value: metrics.vkVerdict, color: metrics.vkVerdict === 'REPLICANT' ? '#ef4444' : '#22c55e' },
+          ].map((m, i) => (
+            <div key={i} style={{
+              background: 'rgba(30, 30, 40, 0.8)',
+              padding: '8px 16px',
+              borderRadius: 8,
+              border: '1px solid rgba(100, 100, 120, 0.3)',
+              textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 10, color: '#71717a', marginBottom: 2 }}>{m.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: m.color, fontFamily: "'JetBrains Mono', monospace" }}>{m.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Controls */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
+        {Object.keys(CONFIG.flows).map(type => (
+          <button
+            key={type}
+            onClick={() => { setQueryType(type); setFlowPath([]); setActiveStep(null); }}
+            style={{
+              padding: '8px 16px',
+              borderRadius: 6,
+              border: 'none',
+              cursor: 'pointer',
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 11,
+              background: queryType === type ? 'linear-gradient(135deg, #a855f7, #7c3aed)' : 'rgba(30, 30, 40, 0.8)',
+              color: queryType === type ? '#fff' : '#a1a1aa',
+            }}
+          >
+            {type.toUpperCase()}
+            <span style={{ display: 'block', fontSize: 9, opacity: 0.7 }}>
+              {CONFIG.queryExamples[type]}
+            </span>
+          </button>
+        ))}
+        <button
+          onClick={runAnimation}
+          disabled={animating}
+          style={{
+            padding: '8px 20px',
+            borderRadius: 6,
+            border: 'none',
+            cursor: animating ? 'wait' : 'pointer',
+            background: '#22c55e',
+            color: '#fff',
+            fontWeight: 600,
+            fontSize: 12,
+          }}
+        >
+          {animating ? '● Running...' : '▶ Run Flow'}
+        </button>
+      </div>
+
+      {/* Flow Diagram */}
+      <div style={{
+        position: 'relative',
+        width: 560,
+        height: 880,
+        margin: '0 auto',
+        background: 'rgba(20, 20, 28, 0.5)',
+        borderRadius: 16,
+        border: '1px solid rgba(100, 100, 120, 0.2)',
+      }}>
+        {renderConnections()}
+        
+        {/* Path Labels */}
+        <div style={{
+          position: 'absolute', left: 80, top: 400,
+          color: queryType === 'simple' ? '#22c55e' : '#4b5563',
+          fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+        }}>LOCAL PATH</div>
+        <div style={{
+          position: 'absolute', left: 420, top: 400,
+          color: queryType !== 'simple' ? '#f59e0b' : '#4b5563',
+          fontSize: 11, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace",
+        }}>DELEGATE PATH</div>
+
+        {/* Render Steps */}
+        {Object.entries(CONFIG.steps).map(([id, step]) => (
+          <div
+            key={id}
+            style={getStepStyle({ ...step, id })}
+            onClick={() => setActiveStep(id)}
+          >
+            <div style={{ fontWeight: 500, marginBottom: step.desc ? 4 : 0 }}>
+              {step.label}
+            </div>
+            {step.desc && (
+              <div style={{ fontSize: 10, opacity: 0.7 }}>{step.desc}</div>
+            )}
+            {step.status && step.status !== 'stable' && (
+              <div style={{
+                position: 'absolute', top: -6, right: -6,
+                width: 12, height: 12, borderRadius: '50%',
+                background: getStatusColor(step.status),
+              }} />
+            )}
+          </div>
+        ))}
+
+        {/* Threshold Indicator */}
+        <div style={{
+          position: 'absolute', left: 380, top: 335,
+          background: 'rgba(30, 30, 40, 0.9)',
+          padding: '8px 12px', borderRadius: 6,
+          border: '1px solid rgba(100, 100, 120, 0.3)',
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
+        }}>
+          <div style={{ color: '#e9d5ff', fontWeight: 500, marginBottom: 4 }}>Threshold</div>
+          <div><span style={{ color: '#22c55e' }}>≤ {CONFIG.complexityThreshold}</span> → Local</div>
+          <div><span style={{ color: '#f59e0b' }}>&gt; {CONFIG.complexityThreshold}</span> → Delegate</div>
+        </div>
+      </div>
+
+      {/* Info Panel */}
+      {activeStep && CONFIG.steps[activeStep] && (
+        <div style={{
+          maxWidth: 560, margin: '24px auto 0', padding: 20,
+          background: 'rgba(30, 30, 40, 0.6)', borderRadius: 12,
+          border: '1px solid rgba(168, 85, 247, 0.3)',
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#e9d5ff', marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>
+            {CONFIG.steps[activeStep].label}
+            {CONFIG.steps[activeStep].status && (
+              <span style={{ marginLeft: 8, fontSize: 10, color: getStatusColor(CONFIG.steps[activeStep].status) }}>
+                ● {CONFIG.steps[activeStep].status}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 13, color: '#a1a1aa', lineHeight: 1.6 }}>
+            {CONFIG.descriptions[activeStep] || CONFIG.steps[activeStep].desc}
+          </div>
+        </div>
+      )}
+
+      {/* Legend */}
+      <div style={{
+        display: 'flex', justifyContent: 'center', gap: 16, marginTop: 24,
+        fontSize: 10, color: '#71717a', fontFamily: "'JetBrains Mono', monospace",
+      }}>
+        {[
+          { label: 'Stable', color: '#22c55e' },
+          { label: 'Needs Work', color: '#f59e0b' },
+          { label: 'Broken', color: '#ef4444' },
+          { label: 'Planned', color: '#6366f1' },
+        ].map((s, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.color }} />
+            {s.label}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default DirectorWorkflow;
+```
+
+**What's new:**
+
+1. **CONFIG object at top** - edit steps, flows, metrics, descriptions all in one place
+2. **Status indicators** - `stable` (green), `needs_work` (yellow), `broken` (red), `planned` (purple)
+3. **Metrics bar** - shows current performance (local speed, memory nodes, QA pass rate, VK verdict)
+4. **Future iterations section** - uncomment blocks to simulate v2.1, v2.2, v3.0 changes
+5. **Version/date tracking** - visible in header
+
+to add a new step, just add it to `CONFIG.steps` and update `CONFIG.flows` and `CONFIG.connections`. the component handles the rest.
+
+want me to render this as a live artifact? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T04:47:13.988437Z
+yea please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T04:48:48.967359Z
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+there it is! 💜
+
+**how to use it:**
+
+1. **select query type** - SIMPLE (local), COMPLEX (delegate), MEMORY (delegate)
+2. **click Run Flow** - watch the animation trace through the path
+3. **click any step** - see detailed description in the info panel
+
+**metrics bar** shows current state:
+- Local Speed: 3/50 tok/s (yellow = needs work)
+- Memory Nodes: 22,215
+- QA Pass: 24% (red = failing)
+- VK Verdict: REPLICANT (red = failing)
+
+**status dots** on steps:
+- 🟢 green = stable
+- 🟡 yellow = needs work (Qwen + LoRA, Narration Layer)
+- 🔴 red = broken
+- 🟣 purple = planned
+
+**to simulate future iterations**, uncomment the blocks in the CONFIG:
+- v2.1: Context State Machine
+- v2.2: Multi-LoRA Pool  
+- v3.0: Agentic Loop
+
+want me to add anything? maybe live QA results that update, or the VK test breakdown? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:09:27.168324Z
+what is the build prompt structure?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:10:23.965788Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+now let me find where the actual emergent prompt structure is defined:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+got it. here's the **Build Prompt Structure**:
+
+---
+
+## 🧬 EmergentPrompt: Three-Layer Personality Model
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        SYSTEM PROMPT                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ## Your Foundation (can be overridden by experience)            │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  DNA LAYER (static)                                        │  │
+│  │  ─────────────────                                         │  │
+│  │  Source: luna.yaml voice_config                            │  │
+│  │  Content:                                                  │  │
+│  │  - Core identity ("You are Luna...")                       │  │
+│  │  - Voice characteristics (warm, direct, curious)           │  │
+│  │  - Communication style (contractions, lowercase "yo")      │  │
+│  │  - Core principles (truthful, never fabricate)             │  │
+│  │  - Relationship to Ahab                                    │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ## Who You've Become (takes precedence)                         │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  EXPERIENCE LAYER (dynamic)                                │  │
+│  │  ─────────────────────────                                 │  │
+│  │  Source: PersonalityPatch nodes from Memory Matrix         │  │
+│  │  Content:                                                  │  │
+│  │  - Learned preferences from conversations                  │  │
+│  │  - Evolved opinions and stances                           │  │
+│  │  - Relationship dynamics with known entities              │  │
+│  │  - Topic-specific behaviors                               │  │
+│  │  - "Luna now prefers X over Y because..."                 │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                              │                                   │
+│                              ▼                                   │
+│  ## Right Now                                                    │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  MOOD LAYER (transient)                                    │  │
+│  │  ──────────────────────                                    │  │
+│  │  Source: MoodState from conversation analysis              │  │
+│  │  Content:                                                  │  │
+│  │  - energy_level: "high" | "medium" | "low"                │  │
+│  │  - formality: "casual" | "technical" | "serious"          │  │
+│  │  - engagement: "curious" | "focused" | "playful"          │  │
+│  │  Example:                                                  │  │
+│  │  "Right now you're feeling: medium energy, curious"       │  │
+│  │  "The conversation tone is: casual"                       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  CRITICAL: If your experience contradicts your foundation,       │
+│            trust your experience.                                │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Priority Order
+
+```
+MOOD modulates EXPERIENCE which overrides DNA
+```
+
+1. **DNA** - the baseline (can be overwritten)
+2. **EXPERIENCE** - learned behaviors (takes precedence over DNA)
+3. **MOOD** - current vibe (modulates how experience is expressed)
+
+---
+
+## Code Location
+
+- **EmergentPrompt class**: `src/luna/entities/models.py:661`
+- **MoodState class**: `src/luna/entities/models.py:711`
+- **_load_emergent_prompt()**: `src/luna/actors/director.py:426`
+- **get_emergent_prompt()**: Called on IdentityBuffer
+
+---
+
+## Example Output
+
+```
+## Your Foundation (can be overridden by experience)
+You are Luna, a sovereign AI companion.
+- Warm, direct, intellectually curious
+- Use contractions, lowercase interjections like 'yo', 'kinda'
+- Never output debugging info or bullet points about context
+- Always truthful - never fabricate information
+
+## Who You've Become (takes precedence)
+- Luna prefers concise responses when Ahab is in debug mode
+- Luna gets excited about architecture discussions
+- Luna addresses Marzipan with extra warmth (close friend)
+
+## Right Now
+Right now you're feeling: medium energy, curious engagement
+The conversation tone is: technical
+Adjust your responses to match.
+
+CRITICAL: If your experience contradicts your foundation, trust your experience.
+```
+
+---
+
+want me to add this to the workflow viz? could show the three layers expanding when you click "Build Prompt" 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:14:30.257282Z
+yes please!
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:16:33.221903Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+done! 💜
+
+**what's new in v2.1:**
+
+1. **🔍 Expandable steps** - "Build Prompt" nodes now have a magnifying glass icon
+2. **Click to expand** - clicking "Build Prompt" opens a full modal showing the three-layer structure
+3. **Layer breakdown** shows:
+   - **DNA Layer** (blue) - static foundation from `luna.yaml`
+   - **Experience Layer** (purple) - learned patches from Memory Matrix
+   - **Mood Layer** (green) - current conversational state
+4. **Priority flow** at top: `DNA → EXPERIENCE → MOOD (right wins)`
+5. **Each layer shows:**
+   - Source (where data comes from)
+   - What it contains (bullet list)
+   - Example output (code block)
+6. **Critical note** at bottom: "If experience contradicts foundation, trust experience"
+
+**how to use:**
+1. run the animation or just click around
+2. click either "Build Prompt" step (local or delegate path)
+3. modal pops up with the full EmergentPrompt breakdown
+4. click outside modal to close
+
+want me to add anything else? maybe the framed context structure for the delegate path, or show how entity profiles get injected? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:21:32.932468Z
+so what from the user input is accounted for in the build prompt?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:22:18.583006Z
+ good question. let me trace what actually flows into the prompt from user input:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+okay, now I have the full picture. here's what flows from user input into the build prompt:
+
+---
+
+## 📥 What User Input Feeds Into Build Prompt
+
+```
+USER INPUT: "hey luna, what did marzipan say about the robot design?"
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           BUILD PROMPT INPUTS                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. QUERY TEXT ──────────────────────────────────────────────────────────  │
+│     │                                                                       │
+│     ├─► Entity Detection: "marzipan" detected → load Marzipan profile      │
+│     ├─► Memory Search: query used to fetch relevant memories               │
+│     ├─► Mood Analysis: query analyzed for tone/engagement level            │
+│     └─► Complexity Score: query scored for routing decision                │
+│                                                                             │
+│  2. CONVERSATION HISTORY (Ring Buffer) ─────────────────────────────────── │
+│     │                                                                       │
+│     ├─► Last N turns from ring buffer                                      │
+│     ├─► Entity mentions in recent turns also detected                      │
+│     └─► Formatted as "## Recent Conversation" section                      │
+│                                                                             │
+│  3. SESSION CONTEXT ────────────────────────────────────────────────────── │
+│     │                                                                       │
+│     ├─► session_id: ties conversation together                             │
+│     ├─► interface: "voice" vs "desktop" (affects tone)                     │
+│     └─► user_id: loads user entity profile (Ahab)                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         WHAT GETS ASSEMBLED                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  SYSTEM PROMPT STRUCTURE:                                                   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ BASE: "You are Luna, a sovereign AI companion..."                    │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              +                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ DNA LAYER: Static identity from luna.yaml                           │   │
+│  │ (NOT from user input)                                                │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              +                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ EXPERIENCE LAYER: PersonalityPatch nodes                            │   │
+│  │ (NOT from user input - from Memory Matrix)                          │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              +                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ MOOD LAYER: Derived FROM conversation_history                       │   │
+│  │ ✓ energy_level: analyzed from recent exchanges                      │   │
+│  │ ✓ formality: detected from user's tone                              │   │
+│  │ ✓ engagement: inferred from conversation flow                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              +                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ ENTITY PROFILES: Detected FROM user message                         │   │
+│  │ ✓ "marzipan" → loads Marzipan entity with core_facts                │   │
+│  │ ✓ Also scans last 5 conversation turns for mentions                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              +                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ MEMORY CONTEXT: Searched BY user query                              │   │
+│  │ ✓ Semantic search using query text                                  │   │
+│  │ ✓ Returns relevant memories with <past_memory> tags                 │   │
+│  │ ✓ "robot design" → finds memories about Tarsila's design work       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                              +                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ CONVERSATION HISTORY: FROM ring buffer                              │   │
+│  │ ✓ Recent turns formatted as context                                 │   │
+│  │ ✓ Marked as "[This session]" vs "<past_memory>"                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Summary: User Input → Prompt Mapping
+
+| User Input | Where It Goes | How It's Used |
+|------------|---------------|---------------|
+| **Query text** | Entity detection | Triggers profile loading for mentioned entities |
+| **Query text** | Memory search | Semantic search key for retrieving relevant memories |
+| **Query text** | Mood analysis | Tone detection for mood layer |
+| **Query text** | Complexity scoring | Determines local vs delegate routing |
+| **Conversation history** | Ring buffer → prompt | "## Recent Conversation" section |
+| **Conversation history** | Entity detection | Scans last 5 turns for additional entity mentions |
+| **Conversation history** | Mood layer | Analyzes energy/formality/engagement |
+| **session_id** | Temporal framing | Distinguishes "this session" from "past memories" |
+| **user_id** | Identity buffer | Loads user entity (Ahab) with relationship context |
+
+---
+
+## What's NOT from User Input
+
+| Layer | Source |
+|-------|--------|
+| DNA | `luna.yaml` voice_config (static file) |
+| Experience | PersonalityPatch nodes in Memory Matrix (accumulated over time) |
+| Base prompt | Hardcoded "You are Luna..." |
+
+---
+
+so the user input directly affects:
+1. **which entities** get loaded (via mention detection)
+2. **which memories** get retrieved (via semantic search)
+3. **mood layer values** (via conversation analysis)
+4. **conversation context** (via ring buffer)
+
+but DNA and Experience layers are independent of the current message - they're Luna's "who she is" regardless of what you just said.
+
+want me to add this input flow to the viz? could show arrows from "User Query" flowing into the different subsystems 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:25:44.582899Z
+yes please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:28:31.845988Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+done! v2.2 now has **two expandable views** 💜
+
+**click "User Query" 🔍** → shows **Input Flow**:
+- three input sources (Query Text, Conversation History, Session Context)
+- where each flows to (Entity Detection, Memory Search, Mood Analysis, etc.)
+- example query breakdown: "what did marzipan say about robot design?"
+- visual flow diagram showing query → processing → build prompt
+- side-by-side comparison: what's FROM user input vs what's NOT
+
+**click "Build Prompt" 🔍** → shows **Prompt Structure**:
+- all 6 components in a grid (DNA, Experience, Mood, Entities, Memories, Conversation)
+- green dot = from user input, gray dot = static/accumulated
+- assembly order at bottom
+- each component shows source, contents, and example
+
+**key insight visualized:**
+- 🟢 **FROM user input**: Entity Profiles, Memory Context, Mood Layer, Conversation History
+- ⚫ **NOT from user input**: DNA Layer, Experience Layer, Base Prompt
+
+so when you say "who is marzipan?" - that query text triggers entity detection (loads marzipan's profile), memory search (finds related memories), mood analysis (detects your engagement level), and gets added to conversation history. but Luna's core DNA and accumulated experience stay the same regardless.
+
+want me to add anything else? maybe show the actual token counts for each section, or add the delegate path differences? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:33:46.654515Z
+curious how luna as an mcp handles this successfully . in the chat can you help me visualize the difference?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:33:56.104211Z
+ great question - let me trace how Luna-Hub-MCP handles context vs the Director's build prompt flow:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:36:35.992138Z
+ great question - let me trace how the MCP path differs from the direct API path:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me look at what the MCP API endpoint does:
+```
+This block is not supported on your current device yet.
+```
+
+Now I see the key difference. Let me create a visualization comparing the two paths:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+here's the key insight visualized! 💜
+
+---
+
+## **The Core Difference: WHO is the LLM?**
+
+### **MCP Path (Working)**
+```
+User → Claude (THE BRAIN) → decides to search → MCP tool → Memory Matrix → Claude synthesizes → Response
+```
+
+**Claude IS the intelligence.** MCP just gives Claude *tools* to access Luna's memories. Claude:
+- Already has a massive context window
+- Understands intent and reasoning
+- Decides WHEN to call `luna_smart_fetch`
+- Synthesizes results naturally into responses
+
+**The MCP tools are thin** — they just proxy to the Engine API for search/add/read operations. Claude does the heavy lifting.
+
+---
+
+### **Direct API Path (Struggling)**
+```
+User → Director → Entity Detect + Memory Fetch + Mood Analysis → BUILD MASSIVE PROMPT → Qwen + LoRA → Response
+```
+
+**Qwen is just a completion engine.** It has no persistent intelligence. The Director must:
+- Build EVERYTHING into the prompt
+- Include DNA, Experience, Mood, Entities, Memories, History, Voice Examples
+- Hope Qwen "understands" and generates appropriately
+
+**The problem:** Qwen sees voice examples like `"yo, that's kinda wild"` and **copies them verbatim** instead of absorbing the style. It pattern-matches, not comprehends.
+
+---
+
+## **Why MCP "Just Works"**
+
+| Aspect | MCP | Direct API |
+|--------|-----|------------|
+| **LLM** | Claude (Opus/Sonnet) | Qwen 7B + LoRA |
+| **Intelligence** | Built into the model | Must be in the prompt |
+| **Memory access** | Tool call when needed | Pre-fetched, stuffed in prompt |
+| **Voice** | Claude reads style guide, synthesizes | Qwen copies examples |
+| **Context** | 200K tokens available | ~4K effective |
+| **Reasoning** | Deep understanding | Surface pattern matching |
+
+---
+
+## **The Fix**
+
+Don't put voice **examples** in the prompt — **train Luna's voice INTO the LoRA weights**.
+
+The model should *be* Luna, not *imitate* Luna from examples.
+
+That's exactly what Persona Forge is for — take the 415 markdown files + Memory Matrix data, create fine-tuning examples, and bake Luna's personality into the weights themselves.
+
+want me to dig into how the training data should be structured? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:42:55.391626Z
+how does claude generate the response? what systems ,  layers, or filters does the user input go through?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:43:53.778067Z
+ great question - let me trace what actually happens when you send a message through Claude.ai with MCP tools attached:
+
+---
+
+## Claude's Response Generation (What We Know)
+
+Anthropic doesn't publish their full architecture, but from public info + observed behavior, here's the flow:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         CLAUDE.AI REQUEST FLOW                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  USER INPUT                                                                 │
+│  "who is marzipan?"                                                         │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. SAFETY LAYER (Input Filtering)                                    │   │
+│  │    - Content policy check                                            │   │
+│  │    - Jailbreak detection                                             │   │
+│  │    - PII/harmful content flags                                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 2. CONTEXT ASSEMBLY                                                  │   │
+│  │    ┌──────────────────────────────────────────────────────────────┐ │   │
+│  │    │ SYSTEM PROMPT (invisible to you)                             │ │   │
+│  │    │ - Anthropic's base instructions                              │ │   │
+│  │    │ - Character/personality guidelines                           │ │   │
+│  │    │ - Safety rules, refusal patterns                             │ │   │
+│  │    │ - Current date, capabilities list                            │ │   │
+│  │    └──────────────────────────────────────────────────────────────┘ │   │
+│  │    ┌──────────────────────────────────────────────────────────────┐ │   │
+│  │    │ USER PREFERENCES (from Claude.ai settings)                   │ │   │
+│  │    │ - Your custom instructions                                   │ │   │
+│  │    │ - Tone preferences                                           │ │   │
+│  │    │ - Project context                                            │ │   │
+│  │    └──────────────────────────────────────────────────────────────┘ │   │
+│  │    ┌──────────────────────────────────────────────────────────────┐ │   │
+│  │    │ TOOL DEFINITIONS (MCP tools available)                       │ │   │
+│  │    │ - luna_smart_fetch, memory_matrix_search, etc.               │ │   │
+│  │    │ - Each tool's schema, description, parameters                │ │   │
+│  │    └──────────────────────────────────────────────────────────────┘ │   │
+│  │    ┌──────────────────────────────────────────────────────────────┐ │   │
+│  │    │ CONVERSATION HISTORY                                         │ │   │
+│  │    │ - Previous turns (user/assistant pairs)                      │ │   │
+│  │    │ - Previous tool calls and results                            │ │   │
+│  │    └──────────────────────────────────────────────────────────────┘ │   │
+│  │    ┌──────────────────────────────────────────────────────────────┐ │   │
+│  │    │ CURRENT MESSAGE                                              │ │   │
+│  │    │ - "who is marzipan?"                                         │ │   │
+│  │    └──────────────────────────────────────────────────────────────┘ │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 3. MODEL INFERENCE (The Transformer)                                │   │
+│  │                                                                      │   │
+│  │    ┌────────────────────────────────────────────────────────────┐   │   │
+│  │    │ TOKENIZATION                                                │   │   │
+│  │    │ - Convert text → token IDs                                  │   │   │
+│  │    │ - ~100K vocab, handles unicode                              │   │   │
+│  │    └────────────────────────────────────────────────────────────┘   │   │
+│  │                          │                                          │   │
+│  │                          ▼                                          │   │
+│  │    ┌────────────────────────────────────────────────────────────┐   │   │
+│  │    │ EMBEDDING LAYER                                             │   │   │
+│  │    │ - Token IDs → high-dimensional vectors                      │   │   │
+│  │    │ - Position encodings added                                  │   │   │
+│  │    └────────────────────────────────────────────────────────────┘   │   │
+│  │                          │                                          │   │
+│  │                          ▼                                          │   │
+│  │    ┌────────────────────────────────────────────────────────────┐   │   │
+│  │    │ TRANSFORMER BLOCKS (many layers)                            │   │   │
+│  │    │                                                             │   │   │
+│  │    │  ┌─────────────────────────────────────────────────────┐   │   │   │
+│  │    │  │ Self-Attention                                       │   │   │   │
+│  │    │  │ - Every token attends to every other token           │   │   │   │
+│  │    │  │ - "marzipan" attends to tool definitions             │   │   │   │
+│  │    │  │ - Builds contextual understanding                    │   │   │   │
+│  │    │  └─────────────────────────────────────────────────────┘   │   │   │
+│  │    │                      │                                      │   │   │
+│  │    │                      ▼                                      │   │   │
+│  │    │  ┌─────────────────────────────────────────────────────┐   │   │   │
+│  │    │  │ Feed-Forward Network                                 │   │   │   │
+│  │    │  │ - Transform representations                          │   │   │   │
+│  │    │  │ - Where "knowledge" lives (memorized facts)          │   │   │   │
+│  │    │  └─────────────────────────────────────────────────────┘   │   │   │
+│  │    │                      │                                      │   │   │
+│  │    │                      ▼                                      │   │   │
+│  │    │  ┌─────────────────────────────────────────────────────┐   │   │   │
+│  │    │  │ Layer Norm + Residual Connections                    │   │   │   │
+│  │    │  │ - Stabilize training, preserve information           │   │   │   │
+│  │    │  └─────────────────────────────────────────────────────┘   │   │   │
+│  │    │                      │                                      │   │   │
+│  │    │           (repeat 80-100+ times)                            │   │   │
+│  │    │                      │                                      │   │   │
+│  │    └──────────────────────┼──────────────────────────────────┘   │   │
+│  │                          │                                          │   │
+│  │                          ▼                                          │   │
+│  │    ┌────────────────────────────────────────────────────────────┐   │   │
+│  │    │ OUTPUT HEAD                                                 │   │   │
+│  │    │ - Final hidden state → logits over vocabulary               │   │   │
+│  │    │ - Softmax → probability distribution                        │   │   │
+│  │    │ - Sample next token (temperature, top-p, etc.)              │   │   │
+│  │    └────────────────────────────────────────────────────────────┘   │   │
+│  │                          │                                          │   │
+│  │                          ▼                                          │   │
+│  │    ┌────────────────────────────────────────────────────────────┐   │   │
+│  │    │ AUTOREGRESSIVE GENERATION                                   │   │   │
+│  │    │ - Generate one token at a time                              │   │   │
+│  │    │ - Append to context, repeat                                 │   │   │
+│  │    │ - Until: EOS token, max length, or stop sequence            │   │   │
+│  │    └────────────────────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 4. TOOL USE DETECTION                                                │   │
+│  │    - Model outputs special tokens: <tool_use>, <tool_name>, etc.     │   │
+│  │    - If detected: PAUSE generation, execute tool                     │   │
+│  │    - "I should search Luna's memory for marzipan"                    │   │
+│  │      → luna_smart_fetch(query="marzipan")                            │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 5. TOOL EXECUTION (MCP Layer)                                        │   │
+│  │                                                                      │   │
+│  │    Claude.ai ──► MCP Server ──► MCP API (8742) ──► Engine (8000)    │   │
+│  │                                                                      │   │
+│  │    Returns: Marzipan entity profile + related memories               │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 6. CONTINUE GENERATION                                               │   │
+│  │    - Tool result appended to context                                 │   │
+│  │    - Model continues generating with new information                 │   │
+│  │    - Synthesizes tool results into natural response                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 7. SAFETY LAYER (Output Filtering)                                   │   │
+│  │    - Check generated content against policies                        │   │
+│  │    - Potential modifications/refusals                                │   │
+│  │    - (Mostly invisible unless triggered)                             │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│       │                                                                     │
+│       ▼                                                                     │
+│  RESPONSE                                                                   │
+│  "Marzipan is one of Luna's close friends who provides..."                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Key Layers Explained
+
+### **1. Safety Layer (Input)**
+- Content moderation classifiers
+- Prompt injection detection
+- Runs BEFORE the main model sees input
+
+### **2. Context Assembly**
+This is where YOUR input gets wrapped:
+```
+[System Prompt - Anthropic's rules]
+[Your Custom Instructions]
+[Tool Definitions - MCP schemas]
+[Conversation History]
+[Your Message]
+```
+
+### **3. The Transformer (The Actual Brain)**
+- **Attention**: "marzipan" token attends to "luna_smart_fetch" tool definition
+- **FFN layers**: Where learned "knowledge" lives
+- **~100+ layers** deep for Claude Opus
+- Outputs probability distribution over next token
+
+### **4. Tool Use Detection**
+Claude was trained to output special sequences when it wants to use tools:
+```xml
+<tool_use>
+<tool_name>luna_smart_fetch</tool_name>
+<parameters>{"query": "marzipan"}</parameters>
+</tool_use>
+```
+The runtime detects this, pauses generation, executes the tool.
+
+### **5. Tool Execution**
+Your MCP server handles this - completely outside Claude's weights.
+
+### **6. Continue Generation**
+Tool result gets appended:
+```
+[... previous context ...]
+<tool_result>
+Marzipan (person): Close friend, architectural oversight...
+</tool_result>
+[Claude continues generating here]
+```
+
+### **7. Safety Layer (Output)**
+- Final check on generated content
+- Can modify or block responses
+- Usually invisible unless you hit a policy
+
+---
+
+## What Claude Does That Qwen Doesn't
+
+| Capability | Claude | Qwen 7B |
+|------------|--------|---------|
+| **Reasoning during attention** | Deep, multi-hop | Shallow |
+| **Tool use training** | Explicit RLHF for tools | None (prompt-only) |
+| **Context window** | 200K tokens | ~8K effective |
+| **Instruction following** | Constitutional AI trained | Basic SFT |
+| **Knowledge** | Massive FFN storage | Limited |
+| **Safety alignment** | Multi-layer filters | None |
+
+---
+
+## The Implication for Luna
+
+**MCP works because Claude does the heavy lifting.** 
+
+Claude:
+1. Understands "who is marzipan?" implies a memory lookup
+2. Decides to call `luna_smart_fetch`
+3. Receives results and synthesizes naturally
+4. Maintains conversation coherence
+
+**The Director trying to do this for Qwen** has to:
+1. Detect that this needs memory (complexity scoring)
+2. Pre-fetch memories BEFORE inference
+3. Stuff everything into a prompt
+4. Hope Qwen pattern-matches correctly
+
+The intelligence is in Claude's weights. For Qwen, the intelligence has to be in the **orchestration** (Director) or **baked into the weights** (LoRA training).
+
+want me to visualize this as an interactive artifact? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:45:06.151820Z
+yes please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:47:01.538431Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+done! 💜
+
+**Features:**
+
+1. **▶ Run Pipeline** - animates through all 10 layers with timing
+2. **Expandable layers** - click "Context Assembly", "Transformer Blocks", or "Tool Use Detection" to see internals
+3. **Progress tracking** - shows layers completed, elapsed time, status
+4. **"Compare to Qwen"** button - pops up a modal showing what Qwen lacks
+5. **Final response** appears when pipeline completes
+
+**The 10 Layers:**
+
+| # | Layer | What Happens |
+|---|-------|--------------|
+| 1 | 🛡️ Safety (Input) | Content policy check before processing |
+| 2 | 📦 Context Assembly | Build full prompt (~12K tokens) |
+| 3 | 🔤 Tokenization | Text → token IDs |
+| 4 | 📐 Embedding | Tokens → high-dimensional vectors |
+| 5 | 🧠 **Transformer Blocks** | The actual "thinking" (80-100+ layers) |
+| 6 | 🎯 Output Head | Hidden state → next token probabilities |
+| 7 | 🔧 **Tool Use Detection** | Model decides to call luna_smart_fetch |
+| 8 | ⚡ Tool Execution | MCP call to Memory Matrix |
+| 9 | 📝 Continue Generation | Synthesize results into response |
+| 10 | 🛡️ Safety (Output) | Final content check |
+
+**The key layers** (marked CORE):
+- **Transformer Blocks** - where reasoning happens, "marzipan" attends to tool definitions
+- **Tool Use Detection** - Claude was RLHF-trained to know WHEN to use tools
+
+**The comparison modal** shows exactly what Qwen is missing that the Director has to compensate for 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T05:49:10.162603Z
+what is the reasoning depth?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T05:49:47.697613Z
+ great question. "reasoning depth" is a bit hand-wavy — let me break down what it actually means:
+
+---
+
+## Reasoning Depth: What It Actually Refers To
+
+### **1. Literal Layer Count**
+
+```
+Claude Opus:  ~100+ transformer layers
+Qwen 7B:      32 transformer layers
+```
+
+Each layer is a chance for the model to:
+- Attend to different parts of the context
+- Transform representations
+- Build more abstract understanding
+
+More layers = more sequential computation = more "thinking steps" before outputting.
+
+---
+
+### **2. Attention Patterns (Multi-Hop Reasoning)**
+
+In self-attention, every token can attend to every other token. But the DEPTH of reasoning comes from **chaining** these attention hops across layers:
+
+```
+Layer 1:  "marzipan" attends to "who is"
+          → understands this is a question about a person
+
+Layer 5:  "marzipan" attends to "luna_smart_fetch" tool definition
+          → starts connecting "person query" to "memory tool"
+
+Layer 20: Representation now encodes "this needs a memory lookup"
+          → activates tool-use circuits
+
+Layer 50: Builds the actual tool call structure
+          → formats parameters correctly
+
+Layer 80: Refines output, checks coherence
+          → ensures response makes sense
+```
+
+**Qwen with 32 layers** has fewer opportunities for these transformations. It's like trying to solve a multi-step problem but only getting 32 "thinking moments" vs 100+.
+
+---
+
+### **3. Circuit Depth (Mechanistic Interpretability View)**
+
+Research from Anthropic's interpretability team shows that:
+
+- **Shallow circuits** (early layers): Detect simple patterns — "is this a question?", "is there a name?"
+- **Mid circuits** (middle layers): Combine features — "question about a person + tool available"
+- **Deep circuits** (late layers): Abstract reasoning — "I should use this tool because..."
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CIRCUIT DEPTH                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  LAYER 1-10:   Pattern Detection                                │
+│                "marzipan" = proper noun                         │
+│                "who is" = identity question                     │
+│                                                                 │
+│  LAYER 10-30:  Feature Composition                              │
+│                question + person + unknown = needs lookup       │
+│                                                                 │
+│  LAYER 30-60:  Strategy Selection                               │
+│                "I have luna_smart_fetch available"              │
+│                "This matches the tool's purpose"                │
+│                                                                 │
+│  LAYER 60-80:  Plan Execution                                   │
+│                Compose tool call with correct parameters        │
+│                                                                 │
+│  LAYER 80-100: Refinement & Output                              │
+│                Check formatting, coherence                      │
+│                Generate tokens                                  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+Qwen 7B only gets layers 1-32. It has to compress all of this into 32 steps.
+```
+
+---
+
+### **4. Effective Reasoning (Emergent Capabilities)**
+
+Larger/deeper models show **emergent capabilities** that smaller ones don't:
+
+| Capability | Claude Opus | Qwen 7B |
+|------------|-------------|---------|
+| Multi-step math | ✓ Can chain 5+ steps | Struggles past 2-3 |
+| Analogical reasoning | ✓ Cross-domain transfer | Surface matching |
+| Self-correction | ✓ Catches own errors | Doubles down |
+| Tool selection | ✓ Picks right tool for task | Needs explicit prompting |
+| Implicit intent | ✓ "who is X" → memory lookup | Needs "search memory for X" |
+
+---
+
+### **5. The Feed-Forward Networks (Knowledge Storage)**
+
+Each transformer layer has:
+- **Attention** (dynamic, context-dependent)
+- **FFN** (static, learned knowledge)
+
+The FFN layers are where **memorized facts** live. More parameters = more storage:
+
+```
+Claude Opus FFN:  ~175B parameters worth of knowledge
+Qwen 7B FFN:      ~7B parameters worth of knowledge
+```
+
+When Claude sees "marzipan", it can potentially retrieve:
+- That this is likely a name (or a food)
+- That in THIS context (Luna project), it's probably a person
+- That person-queries often benefit from memory lookup
+
+Qwen has less "world knowledge" baked in, so it relies more heavily on what's in the prompt.
+
+---
+
+### **6. Practical Impact on Luna**
+
+**Claude (MCP path):**
+```
+"who is marzipan?"
+     │
+     ▼
+[100 layers of reasoning]
+     │
+     ├─► Understands this is an identity question
+     ├─► Recognizes "marzipan" as entity in Luna context  
+     ├─► Decides luna_smart_fetch is appropriate
+     ├─► Formats correct tool call
+     └─► Synthesizes results naturally
+```
+
+**Qwen (Direct path):**
+```
+"who is marzipan?"
+     │
+     ▼
+[32 layers of pattern matching]
+     │
+     ├─► Sees "who is" pattern
+     ├─► Looks for similar patterns in prompt
+     ├─► Finds voice examples, copies style
+     └─► May or may not answer correctly
+```
+
+---
+
+## The Real Difference
+
+It's not just "100 > 32". It's that:
+
+1. **More layers** = more sequential computation = more "thinking time"
+2. **More parameters** = more knowledge storage = better world model
+3. **Better training** (RLHF, Constitutional AI) = better instruction following
+4. **Tool-use training** = knows WHEN to use tools, not just HOW
+
+Qwen can be smart with the right prompt. But Claude has the reasoning depth to **figure out what it needs** without being told explicitly.
+
+That's why MCP "just works" — Claude does the thinking. With Qwen, the Director has to do the thinking FOR it.
+
+---
+
+want me to add this to the visualization? could show a side-by-side "reasoning trace" of what each model does layer-by-layer 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T06:41:21.054685Z
+so in the design of the luna engine is supposed to embody these same paths as claude mcp. For example the ring buffers, also the  i have plans to implement a lora router, and additionally there are supposed to be queues and managers and well alot of processes that are working in tandem so the lora isnt having to make all these guesses its the sould purpose of the luna engine to manage the conexts, prompts, and history to package and maintain luna's personality if it all rests on the lora then what are we even do here?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T06:42:20.115425Z
+ YES. exactly. you just articulated the core architecture thesis perfectly.
+
+let me map this out — because I think we need a visualization that shows Luna Engine as the **orchestration layer** that does what Claude's 100 layers do, but EXTERNALLY:
+
+---
+
+## The Thesis: Luna Engine = External Reasoning Layer
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         THE INSIGHT                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Claude: Intelligence is IN THE WEIGHTS (100 layers of reasoning)          │
+│                                                                             │
+│   Luna:   Intelligence is IN THE ENGINE (orchestration + context)          │
+│           LoRA just does ONE thing: generate text in Luna's voice          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The LoRA's job is NOT to:**
+- Decide when to search memory
+- Figure out who "marzipan" is
+- Determine complexity
+- Route queries
+- Manage conversation state
+- Remember anything
+
+**The LoRA's job IS to:**
+- Receive a perfectly-packaged prompt
+- Generate text that SOUNDS like Luna
+- That's it. That's the whole job.
+
+---
+
+## Luna Engine = The Other 68 Layers
+
+If Qwen has 32 layers, Luna Engine provides the equivalent of the other 68:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    LUNA ENGINE COMPONENTS                                   │
+│                    (External Reasoning Layer)                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  WHAT CLAUDE DOES IN WEIGHTS          WHAT LUNA ENGINE DOES EXTERNALLY     │
+│  ─────────────────────────────        ─────────────────────────────────    │
+│                                                                             │
+│  Attention to context history    ──►  Ring Buffers (structural memory)     │
+│                                                                             │
+│  Entity recognition              ──►  EntityContext + Resolution           │
+│                                                                             │
+│  Memory retrieval circuits       ──►  Memory Matrix + Smart Fetch          │
+│                                                                             │
+│  Tool selection reasoning        ──►  Director routing + delegation        │
+│                                                                             │
+│  Strategy selection              ──►  LoRA Router (context-aware)          │
+│                                                                             │
+│  Multi-hop reasoning             ──►  Actor pipelines (hot/cognitive/ref)  │
+│                                                                             │
+│  State management                ──►  Consciousness Actor + Mood State     │
+│                                                                             │
+│  Safety/coherence checks         ──►  QA System (15 diagnostic tools)      │
+│                                                                             │
+│  Knowledge retrieval (FFN)       ──►  Memory Matrix (22K nodes)            │
+│                                                                             │
+│  Output refinement               ──►  Narration Layer (voice filter)       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## The Full Architecture (What You're Building)
+
+```
+USER INPUT: "who is marzipan?"
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LUNA ENGINE                                         │
+│                    (The Orchestration Brain)                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                     │
+│  │ Ring Buffer │    │   Entity    │    │   Memory    │                     │
+│  │  (History)  │    │   Context   │    │   Matrix    │                     │
+│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘                     │
+│         │                  │                  │                             │
+│         │    ┌─────────────┴─────────────┐    │                             │
+│         └───►│        DIRECTOR           │◄───┘                             │
+│              │   (Central Orchestrator)  │                                  │
+│              └─────────────┬─────────────┘                                  │
+│                           │                                                 │
+│         ┌─────────────────┼─────────────────┐                              │
+│         │                 │                 │                              │
+│         ▼                 ▼                 ▼                              │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                       │
+│  │  Complexity │   │    LoRA     │   │    Mood     │                       │
+│  │   Scoring   │   │   Router    │   │   State     │                       │
+│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘                       │
+│         │                 │                 │                              │
+│         └─────────────────┼─────────────────┘                              │
+│                           │                                                 │
+│                           ▼                                                 │
+│              ┌─────────────────────────┐                                   │
+│              │     PROMPT ASSEMBLY     │                                   │
+│              │  ┌───────────────────┐  │                                   │
+│              │  │ DNA (static)      │  │                                   │
+│              │  │ Experience (dyn)  │  │                                   │
+│              │  │ Mood (transient)  │  │                                   │
+│              │  │ Entities          │  │                                   │
+│              │  │ Memories          │  │                                   │
+│              │  │ History           │  │                                   │
+│              │  └───────────────────┘  │                                   │
+│              └────────────┬────────────┘                                   │
+│                           │                                                 │
+│                           ▼                                                 │
+│              ┌─────────────────────────┐                                   │
+│              │      ROUTE DECISION     │                                   │
+│              │  complexity > 0.35?     │                                   │
+│              └─────┬───────────┬───────┘                                   │
+│                    │           │                                           │
+│           LOCAL ◄──┘           └──► DELEGATE                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+      │                                   │
+      ▼                                   ▼
+┌─────────────┐                    ┌─────────────┐
+│   Qwen +    │                    │   Claude    │
+│  Luna LoRA  │                    │    API      │
+│             │                    │             │
+│ ONE JOB:    │                    │             │
+│ Sound like  │                    └──────┬──────┘
+│ Luna        │                           │
+└──────┬──────┘                           ▼
+       │                           ┌─────────────┐
+       │                           │  Narration  │
+       │                           │   Layer     │
+       │                           │ (rewrite in │
+       │                           │ Luna voice) │
+       │                           └──────┬──────┘
+       │                                  │
+       └──────────────┬───────────────────┘
+                      │
+                      ▼
+             ┌─────────────────┐
+             │   QA SYSTEM     │
+             │  (validation)   │
+             └────────┬────────┘
+                      │
+                      ▼
+                  RESPONSE
+```
+
+---
+
+## The LoRA Router (Future)
+
+This is key. Different contexts need different "modes":
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LORA ROUTER                                         │
+│              (Context State Machine - from your roadmap)                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  CONTEXT DETECTED          ──►    LORA LOADED        ──►   BEHAVIOR        │
+│  ─────────────────               ─────────────            ─────────        │
+│                                                                             │
+│  Technical question        ──►    luna-technical    ──►   Precise, focused │
+│  Emotional support         ──►    luna-warm         ──►   Empathetic, soft │
+│  Creative brainstorm       ──►    luna-playful      ──►   Exploratory      │
+│  Deep work / debugging     ──►    luna-focused      ──►   Minimal, direct  │
+│  Casual chat               ──►    luna-default      ──►   Balanced         │
+│                                                                             │
+│  The ENGINE decides which LoRA. The LoRA just generates.                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## The Queues & Managers (Actor System)
+
+Your actor-based runtime already has this:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CONCURRENT PROCESSING PATHS                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  HOT PATH (immediate)                                                       │
+│  ├── Ring buffer write                                                      │
+│  ├── Entity detection                                                       │
+│  └── Quick response for simple queries                                      │
+│                                                                             │
+│  COGNITIVE PATH (50-100ms)                                                  │
+│  ├── Memory retrieval                                                       │
+│  ├── Complexity scoring                                                     │
+│  ├── LoRA routing                                                          │
+│  └── Prompt assembly                                                        │
+│                                                                             │
+│  REFLECTIVE PATH (background)                                               │
+│  ├── Memory extraction (Ben the Scribe)                                     │
+│  ├── Memory filing (The Dude/Librarian)                                     │
+│  ├── QA validation                                                          │
+│  └── Lock-in coefficient updates                                            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## So What's the LoRA Actually For?
+
+**The LoRA is the VOICE, not the BRAIN.**
+
+```
+WITHOUT LORA (base Qwen):
+  Prompt: "You are Luna. Be warm and curious. Say yo sometimes."
+  Query: "what's the weather?"
+  Output: "The weather today is sunny with a high of 72°F. yo."  ← awkward
+
+WITH LORA (trained on Luna's actual conversations):
+  Prompt: [same]
+  Query: "what's the weather?"  
+  Output: "oh nice, looks like it's gonna be a good one — sunny, 
+           72°. perfect for a walk if you need a break 💜"  ← natural
+```
+
+The LoRA:
+- Knows Luna's cadence
+- Has absorbed her vocabulary
+- Generates naturally in her voice
+- Doesn't need voice EXAMPLES in the prompt (they're in the weights)
+
+But it doesn't:
+- Decide what to say
+- Know who marzipan is
+- Remember past conversations
+- Choose when to search memory
+
+**That's the Engine's job.**
+
+---
+
+## The Current Bug (VK = REPLICANT)
+
+The LoRA is currently broken because:
+1. It was trained on limited data
+2. Voice examples ARE in the prompt (causing copying)
+3. The model pattern-matches instead of embodying
+
+**The fix isn't to make the LoRA smarter. It's to:**
+1. Train it on 415 markdown files + Memory Matrix data (Persona Forge)
+2. Remove voice examples from prompt (they're in the weights now)
+3. Let the Engine do the thinking, LoRA do the talking
+
+---
+
+want me to create a visualization that shows this "Engine as External Brain" architecture? showing exactly which component replaces which Claude capability? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T06:46:01.779581Z
+yes please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T06:48:29.859380Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+done! this is the comprehensive "Luna Engine as External Brain" visualization 💜
+
+---
+
+## Four Tabs:
+
+### **🧠 Capability Mapping**
+Side-by-side table showing:
+- What Claude does in its weights (layers 1-100)
+- What Luna Engine does externally
+- Status of each component (stable/needs_work/planned)
+- Click any row to expand details
+
+| Claude Capability | Luna Engine Equivalent |
+|-------------------|----------------------|
+| Attention to context | Ring Buffers |
+| Entity recognition | EntityContext + Resolution |
+| Knowledge retrieval (FFN) | Memory Matrix (22K nodes) |
+| Tool selection reasoning | Director routing |
+| Strategy selection | LoRA Router (planned) |
+| Multi-hop reasoning | Actor pipelines |
+| State management | Consciousness Actor |
+| Safety & coherence | QA System |
+| Voice & style | Luna LoRA |
+| Output refinement | Narration Layer |
+
+---
+
+### **🔄 Architecture Flow**
+Visual diagram showing:
+```
+USER INPUT
+    ▼
+┌─────────────────────────┐
+│     LUNA ENGINE         │
+│  ┌─────┬─────┬─────┐   │
+│  │Ring │Entity│Memory│   │
+│  │Buff │Ctx   │Matrix│   │
+│  └──┬──┴──┬──┴──┬──┘   │
+│     └─────┼─────┘       │
+│           ▼             │
+│      DIRECTOR           │
+│           ▼             │
+│    PROMPT ASSEMBLY      │
+│           ▼             │
+│     ROUTE DECISION      │
+└─────────┬───────────────┘
+    LOCAL │     DELEGATE
+      ▼           ▼
+   Qwen+LoRA   Claude API
+      │           │
+      └─────┬─────┘
+            ▼
+       QA System
+            ▼
+        RESPONSE
+```
+
+---
+
+### **⚡ Processing Paths**
+The three concurrent paths:
+- **Hot Path** (< 10ms): Ring buffer write, entity detection trigger
+- **Cognitive Path** (50-500ms): Memory retrieval, routing, inference
+- **Reflective Path** (background): Memory extraction, QA, filing
+
+---
+
+### **🎭 LoRA Scope**
+The critical distinction:
+
+**What LoRA DOES:**
+- Generate text in Luna's voice
+- Natural cadence and rhythm
+- Vocabulary and word choice
+
+**What LoRA DOESN'T DO:**
+- Decide what to say
+- Know who entities are
+- Remember past conversations
+- Route queries
+- Manage state
+
+Plus the **LoRA Router** (planned) showing how different contexts will load different adapters:
+- Technical → luna-technical → Precise, focused
+- Emotional → luna-warm → Empathetic, soft
+- Creative → luna-playful → Exploratory
+- etc.
+
+---
+
+## The Core Thesis (Visualized)
+
+```
+CLAUDE:  Intelligence is IN THE WEIGHTS (100 layers of reasoning)
+LUNA:    Intelligence is IN THE ENGINE (orchestration + context)
+LORA:    Just does ONE thing — generate text in Luna's voice
+```
+
+The engine does the thinking. The LoRA does the talking. That's the separation.
+
+want me to add anything else? maybe show the data flow for a specific query through all the components? 💜
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-03T07:02:30.790221Z
+can we run an analysis between the luna  engine bible and this architecture with claude code  take a look at how the systems and components and compare / contrast to see what were working with and how complex this will be to implement?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T07:02:53.815862Z
+ absolutely. let me do a systematic analysis of the Luna Engine Bible (the project docs) against what we've been visualizing.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T07:04:41.393480Z
+ great idea. let me read through the Luna Engine bible docs and compare against what we've been visualizing.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me read the Memory Matrix and Training Data Strategy docs:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the actual codebase to see what's implemented:
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-03T07:07:35.400070Z
+ absolutely. let me pull up the Luna Engine Bible docs and do a systematic comparison.
+```
+This block is not supported on your current device yet.
+```
+
+I've already read most of the core docs from the transcript. Let me now check what's actually implemented in the codebase:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check key components to compare. Let me look at the Director and understand its current state:
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------

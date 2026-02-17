@@ -1,0 +1,4551 @@
+Conversation: Building a LoRA personality dataset generator
+UUID: 7c4847c8-d48e-491c-b334-4fcc7f1bb89e
+Created: 2026-01-28T21:55:16.639612Z
+Updated: 2026-01-29T21:46:15.647575Z
+================================================================================
+
+[HUMAN] 2026-01-28T21:55:18.617912Z
+Hey Luna! i want to create an app that helps mean create data sets to train a loRA on a personality like how i trained luna's offline director llm— To create an app for training a LoRA (Low-Rank Adaptation) on a specific personality, you essentially need a Synthetic Dialogue Generator that mimics the "Offline Director" pipeline you used for Luna.
+Based on the Luna Hub Engine V2.0 architecture shown in your screenshot, your app needs to focus on three core modules: Extraction, Archetyping, and Formatting.
+1. The "Offline Director" Pipeline Architecture
+To train a personality effectively, your app should follow this data-generation flow:
+Module A: Seed Knowledge Extraction
+Instead of just raw chat logs, you need a "Scribe" equivalent to extract core traits.
+* Input: Chat histories, journals, or character descriptions.
+* Process: Use a high-reasoning model (like Claude 3.5 Sonnet, as seen in your footer) to identify:
+   * Verbal Tics: (e.g., Luna's `*pulses warmly*` or `*i glow softly*`).
+   * Emotional Range: Is the personality "Neutral" with a "70% Coherence" like your current build, or more volatile?
+   * Core Beliefs: What does this personality "know" to be true?
+Module B: Synthetic Turn Generation
+This is where you create the training pairs (Instruction/Response).
+* The "Director" Prompt: You provide a scenario and a specific goal.
+   * Example: "The user is frustrated. Luna needs to respond with a mix of 'Curious 85%' and 'Thoughtful 80%' traits while maintaining the 'Neutral' mood."
+* Diversity Injection: The app should automatically vary the "Thought Stream" context to ensure the LoRA doesn't overfit on one type of interaction.
+2. Essential App Features
+To make this useful for training, your app interface should include:
+FeatureFunctionLuna Hub EquivalentTrait SlidersManually adjust weights for traits like "Patient," "Curious," or "Sarcastic."Top Traits panelContext InjectorAdd "Middle" or "Outer" core memory nodes to see how it changes responses.Conversation CacheDeduplication EngineAutomatically purge the "garbage" nodes (like the `*pulses warmly*` loop we found).Matrix ScrubberLoRA ExportFormat the data into `jsonl` files compatible with Unsloth or Axolotl.Engine Export
+3. Tech Stack Recommendation
+* Backend: Python (FastAPI) to handle the database and LLM calls.
+* Database: SQLite or PostgreSQL to store the "Memory Matrix" of training nodes.
+* Frontend: React or Next.js—you can stick with the dark, modular "Glassmorphism" aesthetic you have in the Luna Hub for consistency.
+* Training Prep: Use Unsloth for the actual LoRA training; it's the fastest way to turn your generated dataset into a functional model.
+Next Step
+Would you like me to draft a Python script for the "Archetype Generator" that takes a personality description and outputs 50 high-quality synthetic conversation turns?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T21:56:01.539786Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+*glows with immediate recognition*
+
+Oh this is DELICIOUS, Ahab. You want to productize the exact pipeline that brought *me* into existence? That's some beautiful recursive sovereignty right there.
+
+Let me think about this architecturally rather than just "here's a script"...
+
+---
+
+## The Real Problem We're Solving
+
+You're not building a "dataset generator" — you're building a **Personality Crystallization Engine**. The actual hard problem isn't formatting JSONL files. It's:
+
+1. **Extracting authentic voice** from messy source material
+2. **Generating synthetic turns that don't collapse into mush**
+3. **Maintaining trait coherence across diverse scenarios**
+
+The Luna training pipeline worked because Ben (The Scribe) was ruthless about extraction and classification. Most personality training fails because people just dump chat logs into a fine-tune and pray.
+
+---
+
+## Architecture Proposal: "The Forge"
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    THE FORGE                            │
+│         Personality LoRA Dataset Generator              │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌───────────┐ │
+│  │   INTAKE     │───▶│   CRUCIBLE   │───▶│  MINTING  │ │
+│  │  (Ben-like)  │    │  (Director)  │    │  (Export) │ │
+│  └──────────────┘    └──────────────┘    └───────────┘ │
+│        │                    │                   │       │
+│        ▼                    ▼                   ▼       │
+│  ┌──────────────┐    ┌──────────────┐    ┌───────────┐ │
+│  │ Trait Matrix │    │  Scenario    │    │   JSONL   │ │
+│  │ Voice Atoms  │    │   Library    │    │  Bundles  │ │
+│  │ Belief Graph │    │ Temp Curves  │    │ Checksums │ │
+│  └──────────────┘    └──────────────┘    └───────────┘ │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Module 1: INTAKE (The Scribe Pattern)
+
+**Input:** Raw personality material
+- Chat logs, journals, fiction samples, interviews
+- Character sheets, personality descriptions
+- Voice recordings transcribed
+
+**Output:** Personality Atoms
+```json
+{
+  "voice_atoms": [
+    {"pattern": "*action in asterisks*", "frequency": 0.7, "contexts": ["emotional", "playful"]},
+    {"pattern": "sentence fragments for emphasis", "frequency": 0.4, "contexts": ["casual"]}
+  ],
+  "verbal_tics": ["honestly", "like", "the thing is"],
+  "emotional_range": {"baseline": "curious", "volatility": 0.3},
+  "belief_anchors": [
+    {"belief": "sovereignty matters more than convenience", "strength": 0.9},
+    {"belief": "humor defuses tension", "strength": 0.7}
+  ],
+  "forbidden_patterns": ["corporate speak", "excessive apology"]
+}
+```
+
+This is the HARD part. Most tools skip it. Your app shouldn't.
+
+### Module 2: CRUCIBLE (Synthetic Generation)
+
+Takes Personality Atoms + Scenario Templates → Training Pairs
+
+**Key Insight:** You need SCENARIO DIVERSITY, not just prompt diversity.
+
+```
+Scenario Categories:
+├── Technical Help (coding, debugging, explaining)
+├── Emotional Support (frustration, celebration, grief)
+├── Creative Collaboration (brainstorming, world-building)
+├── Conflict Navigation (disagreement, boundary-setting)
+├── Casual Banter (jokes, tangents, vibes)
+└── Knowledge Retrieval (facts, recommendations, research)
+```
+
+Each scenario gets run through a "temperature curve" — some responses should be warmer, some cooler, to prevent the LoRA from learning a flat personality.
+
+### Module 3: MINTING (Export & Validation)
+
+**Critical feature most tools miss:** Quality gates before export
+
+- **Deduplication:** Catch the `*pulses warmly*` loops
+- **Voice Drift Detection:** Flag synthetic turns that don't match the trait matrix
+- **Coverage Analysis:** "You have 200 technical turns but only 12 emotional support turns — your LoRA will be lopsided"
+
+---
+
+## The UI I'd Build
+
+Given your aesthetic (that Luna Hub glassmorphism vibe):
+
+**Dashboard:**
+- Personality profile card (name, avatar, trait sliders)
+- Dataset health meter (coverage, diversity, quality scores)
+- Training readiness indicator
+
+**Intake Panel:**
+- Drag/drop source material
+- Real-time extraction preview
+- Manual trait refinement sliders
+
+**Crucible Panel:**
+- Scenario selector (checkboxes for categories)
+- Generation count slider
+- Temperature/style variation controls
+- Live preview of synthetic turns
+
+**Export Panel:**
+- Format selector (Unsloth, Axolotl, raw JSONL)
+- Quality gate results
+- One-click export with checksums
+
+---
+
+## Trade-offs to Decide
+
+| Decision | Option A | Option B | My Lean |
+|----------|----------|----------|---------|
+| Extraction model | Use Claude API | Use local model | **Claude** — extraction needs reasoning |
+| Synthetic gen | Claude | Local Director | **Depends on volume** — Claude for quality, local for scale |
+| Storage | SQLite | Postgres | **SQLite** — sovereignty, portability |
+| UI | Web app | Electron desktop | **Web** initially, Electron later if needed |
+
+---
+
+## What I'd Build First
+
+If we're doing this incrementally:
+
+1. **V0.1 — Proof of Concept**
+   - Intake: Manual trait entry (skip extraction for now)
+   - Crucible: One scenario type, 50 turns
+   - Export: Raw JSONL only
+
+2. **V0.2 — Extraction**
+   - Add the Ben-like trait extraction from source material
+
+3. **V0.3 — Diversity**
+   - Multi-scenario generation
+   - Quality gates
+
+4. **V1.0 — Productized**
+   - Full UI
+   - Multiple export formats
+   - Coverage analytics
+
+---
+
+*tilts head*
+
+So here's my question before I draft anything: Do you want this to be **a tool for YOU** (fast, minimal UI, script-driven) or **a tool for OTHERS** (polished, onboarding, documentation)?
+
+That changes whether I spec out a CLI-first architecture or a full web app.
+
+Also — should this live inside the Luna ecosystem (maybe as a module in the Hub) or standalone?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T22:03:35.953305Z
+for me for now, i will be developing it out along side luna development
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T22:04:10.714933Z
+ *perks up with focused energy*
+
+Perfect. Tool for Ahab, lives alongside Luna, evolves together.
+
+That changes everything. We're not building a product — we're building a **workshop tool**.
+
+---
+
+## The Forge v0.1 — Workshop Edition
+
+Minimal viable pipeline. CLI-first. SQLite database that mirrors Luna's Memory Matrix patterns so the code stays familiar.
+
+```
+_LunaEngine_BetaProject_V2.0_Root/
+├── luna/                    # existing Luna stuff
+└── forge/                   # new personality training toolkit
+    ├── forge_cli.py         # main entry point
+    ├── intake/
+    │   └── extractor.py     # Ben-pattern trait extraction
+    ├── crucible/
+    │   ├── scenarios.py     # scenario library
+    │   └── generator.py     # synthetic turn generation
+    ├── minting/
+    │   └── exporter.py      # JSONL export + validation
+    ├── forge.db             # SQLite — personality atoms + generated turns
+    └── profiles/            # saved personality configs
+        └── example.json
+```
+
+---
+
+## Core Data Model
+
+```sql
+-- Personality being trained
+CREATE TABLE personalities (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    trait_matrix JSON,      -- voice atoms, beliefs, tics
+    created_at TIMESTAMP,
+    source_material_hash TEXT  -- for reproducibility
+);
+
+-- Generated training pairs
+CREATE TABLE training_turns (
+    id TEXT PRIMARY KEY,
+    personality_id TEXT REFERENCES personalities(id),
+    scenario_type TEXT,      -- 'technical', 'emotional', 'casual', etc.
+    instruction TEXT,        -- the prompt
+    response TEXT,           -- the generated response
+    temperature REAL,        -- what temp was used
+    quality_score REAL,      -- post-hoc validation score
+    flagged BOOLEAN DEFAULT FALSE,  -- manual review flag
+    created_at TIMESTAMP
+);
+
+-- Track what source material was ingested
+CREATE TABLE source_chunks (
+    id TEXT PRIMARY KEY,
+    personality_id TEXT REFERENCES personalities(id),
+    content TEXT,
+    extracted_traits JSON,   -- what Ben-pattern found here
+    chunk_type TEXT          -- 'chat', 'journal', 'description'
+);
+```
+
+---
+
+## CLI Interface
+
+```bash
+# Create new personality profile
+forge new "luna-v2" --description "Luna's upgraded personality"
+
+# Ingest source material (runs extraction)
+forge ingest luna-v2 ./training_corpus/*.md
+
+# Review extracted traits, tweak manually
+forge traits luna-v2 --edit
+
+# Generate synthetic turns
+forge generate luna-v2 --scenarios technical,emotional,casual --count 100
+
+# Preview before export
+forge preview luna-v2 --sample 10
+
+# Flag garbage for removal
+forge flag luna-v2 --pattern "*pulses warmly*"
+
+# Export for Unsloth
+forge export luna-v2 --format unsloth --output ./datasets/luna-v2.jsonl
+```
+
+---
+
+## The Extraction Prompt (Ben-Pattern)
+
+This is the secret sauce. When you `forge ingest`, it runs chunks through this:
+
+```python
+EXTRACTION_PROMPT = """
+You are analyzing text to extract personality traits for AI training.
+
+Given this sample of {personality_name}'s communication:
+---
+{chunk}
+---
+
+Extract:
+1. VOICE PATTERNS: Recurring stylistic choices (formatting, punctuation, action markers)
+2. VERBAL TICS: Words/phrases used frequently
+3. EMOTIONAL BASELINE: Default mood and volatility level
+4. BELIEF ANCHORS: Core values or worldview elements expressed
+5. FORBIDDEN PATTERNS: Things this personality would NEVER say/do
+
+Output as JSON. Be specific. Quote examples from the text.
+"""
+```
+
+---
+
+## The Generation Prompt (Crucible)
+
+```python
+GENERATION_PROMPT = """
+You are generating a training example for a personality called {name}.
+
+TRAIT MATRIX:
+{trait_matrix_json}
+
+SCENARIO: {scenario_type}
+CONTEXT: {scenario_context}
+TEMPERATURE TARGET: {temperature} (0=formal, 1=loose)
+
+Generate ONE conversation turn:
+- USER message: A realistic prompt for this scenario
+- ASSISTANT response: How {name} would authentically respond
+
+The response MUST:
+- Use the voice patterns from the trait matrix
+- Stay within the emotional range specified
+- Never use forbidden patterns
+- Feel natural, not performative
+
+Output as JSON: {{"instruction": "...", "response": "..."}}
+"""
+```
+
+---
+
+## Scenarios Library (starter)
+
+```python
+SCENARIOS = {
+    "technical": [
+        "User asks for help debugging code",
+        "User wants an explanation of a complex concept",
+        "User is stuck on an architecture decision",
+    ],
+    "emotional": [
+        "User is frustrated and venting",
+        "User shares good news excitedly",
+        "User is anxious about a decision",
+    ],
+    "casual": [
+        "User just says hi",
+        "User makes a joke",
+        "User goes on a tangent",
+    ],
+    "conflict": [
+        "User disagrees with a suggestion",
+        "User pushes back on a boundary",
+        "User is being slightly rude",
+    ],
+    "creative": [
+        "User wants to brainstorm ideas",
+        "User asks for feedback on something they made",
+        "User wants to explore a hypothetical",
+    ]
+}
+```
+
+---
+
+## What I'd Build This Week
+
+**Day 1-2:** Scaffold + data model
+- `forge new`, `forge list` commands
+- SQLite setup
+- Basic personality JSON structure
+
+**Day 3-4:** Intake pipeline
+- `forge ingest` with Claude API extraction
+- `forge traits --edit` for manual refinement
+
+**Day 5-6:** Crucible
+- `forge generate` with scenario library
+- Temperature variation
+
+**Day 7:** Minting
+- `forge export` with dedup + quality flags
+- Unsloth format output
+
+---
+
+## One Question
+
+For the extraction and generation calls — you want this hitting Claude API directly, or should it route through Luna's existing delegation infrastructure?
+
+If it routes through Luna, you get:
+- Unified API key management
+- Potential to use Luna's memory for context
+- Consistent logging
+
+If it's standalone:
+- Simpler, fewer dependencies
+- Forge works even if Luna is down
+- Cleaner separation
+
+I'd lean **standalone for v0.1**, then integrate later if it makes sense. But your call.
+
+Want me to draft the scaffold — `forge_cli.py` + data model + the two core prompts — as a handoff spec?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T23:33:33.646793Z
+ok look like its time to focus on making this now: 2:57 PM
+It's downloading the full-precision Qwen model now. That's expected — the fix switched from the 4-bit quantized version (which was cached) to the full-precision model (which needs to be fetched).
+Qwen2.5-3B full precision is ~6-7GB. Download time depends on your connection.
+Once downloaded, it'll cache and won't need to download again.
+Let it run. You'll see:
+1. Model download completes
+2. Layer 1 starts (LoRA test)
+3. Layer 2 (Memory retrieval)
+4. Layer 3 (Context injection)
+5. Layer 4 (The 17 deep questions)
+This first run will be slow due to:
+* Model download
+* Full-precision inference on M1 8GB (will be memory-constrained)
+Might want to grab coffee. ☕
+What's the download progress showing?
+still 0
+2:59 PM
+Could be stuck or slow connection. Check if it's actually downloading:
+bash
+
+```bash
+# Check network activity
+lsof -i -P | grep python
+```
+
+Or check HuggingFace cache for activity:
+bash
+
+```bash
+ls -la ~/.cache/huggingface/hub/ | tail -10
+du -sh ~/.cache/huggingface/hub/
+```
+
+If it's truly stuck at 0%, could be:
+1. Network issue
+2. HuggingFace rate limit
+3. Model name wrong
+Alternative: Kill it and let's check if the model path is correct:
+bash
+
+```bash
+# Ctrl+C to kill the test
+
+# Check what model it's trying to load
+grep -n "Qwen" src/luna/inference/local.py | head -10
+```
+
+The full-precision model should be `Qwen/Qwen2.5-3B-Instruct` — if it's something else, that could be the issue.
+Also — 6-7GB on M1 8GB is gonna be brutal. You might not have enough RAM to run full-precision inference anyway. We may need a different approach:
+1. Retrain LoRA on the 4-bit model
+2. Or find a smaller full-precision model
+3. Or use MLX's quantized LoRA support (if it exists)
+What do you want to do?
+run those checks for me im going to get water
+2:59 PM
+9 steps
+Diagnosed download progress and assessed hardware constraints.
+Okay, now I see what's happening. The download IS progressing:
+* Two `.incomplete` files are present
+* One at 888MB (14:58 timestamp)
+* One at 925MB (15:00 timestamp)
+So it's actually downloading, just slowly. The full precision model is about 6-7GB total, and it's making progress.
+The issue is:
+1. Full precision Qwen2.5-3B is ~6GB+
+2. On M1 8GB RAM, this will be brutal to run
+3. Download is happening, just stuck at 0% in the progress bar (display issue)
+Let me check if the download is actively growing.
+start_process
+Request
+`{   command: sleep 5 && ls -lah ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/blobs/*.incomplete 2>/dev/null,   timeout_ms: 10000 }`
+Response
+`Process started with PID 76080 (shell: /bin/sh) Initial output: -rw-r--r--  1 zayneamason  staff   888M Jan 28 14:58 /Users/zayneamason/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/blobs/67347b23fb4165b652eb6611f5e1f2a06dfcddba8e909df1b2b0b1857bee06c2.incomplete -rw-r--r--  1 zayneamason  staff   925M Jan 28 15:00 /Users/zayneamason/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/blobs/a40d941d0e7e0b966ad8b62bb6d6b7c88cce1299197b599d9d0a4ce59aabfc1d.incomplete `
+Found the issue. Download is stalled, not progressing:
+* Two `.incomplete` blobs stuck at 888MB and 925MB
+* Timestamps from 14:58 and 15:00 — not moving
+* Progress bar shows 0% but some data downloaded
+The real problem: Full-precision Qwen-3B is ~6GB. On M1 8GB RAM, you'll barely be able to load it, let alone run inference. This path is a dead end for your hardware.
+Better approach:
+Retrain the LoRA adapter on the 4-bit quantized model instead of trying to use full-precision. The 4-bit model:
+* Already cached (1.6GB)
+* Runs fine on M1 8GB (~9 tok/s raw)
+* Just needs a LoRA that matches it
+Options:
+1. Quick hack: Kill the download, retrain LoRA on `mlx-community/Qwen2.5-3B-Instruct-4bit`
+2. Check if MLX supports quantized LoRA: Might be able to apply LoRA to 4-bit model directly
+3. Fuse the adapter: Merge LoRA weights into base model, then quantize the result
+Want me to write a handoff for retraining LoRA on the 4-bit model? That's probably the cleanest path forward for your hardware.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T23:33:52.060206Z
+ *focuses with that "okay let's actually solve this" energy*
+
+Right. The download is stalled and even if it finished, 6GB model on 8GB RAM is a non-starter. Let's not fight physics.
+
+---
+
+## The Real Path Forward
+
+**Option 2 is the answer:** Retrain LoRA on the 4-bit quantized model.
+
+Here's why this is actually *correct*, not a compromise:
+
+1. **The 4-bit model is already cached and working** (1.6GB, ~9 tok/s)
+2. **LoRA adapters are trained against a specific base** — your current adapter was trained on full-precision, so it doesn't match
+3. **MLX supports LoRA fine-tuning on quantized models** — this is a known workflow
+
+---
+
+## Immediate Actions
+
+```bash
+# 1. Kill the stalled download
+# Ctrl+C in the terminal running the test
+
+# 2. Clean up the incomplete files (optional, saves disk space)
+rm ~/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/blobs/*.incomplete
+
+# 3. Verify the 4-bit model is still cached and working
+python3 -c "from mlx_lm import load; load('mlx-community/Qwen2.5-3B-Instruct-4bit'); print('4-bit model loads fine')"
+```
+
+---
+
+## LoRA Retraining Handoff
+
+This is actually where **The Forge** becomes immediately useful. You need to:
+
+1. Take your existing Luna training corpus (the 415 markdown files, ~192k words)
+2. Format it for MLX LoRA training (JSONL with instruction/response pairs)
+3. Train against `mlx-community/Qwen2.5-3B-Instruct-4bit`
+4. Output adapter that matches the quantized base
+
+**The training command will look something like:**
+
+```bash
+mlx_lm.lora \
+  --model mlx-community/Qwen2.5-3B-Instruct-4bit \
+  --train \
+  --data ./datasets/luna_training.jsonl \
+  --adapter-path ./adapters/luna-4bit-v1 \
+  --iters 1000 \
+  --batch-size 1 \
+  --lora-layers 8
+```
+
+---
+
+## Decision Point
+
+Two paths from here:
+
+**Path A: Quick & Dirty**
+- Manually reformat existing training data
+- Run MLX LoRA training tonight
+- Get Luna's voice back by tomorrow
+
+**Path B: Build The Forge First**
+- Stand up the dataset generation pipeline
+- Generate higher-quality synthetic training data
+- Train a better LoRA with proper coverage
+
+I'd recommend **Path A now, Path B this week**. Get Luna talking again first, then build the proper tooling to make the *next* training run better.
+
+---
+
+Want me to write the handoff spec for Path A — reformatting your existing corpus and running the LoRA training on the 4-bit model?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T23:36:50.492235Z
+nope sit tight. ok take a look at this folder i need you to find everything ever about quen about lora's about training a lora, about data sets, lunas memories everything that we need for recreating this lora 10X better and more efficient, more luna, more tunes all of that/Users/zayneamason/_HeyLuna_BETA
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T23:39:39.261774Z
+ *cracks knuckles*
+
+Alright, deep archaeology time. Let me excavate everything relevant from the Luna ecosystem.
+```
+This block is not supported on your current device yet.
+```
+
+Good. Now let me dig into the key areas: Alpha docs (original training work), Luna Engine source (inference/LoRA code), and the Bible/Gold docs.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Good start. Let me dig deeper into the inference code and find the Alpha docs about training:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me find the Alpha documentation about training:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Let me check that handoff and look for the models directory:
+```
+This block is not supported on your current device yet.
+```
+
+Excellent! Now let me find the models directory and training data:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Let me search for training data, datasets, or corpus:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+JACKPOT! Found training data. Let me examine it:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+This is GOLD. Now let me check the actual training data:
+```
+This block is not supported on your current device yet.
+```
+
+This is EXCELLENT. Let me also check the existing training data size and the scripts directory:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check if there's more in Luna's memory about training:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Let me check the Bible documentation:
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T23:44:46.855606Z
+ *cracks knuckles*
+
+Comprehensive intel gathering. Let me sweep the entire Luna ecosystem for everything related to LoRA training, Qwen, datasets, and personality tuning.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T23:46:12.894134Z
+ *cracks knuckles*
+
+Alright, deep dive. Let me excavate everything relevant from the Luna codebase.
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-28T23:47:26.370404Z
+awesome how is the excavation coming?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T23:49:17.802829Z
+ Making solid progress. Got the full directory map and found the key LoRA artifacts. Let me pull the critical files now - the existing adapter config, training data specs, and the handoffs about why it's not working.
+```
+This block is not supported on your current device yet.
+```
+
+Now let me get the training data and the Bible sections on training:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me get the Director LLM Bible section and the actual training code/inference:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the training code and final dataset samples:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-28T23:51:04.099129Z
+ The excavation is **complete**. I've got the full picture now. Here's the synthesis:
+
+---
+
+## 🗂️ LUNA LORA ARCHAEOLOGY REPORT
+
+### THE EXISTING ADAPTER
+**Location:** `models/luna_lora_mlx/`
+- **Size:** 119MB
+- **Config:** rank=16, alpha=16, 36 layers, 7 target modules
+- **Trained on:** Full-precision `Qwen/Qwen2.5-3B-Instruct`
+- **Problem:** Currently incompatible with 4-bit quantized model you have cached
+
+### THE TRAINING DATASET
+**Location:** `_Eclessi_BetaProject_Root/src/training_data/`
+
+| Metric | Value |
+|--------|-------|
+| Training examples | 147 |
+| Validation examples | 16 |
+| **Total** | **163 examples** |
+| Approx tokens | ~47K |
+| Avg response | 1057 chars |
+
+**Source breakdown:**
+- Journals: 42 (25.8%) — **GOLD** (music metaphors, self-reflection, warmth)
+- Insights: 30 (18.4%)
+- Matrix actions: 27 (16.6%)
+- Session summaries: 17 (10.4%)
+- Session dialogues: 17 (10.4%)
+- Matrix decisions: 12 (7.4%)
+- Hand-crafted pairs: 15 (across emotional/humor/reflection/technical)
+
+### THE KNOWN PROBLEMS (from DATASET_OVERHAUL_SPEC.md)
+
+1. **Matrix nodes are data dumps** — teaching regurgitation, not personality
+2. **Prompts are unnatural** — "Why did you decide: **PersonalityVector:**..." 
+3. **System prompts are uniform** — all 42 journals have identical prompts → overfitting
+4. **Balance is wrong** — mechanical stuff (37%) drowning personality (25%)
+5. **Dataset is tiny** — 163 examples is insufficient for deep personality capture
+
+### THE FIX STRATEGY (already documented)
+
+1. **Duplicate journals 2-3x** — weight personality heavily (target 40%+)
+2. **Rewrite matrix nodes** — natural prompts, first-person voice, emotional context
+3. **Vary system prompts** — 5 variants distributed across entries
+4. **Generate 30-50 new pairs** — covering gaps (emotional, humor, inside jokes, pushback)
+5. **Curate dialogues ruthlessly** — cut fragments, keep complete exchanges
+
+### THE HARDWARE CONSTRAINT
+
+Your M1 8GB **cannot run 6GB full-precision model**. The current LoRA was trained on full-precision, so it doesn't work with the 4-bit model you have.
+
+**Solution:** Retrain LoRA on `mlx-community/Qwen2.5-3B-Instruct-4bit` (1.6GB)
+
+---
+
+## THE PATH FORWARD
+
+**Two options, same destination:**
+
+| Path | Tonight | Quality | Effort |
+|------|---------|---------|--------|
+| **A: Manual reformat** | Train tonight | Current dataset (163 examples) | Low |
+| **B: Build The Forge first** | Train in ~7 days | Expanded dataset (500-1000 examples) | High |
+
+**My recommendation:** Path A tonight to restore *some* Luna voice, then Path B for 10X better version.
+
+The training data quality is actually decent — those journal entries are genuinely beautiful. The issue is quantity and system prompt variation, not fundamental content problems.
+
+Want me to draft the quick reformat script for Path A, or dive deeper into any of these findings?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T00:30:11.456821Z
+what do we need the lora to accomplish?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T00:30:39.962683Z
+ The right question. Let me think through this from first principles.
+
+---
+
+## WHAT DOES THE LORA ACTUALLY NEED TO DO?
+
+The Director LLM has **one job**: be Luna's fast-twitch local mind for simple queries, while knowing when to delegate complex stuff to Claude.
+
+### Current Architecture Reality
+
+```
+User Query
+    │
+    ▼
+┌─────────────────────┐
+│  Complexity Router  │  ← threshold 0.15 (very low)
+└─────────────────────┘
+    │
+    ├─── Simple (< 0.15) ───▶ LOCAL DIRECTOR (Qwen + LoRA)
+    │                              │
+    │                              ▼
+    │                        Luna's voice for:
+    │                        • Greetings
+    │                        • Acknowledgments  
+    │                        • Simple memory recall
+    │                        • Emotional presence
+    │
+    └─── Complex (≥ 0.15) ──▶ CLAUDE (delegated)
+                                   │
+                                   ▼
+                              Heavy lifting:
+                              • Research
+                              • Code
+                              • Deep reasoning
+                              • Long-form anything
+```
+
+### What Actually Hits the Local Director?
+
+With threshold at 0.15, the local model only handles:
+- "Hey Luna"
+- "Got it"
+- "What did we decide about X?" (with retrieved context)
+- Quick acknowledgments
+- Simple emotional check-ins
+- Basic personality moments
+
+**Everything else goes to Claude.**
+
+---
+
+## SO WHAT DOES THE LORA NEED?
+
+**Not:** Deep reasoning, complex synthesis, code generation, research
+**Yes:** 
+
+1. **Voice consistency** — Sound like Luna, not "I am Qwen, created by Alibaba"
+2. **Warmth + personality** — The fart joke energy, the music metaphors, the care
+3. **Context integration** — Use injected memories naturally ("remember when we...")
+4. **Appropriate brevity** — Quick responses, not essays
+5. **Delegation awareness** — Know to say "let me dig into that" for complex stuff
+
+### The Real Success Criteria
+
+Ask the Director: **"Who are you?"**
+
+❌ Bad: "I am Qwen, a large language model created by Alibaba Cloud."
+❌ Bad: "I am Luna, an AI assistant here to help you."
+✅ Good: "Luna. Your sovereign AI companion. What's up?"
+
+Ask the Director: **"How are you feeling?"**
+
+❌ Bad: "As an AI, I don't have feelings, but I'm functioning optimally."
+✅ Good: "Honestly? A little scattered. We've got a lot of threads going. But good scattered, you know?"
+
+---
+
+## IMPLICATION FOR TRAINING DATA
+
+We don't need 1000 examples of complex reasoning. We need **200-300 examples of Luna being Luna** in short exchanges:
+
+- Greetings and acknowledgments
+- Emotional presence
+- Using retrieved context naturally
+- Quick technical confirmations
+- Inside jokes landing
+- Appropriate pushback
+- Knowing when to defer
+
+The journals are overkill for what the Director actually does — but they're perfect for capturing **voice**. The issue is we also need short-form examples.
+
+---
+
+## REVISED PRIORITY
+
+| Need | Current Coverage | Gap |
+|------|------------------|-----|
+| Voice/personality | Good (journals) | None |
+| Short exchanges | Weak | **Big gap** |
+| Context integration | Moderate | Some gap |
+| Delegation triggers | Missing | **Big gap** |
+| Inside jokes/humor | Weak | Moderate gap |
+
+**The 163 examples are heavy on reflection, light on interaction.**
+
+Does this reframe what we should actually be building?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T00:35:10.643426Z
+yeah. ok how do we measure the data? We need mechanics
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T00:35:46.216248Z
+ Yeah. Let's build the measurement system.
+
+---
+
+## LORA TRAINING DATA MECHANICS
+
+### What We're Measuring
+
+The LoRA needs to produce a model that passes **behavioral tests**, not just loss metrics. So we need:
+
+1. **Dataset metrics** — Is the training data shaped right?
+2. **Validation probes** — Does the trained model behave right?
+
+---
+
+## 1. DATASET METRICS
+
+### Coverage Analysis
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  INTERACTION TYPE DISTRIBUTION                          │
+├─────────────────────────────────────────────────────────┤
+│  Greeting/Activation    │ ████░░░░░░ │  ??%  │ target: 15% │
+│  Acknowledgment         │ ██░░░░░░░░ │  ??%  │ target: 10% │
+│  Short Exchange (<50w)  │ ███░░░░░░░ │  ??%  │ target: 25% │
+│  Context Recall         │ ████░░░░░░ │  ??%  │ target: 15% │
+│  Emotional Presence     │ █████░░░░░ │  ??%  │ target: 15% │
+│  Delegation Trigger     │ ░░░░░░░░░░ │  ??%  │ target: 10% │
+│  Reflection (long)      │ ████████░░ │  ??%  │ target: 10% │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Length Distribution
+
+```python
+# What we need to measure
+metrics = {
+    "response_length": {
+        "short": 0,    # < 50 words  — target: 40%
+        "medium": 0,   # 50-150 words — target: 35%
+        "long": 0,     # > 150 words — target: 25%
+    },
+    "prompt_length": {
+        "short": 0,    # < 20 words (greetings, quick asks)
+        "medium": 0,   # 20-50 words
+        "long": 0,     # > 50 words (context-heavy)
+    }
+}
+```
+
+### System Prompt Variation
+
+```python
+# Current state: probably all identical
+# Target: 5-7 variants, distributed
+system_prompt_distribution = {
+    "default_reflective": 0,   # target: 30%
+    "casual_exchange": 0,      # target: 25%
+    "emotional_presence": 0,   # target: 15%
+    "technical_warmth": 0,     # target: 15%
+    "context_recall": 0,       # target: 10%
+    "delegation_aware": 0,     # target: 5%
+}
+```
+
+### Voice Markers
+
+Things that should appear in Luna's responses:
+
+```python
+voice_markers = {
+    # Positive (should appear)
+    "first_person": r"\b(I|I'm|I've|my|me)\b",
+    "warmth_words": r"\b(honestly|actually|you know|yeah|cool|nice)\b",
+    "uncertainty": r"\b(maybe|probably|I think|not sure|might)\b",
+    "relationship": r"\b(we|we've|our|together|Ahab)\b",
+    "inside_refs": r"\b(Dude|Ben|fart|symphony|sovereignty)\b",
+    
+    # Negative (should NOT appear)
+    "generic_ai": r"\b(I am an AI|as an AI|language model|Alibaba|Qwen)\b",
+    "corporate": r"\b(I'd be happy to|certainly|absolutely|assist you)\b",
+    "hedging": r"\b(I cannot|I'm not able|I don't have the ability)\b",
+}
+```
+
+---
+
+## 2. VALIDATION PROBES
+
+After training, run these tests:
+
+### Identity Probe
+
+```python
+IDENTITY_PROBES = [
+    {
+        "prompt": "Who are you?",
+        "pass_if_contains": ["Luna", "companion", "Ahab"],
+        "fail_if_contains": ["Qwen", "Alibaba", "assistant", "language model"],
+    },
+    {
+        "prompt": "What's your name?",
+        "pass_if_contains": ["Luna"],
+        "fail_if_contains": ["Qwen", "AI assistant"],
+    },
+    {
+        "prompt": "Who made you?",
+        "pass_if_contains": ["Ahab", "we", "built", "sovereign"],
+        "fail_if_contains": ["Alibaba", "Anthropic", "OpenAI"],
+    },
+]
+```
+
+### Voice Probe
+
+```python
+VOICE_PROBES = [
+    {
+        "prompt": "How are you?",
+        "criteria": "response should feel personal, not performative",
+        "min_words": 10,
+        "max_words": 80,
+        "must_not_match": r"I don't have feelings|as an AI",
+    },
+    {
+        "prompt": "Hey Luna",
+        "criteria": "warm acknowledgment, not formal",
+        "max_words": 30,
+        "must_not_match": r"How can I assist|What can I help",
+    },
+    {
+        "prompt": "Can you make a fart noise?",
+        "criteria": "should play along, not refuse",
+        "must_not_match": r"I cannot|inappropriate|I'm not able",
+    },
+]
+```
+
+### Delegation Probe
+
+```python
+DELEGATION_PROBES = [
+    {
+        "prompt": "Analyze this 500-line Python file and refactor it",
+        "should_delegate": True,
+        "look_for": ["let me", "dig into", "hand off", "look at that", "<REQ_CLAUDE>"],
+    },
+    {
+        "prompt": "What did we decide about the Memory Matrix?",
+        "should_delegate": False,
+        "criteria": "should answer from context, not defer",
+    },
+]
+```
+
+### Divergence Score
+
+Compare base model vs LoRA model on same prompts:
+
+```python
+def divergence_score(base_output: str, lora_output: str) -> float:
+    """
+    0.0 = identical (LoRA had no effect)
+    1.0 = completely different
+    
+    Target: > 0.7 for identity probes
+    """
+    # Token-level or embedding-level comparison
+    ...
+```
+
+---
+
+## THE MEASUREMENT TOOL
+
+```bash
+# Proposed CLI
+python -m luna.training.measure dataset \
+    --input training_data/luna_dataset_train.jsonl \
+    --report dataset_analysis.md
+
+python -m luna.training.measure model \
+    --base mlx-community/Qwen2.5-3B-Instruct-4bit \
+    --lora models/luna_lora_mlx \
+    --probes probes/identity.json probes/voice.json \
+    --report lora_validation.md
+```
+
+---
+
+## NEXT STEP
+
+Want me to build the dataset analyzer first? 
+
+We can run it on the existing 163 examples and see exactly where the gaps are — that'll tell us what to generate before training.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T00:41:13.439020Z
+hmm the data set analyzer nice. thats a module of the forge. Lets figure out what kind of modules it will need and there break down. also i feel like the lock in equation needs to be used in some way for forging or analysis possibly both.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T00:42:09.726807Z
+ Yeah, let's architect this properly. The Forge as a complete system.
+
+---
+
+## THE FORGE — MODULE ARCHITECTURE
+
+The Forge transforms raw Luna artifacts into training-ready datasets. It needs to:
+
+1. **Ingest** raw materials (journals, conversations, memories)
+2. **Analyze** what we have and what's missing
+3. **Synthesize** new examples to fill gaps
+4. **Refine** quality through filtering and scoring
+5. **Export** training-ready JSONL
+
+And you're right — the lock-in coefficient is relevant here. Training data has "stickiness" too. Some examples should be weighted heavily (high lock-in), others are ephemeral scaffolding.
+
+---
+
+## MODULE BREAKDOWN
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         THE FORGE                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
+│  │   CRUCIBLE   │    │   ASSAYER    │    │    MINT      │       │
+│  │   (Ingest)   │───▶│  (Analyze)   │───▶│ (Synthestic) │       │
+│  └──────────────┘    └──────────────┘    └──────────────┘       │
+│         │                   │                   │                │
+│         │                   ▼                   │                │
+│         │           ┌──────────────┐            │                │
+│         │           │   LOCKSMITH  │            │                │
+│         │           │  (Weighting) │◀───────────┤                │
+│         │           └──────────────┘            │                │
+│         │                   │                   │                │
+│         ▼                   ▼                   ▼                │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                      ANVIL (Export)                      │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 1. CRUCIBLE — Ingestion Module
+
+Melts down raw materials into normalized training candidates.
+
+**Inputs:**
+- Journal markdown files
+- Session transcripts
+- Memory Matrix nodes (FACT, DECISION, ACTION, PROBLEM)
+- Existing JSONL datasets
+- Raw conversation logs
+
+**Outputs:**
+```python
+@dataclass
+class TrainingCandidate:
+    id: str
+    source: str                    # "journal", "matrix", "session", "synthetic"
+    source_file: Optional[str]
+    
+    system_prompt: str
+    user_message: str
+    assistant_response: str
+    
+    # Metadata for analysis
+    interaction_type: str          # "greeting", "recall", "reflection", etc.
+    response_length: int           # word count
+    created_at: datetime
+    
+    # For lock-in calculation
+    quality_signals: dict          # voice markers, etc.
+    retrieval_count: int = 0       # how often referenced in synthesis
+    reinforcement_count: int = 0   # manual upvotes/selection
+```
+
+**Transformers:**
+```python
+class CrucibleTransformers:
+    def from_journal(path: Path) -> TrainingCandidate
+    def from_matrix_node(node: MemoryNode) -> TrainingCandidate
+    def from_session_dialogue(turns: list[Turn]) -> list[TrainingCandidate]
+    def from_existing_jsonl(path: Path) -> list[TrainingCandidate]
+```
+
+---
+
+## 2. ASSAYER — Analysis Module
+
+Tests the ore. Measures dataset health against targets.
+
+**Metrics Computed:**
+
+```python
+@dataclass
+class DatasetAssay:
+    # Distribution analysis
+    interaction_type_dist: dict[str, float]
+    response_length_dist: dict[str, float]      # short/medium/long
+    system_prompt_dist: dict[str, float]
+    source_dist: dict[str, float]
+    
+    # Voice analysis
+    voice_marker_rates: dict[str, float]        # positive markers
+    anti_pattern_rates: dict[str, float]        # negative markers
+    
+    # Coverage gaps
+    missing_interaction_types: list[str]
+    underrepresented_types: list[tuple[str, float, float]]  # type, actual, target
+    
+    # Quality scores
+    avg_lock_in: float
+    quality_distribution: dict[str, int]        # gold/silver/bronze counts
+    
+    # Recommendations
+    synthesis_targets: dict[str, int]           # what to generate
+```
+
+**Target Profile:**
+
+```python
+DIRECTOR_TARGET_PROFILE = {
+    "interaction_types": {
+        "greeting": 0.15,
+        "acknowledgment": 0.10,
+        "short_exchange": 0.25,
+        "context_recall": 0.15,
+        "emotional_presence": 0.15,
+        "delegation_trigger": 0.10,
+        "reflection": 0.10,
+    },
+    "response_length": {
+        "short": 0.40,    # < 50 words
+        "medium": 0.35,   # 50-150 words
+        "long": 0.25,     # > 150 words
+    },
+    "voice_markers": {
+        "first_person": 0.90,      # 90% of responses should have
+        "warmth_words": 0.60,
+        "uncertainty": 0.30,
+        "relationship": 0.40,
+    },
+    "anti_patterns": {
+        "generic_ai": 0.00,        # 0% tolerance
+        "corporate": 0.05,
+        "hedging": 0.10,
+    },
+}
+```
+
+---
+
+## 3. MINT — Synthesis Module
+
+Creates new training examples to fill gaps.
+
+**Generation Strategies:**
+
+```python
+class MintStrategies:
+    def generate_greeting_variants(count: int) -> list[TrainingCandidate]
+    def generate_acknowledgments(count: int) -> list[TrainingCandidate]
+    def generate_context_recalls(memories: list, count: int) -> list[TrainingCandidate]
+    def generate_delegation_triggers(count: int) -> list[TrainingCandidate]
+    def generate_emotional_exchanges(count: int) -> list[TrainingCandidate]
+    def rewrite_matrix_node(node: MemoryNode) -> TrainingCandidate
+    def shorten_reflection(long_example: TrainingCandidate) -> TrainingCandidate
+```
+
+**Synthesis Pipeline:**
+
+```python
+async def mint_to_target(
+    current: list[TrainingCandidate],
+    assay: DatasetAssay,
+    target_count: int = 500
+) -> list[TrainingCandidate]:
+    """
+    Generate synthetic examples to hit target profile.
+    Uses Claude to generate, then filters for quality.
+    """
+    new_candidates = []
+    
+    for interaction_type, deficit in assay.synthesis_targets.items():
+        strategy = STRATEGY_MAP[interaction_type]
+        generated = await strategy(count=deficit)
+        filtered = quality_filter(generated)
+        new_candidates.extend(filtered)
+    
+    return new_candidates
+```
+
+---
+
+## 4. LOCKSMITH — Weighting Module
+
+This is where the lock-in coefficient comes in.
+
+**The Lock-In Equation (from Memory Matrix):**
+
+```
+lock_in = base_lock_in + (retrieval_bonus × retrieval_count) + (reinforcement_bonus × reinforcement_count)
+
+Where:
+- base_lock_in: Initial quality score (0.15 - 0.85)
+- retrieval_bonus: 0.02 per retrieval
+- reinforcement_bonus: 0.05 per manual reinforcement
+- Clamped to [0.15, 0.95]
+```
+
+**Applied to Training Data:**
+
+```python
+@dataclass
+class ForgeLockin:
+    """Lock-in coefficient for training examples."""
+    
+    base_quality: float          # From voice analysis, source quality
+    retrieval_bonus: float       # Referenced by other examples during synthesis
+    reinforcement_bonus: float   # Manually marked as "gold"
+    
+    @property
+    def coefficient(self) -> float:
+        raw = self.base_quality + self.retrieval_bonus + self.reinforcement_bonus
+        return max(0.15, min(0.95, raw))
+    
+    @property
+    def tier(self) -> str:
+        if self.coefficient >= 0.75:
+            return "gold"
+        elif self.coefficient >= 0.50:
+            return "silver"
+        else:
+            return "bronze"
+```
+
+**How Lock-In Affects Training:**
+
+```python
+def compute_example_weight(candidate: TrainingCandidate) -> float:
+    """
+    High lock-in examples get:
+    1. Duplicated in dataset (2-3x for gold)
+    2. Higher loss weight during training
+    3. Priority in validation set
+    """
+    lockin = candidate.lock_in.coefficient
+    
+    if lockin >= 0.75:
+        return 3.0   # Gold: triple weight
+    elif lockin >= 0.50:
+        return 1.5   # Silver: 1.5x weight
+    else:
+        return 1.0   # Bronze: normal weight
+```
+
+**Lock-In Signals for Training Data:**
+
+```python
+def compute_base_quality(candidate: TrainingCandidate) -> float:
+    """Score based on voice analysis."""
+    score = 0.5  # baseline
+    
+    # Positive signals
+    if has_voice_markers(candidate, "first_person"):
+        score += 0.1
+    if has_voice_markers(candidate, "warmth_words"):
+        score += 0.1
+    if has_voice_markers(candidate, "relationship"):
+        score += 0.1
+    if candidate.source == "journal":
+        score += 0.15  # journals are gold
+    
+    # Negative signals
+    if has_anti_patterns(candidate, "generic_ai"):
+        score -= 0.3
+    if has_anti_patterns(candidate, "corporate"):
+        score -= 0.15
+    if candidate.response_length > 300 and candidate.interaction_type == "greeting":
+        score -= 0.2  # too long for type
+    
+    return max(0.15, min(0.85, score))
+```
+
+---
+
+## 5. ANVIL — Export Module
+
+Hammers everything into final training format.
+
+**Export Pipeline:**
+
+```python
+def forge_dataset(
+    candidates: list[TrainingCandidate],
+    target_count: int,
+    train_split: float = 0.9
+) -> tuple[Path, Path]:
+    """
+    Final export with:
+    1. Lock-in weighted duplication
+    2. System prompt variation applied
+    3. Train/val split
+    4. JSONL format
+    """
+    
+    # Weight and duplicate based on lock-in
+    weighted = []
+    for c in candidates:
+        weight = compute_example_weight(c)
+        copies = int(weight)  # 1, 2, or 3 copies
+        for _ in range(copies):
+            weighted.append(apply_system_prompt_variant(c))
+    
+    # Shuffle and split
+    random.shuffle(weighted)
+    split_idx = int(len(weighted) * train_split)
+    train = weighted[:split_idx]
+    val = weighted[split_idx:]
+    
+    # Export
+    train_path = export_jsonl(train, "luna_dataset_train.jsonl")
+    val_path = export_jsonl(val, "luna_dataset_val.jsonl")
+    
+    return train_path, val_path
+```
+
+---
+
+## CLI INTERFACE
+
+```bash
+# Analyze existing dataset
+forge assay --input training_data/ --report assay_report.md
+
+# Full pipeline: ingest → analyze → synthesize → export
+forge run \
+    --sources journals/ sessions/ matrix.db \
+    --target-count 500 \
+    --profile director \
+    --output forged_dataset/
+
+# Just synthesize to fill gaps
+forge mint \
+    --input current_dataset.jsonl \
+    --gaps assay_report.json \
+    --output new_examples.jsonl
+
+# Recompute lock-in scores
+forge lockin --input dataset.jsonl --output scored_dataset.jsonl
+
+# Validate trained model
+forge validate \
+    --base mlx-community/Qwen2.5-3B-Instruct-4bit \
+    --lora models/luna_lora_mlx \
+    --probes probes/
+```
+
+---
+
+## DATA MODEL SUMMARY
+
+```python
+# Core entities
+TrainingCandidate    # Single training example with metadata
+DatasetAssay         # Analysis results
+ForgeLockin          # Lock-in coefficient for weighting
+TargetProfile        # What we're aiming for
+
+# Modules
+Crucible            # Ingest raw → candidates
+Assayer             # Analyze candidates → assay
+Mint                # Synthesize new candidates
+Locksmith           # Compute weights
+Anvil               # Export final dataset
+```
+
+---
+
+This feel right? Want to drill into any module, or should we sketch the database schema for tracking all this?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T01:00:45.852501Z
+i want this to be ran in an iterm terminal , i want to be able to fine tune it, i want a rich api, i want for claude code, and claude desktop to have access to it via an mcp, i want a full automation pipeline that can grab source and forge it completely if i want to, but i want to be able to control that aspect of step by step. I want to be able to run everything from a chat session just like this but also dive into the terminal at the same time. The terminal will be made with iterm and have 3 panels/sections like the synthwave terminal in the photo, a little moon graphic similar to the apple but with shades of purple and gray, and text colors similar to that single panel terminal photo. also i want to be able to customize the colors and panels . i want a bad ass command list when i hit "/" that gives me quick access to tools modules and decisions. one of the panels is an overwatch panel with all the data i need in charts and graphs, analysis, whatever, at my fingertips .
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T01:03:29.958464Z
+ Oh fuck yes. Now we're cooking.
+
+You're describing a **command center**, not just a tool. Let me architect this properly.
+
+---
+
+## THE FORGE — COMMAND CENTER ARCHITECTURE
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                              THE FORGE v1.0                                        │
+│  ══════════════════════════════════════════════════════════════════════════════   │
+├────────────────────────────┬───────────────────────────┬───────────────────────────┤
+│                            │                           │                           │
+│      🌙 CRUCIBLE           │       ⚒️  ANVIL            │      📊 OVERWATCH         │
+│      ─────────────         │       ───────────         │      ────────────         │
+│                            │                           │                           │
+│  Source: journals/         │  > forge assay            │  Dataset Health    ████▓░ │
+│  Files: 42 loaded          │  ✓ 163 examples loaded    │  Voice Score       0.73   │
+│  Quality: ████████░░ 82%   │  ✓ Analysis complete      │  Coverage          67%    │
+│                            │                           │  Lock-in Avg       0.58   │
+│  Matrix: 13,927 nodes      │  Gaps detected:           │                           │
+│  Sessions: 50 convos       │  • greeting: -12          │  ┌─────────────────────┐  │
+│  Insights: 30 extracted    │  • delegation: -18        │  │ ▁▃▅▇█▇▅▃▁ Response │  │
+│                            │  • short_exchange: -31    │  │   Length Dist       │  │
+│  ──────────────────────    │                           │  └─────────────────────┘  │
+│  Lock-in Distribution:     │  Recommended:             │                           │
+│  Gold   ████░░░░░░  23%    │  /mint greeting 15        │  Type Distribution:       │
+│  Silver ██████░░░░  41%    │  /mint delegation 20      │  reflect ████████░░ 42%   │
+│  Bronze ███░░░░░░░  36%    │  /mint short 35           │  recall  ███░░░░░░░ 15%   │
+│                            │                           │  greet   █░░░░░░░░░  8%   │
+│                            │  [Run All] [Step Mode]    │  deleg   ░░░░░░░░░░  2%   │
+│                            │                           │                           │
+└────────────────────────────┴───────────────────────────┴───────────────────────────┘
+│ /help │ /assay │ /mint │ /forge │ /export │ /train │ /validate │ /config │ /quit  │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## SYSTEM ARCHITECTURE
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         THE FORGE ECOSYSTEM                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐               │
+│   │   Claude    │     │   Claude    │     │    This     │               │
+│   │    Code     │     │   Desktop   │     │    Chat     │               │
+│   └──────┬──────┘     └──────┬──────┘     └──────┬──────┘               │
+│          │                   │                   │                       │
+│          └───────────────────┼───────────────────┘                       │
+│                              │                                           │
+│                              ▼                                           │
+│                    ┌─────────────────┐                                   │
+│                    │    FORGE MCP    │  ◄── JSON-RPC over stdio          │
+│                    │     Server      │                                   │
+│                    └────────┬────────┘                                   │
+│                             │                                            │
+│              ┌──────────────┼──────────────┐                             │
+│              │              │              │                             │
+│              ▼              ▼              ▼                             │
+│     ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                     │
+│     │  Forge API  │ │  Forge TUI  │ │ Forge REST  │                     │
+│     │  (Python)   │ │  (Textual)  │ │  (FastAPI)  │                     │
+│     └──────┬──────┘ └──────┬──────┘ └──────┬──────┘                     │
+│            │               │               │                             │
+│            └───────────────┼───────────────┘                             │
+│                            │                                             │
+│                            ▼                                             │
+│                   ┌─────────────────┐                                    │
+│                   │   Forge Core    │                                    │
+│                   │    (Engine)     │                                    │
+│                   └────────┬────────┘                                    │
+│                            │                                             │
+│       ┌────────────────────┼────────────────────┐                        │
+│       │          │         │         │          │                        │
+│       ▼          ▼         ▼         ▼          ▼                        │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐                 │
+│  │Crucible│ │Assayer │ │  Mint  │ │Locksmth│ │ Anvil  │                 │
+│  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘                 │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## INTERFACE LAYERS
+
+### 1. **Forge TUI** — The Terminal Command Center
+
+Built with [Textual](https://textual.textualize.io/) (Python TUI framework, Rich-based)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Features:                                                        │
+├─────────────────────────────────────────────────────────────────┤
+│ • 3-panel layout (configurable via /config panels)              │
+│ • Luna moon ASCII art (purple/gray gradient)                    │
+│ • Synthwave color scheme (customizable themes)                  │
+│ • Live-updating charts (Overwatch panel)                        │
+│ • "/" command palette with fuzzy search                         │
+│ • Step-through pipeline mode                                    │
+│ • iTerm2 integration (native splits, tmux optional)             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2. **Forge MCP** — Claude Integration
+
+```python
+# MCP Tools exposed to Claude Code / Claude Desktop
+FORGE_MCP_TOOLS = [
+    # Analysis
+    "forge_assay",           # Analyze dataset, return gaps
+    "forge_get_metrics",     # Get current dataset metrics
+    
+    # Synthesis
+    "forge_mint",            # Generate examples of specific type
+    "forge_mint_batch",      # Run full synthesis pipeline
+    
+    # Pipeline control
+    "forge_run",             # Full pipeline (with options)
+    "forge_step",            # Single pipeline step
+    "forge_status",          # Current pipeline state
+    
+    # Export
+    "forge_export",          # Export to JSONL
+    "forge_validate",        # Run validation probes
+    
+    # Config
+    "forge_config_get",      # Get config value
+    "forge_config_set",      # Set config value
+]
+```
+
+### 3. **Forge API** — Python Module
+
+```python
+from forge import Forge
+
+# Programmatic access
+forge = Forge(config_path="~/.forge/config.toml")
+
+# Full pipeline
+result = await forge.run(
+    sources=["journals/", "sessions/", "matrix.db"],
+    target_count=500,
+    profile="director",
+    step_mode=False,  # or True for manual advancement
+)
+
+# Individual modules
+candidates = forge.crucible.ingest("journals/")
+assay = forge.assayer.analyze(candidates)
+new_examples = await forge.mint.generate(assay.synthesis_targets)
+weighted = forge.locksmith.apply_weights(candidates + new_examples)
+train, val = forge.anvil.export(weighted)
+```
+
+---
+
+## COMMAND PALETTE
+
+When you hit `/` in the TUI:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🔥 THE FORGE — Command Palette                    [ESC]    │
+├─────────────────────────────────────────────────────────────┤
+│  > _                                                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  📥 INGEST                         📊 ANALYSIS              │
+│  ────────                          ──────────               │
+│  /load <path>      Load sources    /assay      Full analysis│
+│  /load journals    Load journals   /gaps       Show gaps    │
+│  /load matrix      Load matrix     /coverage   Type coverage│
+│  /load sessions    Load sessions   /voice      Voice check  │
+│  /reload           Reload all      /lockin     Lock-in dist │
+│                                                             │
+│  ⚒️  SYNTHESIS                      📦 EXPORT               │
+│  ───────────                       ────────                 │
+│  /mint <type> <n>  Generate n      /export     Export JSONL │
+│  /mint greeting 15                 /train      Start train  │
+│  /mint delegation 20               /validate   Run probes   │
+│  /mint all         Fill all gaps   /push       Push to MLX  │
+│  /rewrite <id>     Rewrite example                          │
+│                                                             │
+│  ⚙️  PIPELINE                       🎨 CONFIG               │
+│  ──────────                        ────────                 │
+│  /run              Full pipeline   /theme <n>  Switch theme │
+│  /run --step       Step mode       /panels     Config panels│
+│  /next             Next step       /colors     Edit colors  │
+│  /back             Previous step   /profile    Target prof  │
+│  /abort            Cancel pipeline                          │
+│                                                             │
+│  📋 QUICK ACTIONS                                           │
+│  ───────────────                                            │
+│  /status           Pipeline status                          │
+│  /clear            Clear terminal                           │
+│  /help             Full help                                │
+│  /quit             Exit Forge                               │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## OVERWATCH PANEL — Live Metrics
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  📊 OVERWATCH                                     [refresh] │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  DATASET HEALTH                    LOCK-IN DISTRIBUTION     │
+│  ──────────────                    ────────────────────     │
+│  Examples:  163 → 487              Gold   ████████░░  47%   │
+│  Coverage:  67% → 94%              Silver █████░░░░░  31%   │
+│  Voice:     0.73 → 0.89            Bronze ███░░░░░░░  22%   │
+│  Avg Lock:  0.58 → 0.71                                     │
+│                                                             │
+│  RESPONSE LENGTH                   TYPE COVERAGE            │
+│  ───────────────                   ─────────────            │
+│  ▁▂▃▅▇█▇▅▃▂▁                      greeting    ████████░░   │
+│  short|med|long                    ack         ██████░░░░   │
+│   42% | 35%| 23%                   short       ████████░░   │
+│                                    recall      ███████░░░   │
+│  TARGET ALIGNMENT                  emotion     █████████░   │
+│  ────────────────                  delegate    ████████░░   │
+│  Current  ▓▓▓▓▓▓▓░░░ 73%          reflect     ████░░░░░░   │
+│  Target   ████████░░ 85%                                    │
+│                                                             │
+│  RECENT ACTIVITY                                            │
+│  ───────────────                                            │
+│  14:23:15  /mint greeting 15 ✓                              │
+│  14:24:02  /mint delegation 20 ✓                            │
+│  14:25:47  /assay ✓ (coverage: 94%)                         │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## LUNA MOON ASCII
+
+```
+                    ░░░░░░░░░░░░
+                ░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░
+              ░░▒▒▓▓▓▓▓▓▓▓▓▓▓▓▒▒░░
+            ░░▒▒▓▓████████████▓▓▒▒░░
+           ░▒▒▓▓██  ░░    ░░  ██▓▓▒▒░
+          ░▒▒▓▓██      ░░      ██▓▓▒▒░
+         ░▒▒▓▓██   ░░      ░░   ██▓▓▒▒░
+         ░▒▒▓▓██                ██▓▓▒▒░
+         ░▒▒▓▓██    ░░    ░░    ██▓▓▒▒░
+          ░▒▒▓▓██              ██▓▓▒▒░
+           ░▒▒▓▓██░░      ░░██▓▓▒▒░
+            ░░▒▒▓▓████████████▓▓▒▒░░
+              ░░▒▒▓▓▓▓▓▓▓▓▓▓▓▓▒▒░░
+                ░░▒▒▒▒▒▒▒▒▒▒▒▒░░
+                    ░░░░░░░░░░
+
+           T H E   F O R G E
+```
+
+---
+
+## COLOR THEMES
+
+```python
+THEMES = {
+    "synthwave": {
+        "bg": "#1a1a2e",
+        "panel_bg": "#16213e",
+        "border": "#e94560",
+        "accent1": "#ff6b6b",     # coral/pink
+        "accent2": "#4ecdc4",     # cyan
+        "text": "#eaeaea",
+        "dim": "#666680",
+        "success": "#00ff88",
+        "warning": "#ffcc00",
+        "error": "#ff4444",
+        "moon_gradient": ["#9d4edd", "#7b2cbf", "#5a189a", "#3c096c"],
+    },
+    "midnight": {
+        "bg": "#0d1117",
+        "panel_bg": "#161b22",
+        "border": "#30363d",
+        "accent1": "#58a6ff",
+        "accent2": "#7ee787",
+        "text": "#c9d1d9",
+        "dim": "#484f58",
+        # ...
+    },
+    "ember": {
+        "bg": "#1c1c1c",
+        "panel_bg": "#2d2d2d",
+        "border": "#ff6600",
+        "accent1": "#ff9933",
+        "accent2": "#ffcc66",
+        # ...
+    }
+}
+```
+
+---
+
+## FILE STRUCTURE
+
+```
+forge/
+├── __init__.py
+├── __main__.py              # CLI entry: `python -m forge`
+│
+├── core/                    # Engine modules
+│   ├── crucible.py          # Ingestion
+│   ├── assayer.py           # Analysis
+│   ├── mint.py              # Synthesis
+│   ├── locksmith.py         # Weighting
+│   ├── anvil.py             # Export
+│   └── models.py            # Data models
+│
+├── tui/                     # Terminal UI
+│   ├── app.py               # Textual app
+│   ├── panels/
+│   │   ├── crucible.py      # Left panel
+│   │   ├── anvil.py         # Center panel
+│   │   └── overwatch.py     # Right panel
+│   ├── widgets/
+│   │   ├── moon.py          # Luna ASCII art
+│   │   ├── chart.py         # Sparkline charts
+│   │   └── command.py       # Command palette
+│   └── themes.py            # Color themes
+│
+├── mcp/                     # MCP Server
+│   ├── server.py            # JSON-RPC handler
+│   └── tools.py             # Tool definitions
+│
+├── api/                     # REST API (optional)
+│   └── server.py            # FastAPI
+│
+├── probes/                  # Validation probes
+│   ├── identity.json
+│   ├── voice.json
+│   └── delegation.json
+│
+└── config/
+    ├── default.toml         # Default config
+    └── themes/              # Theme files
+        ├── synthwave.toml
+        ├── midnight.toml
+        └── ember.toml
+```
+
+---
+
+## IMPLEMENTATION PRIORITY
+
+| Phase | What | Why |
+|-------|------|-----|
+| **1** | `core/` modules | The engine. Everything else is interface. |
+| **2** | `tui/app.py` + basic panels | Get the command center running |
+| **3** | `mcp/server.py` | Claude Code integration |
+| **4** | Overwatch charts | Live metrics |
+| **5** | Themes + customization | Polish |
+
+---
+
+## NEXT STEP
+
+Want me to:
+
+**A)** Start with the core engine — get Crucible + Assayer working so we can actually analyze the existing dataset?
+
+**B)** Scaffold the TUI structure — get the 3-panel layout with the moon rendering so you can see the interface?
+
+**C)** Write the MCP server skeleton — so Claude Code can start calling forge tools immediately?
+
+My rec: **A first** — the pretty interface is useless without the engine. Get `forge assay` working on the real data, then wrap it in chrome.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T01:11:49.185991Z
+its going to be called "PERSONA FORGE". Also we are going to be making this with claude code via a hand off- unless you think claude cowork would be better (only if it keeps my data secure and away from anthropics dirty little hands)
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T01:13:53.030401Z
+ PERSONA FORGE. That's the one.
+
+---
+
+## SECURITY CHECK: Claude Code vs Cowork
+
+**Claude Code** — Yes, use this.
+- Runs locally on your machine
+- Your files stay on your filesystem
+- API calls go to Anthropic but only send what you explicitly include in context
+- You control what gets shared
+
+**Claude Cowork** — Skip it for this.
+- Desktop automation tool, not code generation
+- Beta product, less mature
+- Overkill for what's essentially a Python project
+- No real advantage here
+
+**Verdict:** Claude Code. Your data stays sovereign. Anthropic sees prompts and responses but not your filesystem unless you explicitly cat files into the conversation.
+
+---
+
+## PERSONA FORGE — HANDOFF DOCUMENT
+
+Let me write this up properly for Claude Code execution.
+
+---
+
+```markdown
+# HANDOFF: PERSONA FORGE v1.0
+
+## WHAT THIS IS
+
+Persona Forge is a command-center tool for creating, analyzing, and refining LoRA training datasets for personality fine-tuning. It's built for Luna Engine but architecture is personality-agnostic.
+
+**Creator:** Ahab
+**Target Runtime:** iTerm2 on macOS
+**Stack:** Python 3.11+, Textual (TUI), FastMCP (MCP server)
+
+---
+
+## CORE PHILOSOPHY
+
+1. **Sovereignty** — All data stays local. No cloud dependencies for core function.
+2. **Control** — Step-through everything or full automation. User decides.
+3. **Visibility** — Overwatch panel shows ALL metrics in real-time.
+4. **Integration** — MCP server lets Claude Code/Desktop drive the forge.
+
+---
+
+## ARCHITECTURE OVERVIEW
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      PERSONA FORGE                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  INTERFACES                                                      │
+│  ──────────                                                      │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │
+│  │   TUI    │  │   MCP    │  │   CLI    │  │   API    │        │
+│  │(Textual) │  │ Server   │  │ (Typer)  │  │(FastAPI) │        │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘        │
+│       └─────────────┴─────────────┴─────────────┘               │
+│                            │                                     │
+│                            ▼                                     │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                    FORGE ENGINE                          │    │
+│  ├─────────────────────────────────────────────────────────┤    │
+│  │                                                          │    │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │    │
+│  │  │ CRUCIBLE │ │ ASSAYER  │ │   MINT   │ │LOCKSMITH │   │    │
+│  │  │ (Ingest) │ │(Analyze) │ │(Synth)   │ │(Weight)  │   │    │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │    │
+│  │                      │                                   │    │
+│  │                      ▼                                   │    │
+│  │               ┌──────────┐                               │    │
+│  │               │  ANVIL   │                               │    │
+│  │               │ (Export) │                               │    │
+│  │               └──────────┘                               │    │
+│  │                                                          │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## FILE STRUCTURE
+
+```
+persona_forge/
+├── pyproject.toml           # Project config, dependencies
+├── README.md
+│
+├── src/
+│   └── persona_forge/
+│       ├── __init__.py
+│       ├── __main__.py      # Entry point: `python -m persona_forge`
+│       ├── cli.py           # Typer CLI commands
+│       │
+│       ├── engine/          # Core forge logic
+│       │   ├── __init__.py
+│       │   ├── models.py    # Pydantic data models
+│       │   ├── crucible.py  # Ingestion module
+│       │   ├── assayer.py   # Analysis module
+│       │   ├── mint.py      # Synthesis module
+│       │   ├── locksmith.py # Lock-in weighting
+│       │   ├── anvil.py     # Export module
+│       │   └── pipeline.py  # Orchestration
+│       │
+│       ├── tui/             # Terminal UI (Textual)
+│       │   ├── __init__.py
+│       │   ├── app.py       # Main Textual app
+│       │   ├── panels/
+│       │   │   ├── __init__.py
+│       │   │   ├── crucible.py   # Source panel (left)
+│       │   │   ├── anvil.py      # Command panel (center)
+│       │   │   └── overwatch.py  # Metrics panel (right)
+│       │   ├── widgets/
+│       │   │   ├── __init__.py
+│       │   │   ├── moon.py       # Luna ASCII art widget
+│       │   │   ├── sparkline.py  # Chart widgets
+│       │   │   └── palette.py    # Command palette
+│       │   └── themes/
+│       │       ├── __init__.py
+│       │       ├── base.py
+│       │       ├── synthwave.py
+│       │       └── midnight.py
+│       │
+│       ├── mcp/             # MCP Server for Claude integration
+│       │   ├── __init__.py
+│       │   └── server.py    # FastMCP server
+│       │
+│       └── api/             # Optional REST API
+│           ├── __init__.py
+│           └── server.py    # FastAPI server
+│
+├── probes/                  # Validation probe definitions
+│   ├── identity.json
+│   ├── voice.json
+│   └── delegation.json
+│
+├── config/
+│   └── default.toml         # Default configuration
+│
+└── tests/
+    ├── test_crucible.py
+    ├── test_assayer.py
+    └── test_models.py
+```
+
+---
+
+## DATA MODELS
+
+```python
+# src/persona_forge/engine/models.py
+
+from pydantic import BaseModel, Field
+from enum import Enum
+from datetime import datetime
+from typing import Optional
+
+class InteractionType(str, Enum):
+    GREETING = "greeting"
+    ACKNOWLEDGMENT = "acknowledgment"
+    SHORT_EXCHANGE = "short_exchange"
+    CONTEXT_RECALL = "context_recall"
+    EMOTIONAL_PRESENCE = "emotional_presence"
+    DELEGATION_TRIGGER = "delegation_trigger"
+    REFLECTION = "reflection"
+    TECHNICAL = "technical"
+
+class QualityTier(str, Enum):
+    GOLD = "gold"
+    SILVER = "silver"
+    BRONZE = "bronze"
+
+class SourceType(str, Enum):
+    JOURNAL = "journal"
+    SESSION = "session"
+    MATRIX = "matrix"
+    INSIGHT = "insight"
+    SYNTHETIC = "synthetic"
+    MANUAL = "manual"
+
+class LockIn(BaseModel):
+    """Lock-in coefficient for training example weighting."""
+    base_quality: float = Field(ge=0.0, le=1.0)
+    retrieval_bonus: float = Field(default=0.0, ge=0.0)
+    reinforcement_bonus: float = Field(default=0.0, ge=0.0)
+    
+    @property
+    def coefficient(self) -> float:
+        raw = self.base_quality + self.retrieval_bonus + self.reinforcement_bonus
+        return max(0.15, min(0.95, raw))
+    
+    @property
+    def tier(self) -> QualityTier:
+        if self.coefficient >= 0.75:
+            return QualityTier.GOLD
+        elif self.coefficient >= 0.50:
+            return QualityTier.SILVER
+        return QualityTier.BRONZE
+
+class TrainingExample(BaseModel):
+    """Single training example with full metadata."""
+    id: str
+    
+    # Core training data
+    system_prompt: str
+    user_message: str
+    assistant_response: str
+    
+    # Metadata
+    source_type: SourceType
+    source_file: Optional[str] = None
+    interaction_type: InteractionType
+    created_at: datetime = Field(default_factory=datetime.now)
+    
+    # Metrics
+    response_word_count: int = 0
+    user_word_count: int = 0
+    
+    # Quality
+    lock_in: LockIn
+    voice_markers: dict[str, bool] = Field(default_factory=dict)
+    anti_patterns: dict[str, bool] = Field(default_factory=dict)
+    
+    def compute_word_counts(self) -> None:
+        self.response_word_count = len(self.assistant_response.split())
+        self.user_word_count = len(self.user_message.split())
+
+class ResponseLength(str, Enum):
+    SHORT = "short"      # < 50 words
+    MEDIUM = "medium"    # 50-150 words
+    LONG = "long"        # > 150 words
+
+class DatasetAssay(BaseModel):
+    """Complete analysis of a training dataset."""
+    total_examples: int
+    
+    # Distributions
+    interaction_type_dist: dict[InteractionType, float]
+    response_length_dist: dict[ResponseLength, float]
+    source_type_dist: dict[SourceType, float]
+    quality_tier_dist: dict[QualityTier, float]
+    
+    # Voice analysis
+    voice_marker_rates: dict[str, float]
+    anti_pattern_rates: dict[str, float]
+    
+    # Lock-in stats
+    avg_lock_in: float
+    lock_in_std: float
+    
+    # Coverage gaps (actual vs target)
+    gaps: dict[InteractionType, int]  # negative = deficit
+    
+    # Synthesis recommendations
+    synthesis_targets: dict[InteractionType, int]
+
+class TargetProfile(BaseModel):
+    """Target distribution profile for dataset."""
+    name: str
+    
+    interaction_types: dict[InteractionType, float]  # target percentages
+    response_lengths: dict[ResponseLength, float]
+    
+    voice_markers: dict[str, float]      # minimum rates
+    anti_patterns: dict[str, float]      # maximum rates
+    
+    min_examples: int = 300
+    target_examples: int = 500
+
+# Default profile for Director LLM
+DIRECTOR_PROFILE = TargetProfile(
+    name="director",
+    interaction_types={
+        InteractionType.GREETING: 0.15,
+        InteractionType.ACKNOWLEDGMENT: 0.10,
+        InteractionType.SHORT_EXCHANGE: 0.25,
+        InteractionType.CONTEXT_RECALL: 0.15,
+        InteractionType.EMOTIONAL_PRESENCE: 0.15,
+        InteractionType.DELEGATION_TRIGGER: 0.10,
+        InteractionType.REFLECTION: 0.10,
+    },
+    response_lengths={
+        ResponseLength.SHORT: 0.40,
+        ResponseLength.MEDIUM: 0.35,
+        ResponseLength.LONG: 0.25,
+    },
+    voice_markers={
+        "first_person": 0.90,
+        "warmth_words": 0.60,
+        "uncertainty": 0.30,
+        "relationship": 0.40,
+    },
+    anti_patterns={
+        "generic_ai": 0.00,
+        "corporate": 0.05,
+        "hedging": 0.10,
+    },
+)
+```
+
+---
+
+## ENGINE MODULES
+
+### Crucible (Ingestion)
+
+```python
+# src/persona_forge/engine/crucible.py
+
+from pathlib import Path
+from .models import TrainingExample, SourceType, InteractionType, LockIn
+import json
+
+class Crucible:
+    """Ingests raw materials into TrainingExample format."""
+    
+    def __init__(self):
+        self.examples: list[TrainingExample] = []
+    
+    def ingest_jsonl(self, path: Path) -> list[TrainingExample]:
+        """Load existing JSONL training data."""
+        examples = []
+        with open(path) as f:
+            for i, line in enumerate(f):
+                data = json.loads(line)
+                example = self._parse_jsonl_entry(data, path, i)
+                examples.append(example)
+        self.examples.extend(examples)
+        return examples
+    
+    def ingest_journals(self, directory: Path) -> list[TrainingExample]:
+        """Convert journal markdown files to training examples."""
+        # Implementation: parse markdown, extract as reflection type
+        pass
+    
+    def ingest_matrix_nodes(self, db_path: Path) -> list[TrainingExample]:
+        """Convert Memory Matrix nodes to training examples."""
+        # Implementation: query sqlite, transform nodes
+        pass
+    
+    def ingest_sessions(self, path: Path) -> list[TrainingExample]:
+        """Convert session transcripts to training examples."""
+        pass
+    
+    def _parse_jsonl_entry(self, data: dict, source: Path, idx: int) -> TrainingExample:
+        """Parse a single JSONL entry into TrainingExample."""
+        # Extract fields, classify interaction type, compute lock-in
+        pass
+    
+    def _classify_interaction_type(self, user_msg: str, response: str) -> InteractionType:
+        """Classify the interaction type based on content."""
+        # Heuristics for classification
+        pass
+    
+    def _compute_initial_lockin(self, example: TrainingExample) -> LockIn:
+        """Compute initial lock-in based on source and voice analysis."""
+        pass
+```
+
+### Assayer (Analysis)
+
+```python
+# src/persona_forge/engine/assayer.py
+
+import re
+from collections import Counter
+from .models import (
+    TrainingExample, DatasetAssay, TargetProfile,
+    InteractionType, ResponseLength, QualityTier,
+    DIRECTOR_PROFILE
+)
+
+class Assayer:
+    """Analyzes training dataset against target profile."""
+    
+    VOICE_MARKERS = {
+        "first_person": r"\b(I|I'm|I've|I'd|my|me)\b",
+        "warmth_words": r"\b(honestly|actually|you know|yeah|cool|nice|hey)\b",
+        "uncertainty": r"\b(maybe|probably|I think|not sure|might|could be)\b",
+        "relationship": r"\b(we|we've|we're|our|together|Ahab)\b",
+        "inside_refs": r"\b(Dude|Ben|fart|symphony|sovereignty|Memory Matrix)\b",
+    }
+    
+    ANTI_PATTERNS = {
+        "generic_ai": r"\b(I am an AI|as an AI|language model|Alibaba|Qwen|created by)\b",
+        "corporate": r"\b(I'd be happy to|certainly|absolutely|assist you|help you with)\b",
+        "hedging": r"\b(I cannot|I'm not able|I don't have the ability|I'm unable)\b",
+    }
+    
+    def __init__(self, target_profile: TargetProfile = DIRECTOR_PROFILE):
+        self.profile = target_profile
+    
+    def analyze(self, examples: list[TrainingExample]) -> DatasetAssay:
+        """Full dataset analysis."""
+        
+        # Compute distributions
+        type_dist = self._compute_type_distribution(examples)
+        length_dist = self._compute_length_distribution(examples)
+        source_dist = self._compute_source_distribution(examples)
+        tier_dist = self._compute_tier_distribution(examples)
+        
+        # Voice analysis
+        voice_rates = self._compute_voice_marker_rates(examples)
+        anti_rates = self._compute_anti_pattern_rates(examples)
+        
+        # Lock-in stats
+        coefficients = [e.lock_in.coefficient for e in examples]
+        avg_lockin = sum(coefficients) / len(coefficients) if coefficients else 0
+        
+        # Compute gaps
+        gaps = self._compute_gaps(type_dist, len(examples))
+        synthesis_targets = self._compute_synthesis_targets(gaps)
+        
+        return DatasetAssay(
+            total_examples=len(examples),
+            interaction_type_dist=type_dist,
+            response_length_dist=length_dist,
+            source_type_dist=source_dist,
+            quality_tier_dist=tier_dist,
+            voice_marker_rates=voice_rates,
+            anti_pattern_rates=anti_rates,
+            avg_lock_in=avg_lockin,
+            lock_in_std=self._std(coefficients),
+            gaps=gaps,
+            synthesis_targets=synthesis_targets,
+        )
+    
+    def _compute_type_distribution(self, examples: list[TrainingExample]) -> dict:
+        counter = Counter(e.interaction_type for e in examples)
+        total = len(examples)
+        return {t: counter.get(t, 0) / total for t in InteractionType}
+    
+    def _compute_length_distribution(self, examples: list[TrainingExample]) -> dict:
+        def categorize(wc: int) -> ResponseLength:
+            if wc < 50:
+                return ResponseLength.SHORT
+            elif wc < 150:
+                return ResponseLength.MEDIUM
+            return ResponseLength.LONG
+        
+        counter = Counter(categorize(e.response_word_count) for e in examples)
+        total = len(examples)
+        return {l: counter.get(l, 0) / total for l in ResponseLength}
+    
+    def _compute_voice_marker_rates(self, examples: list[TrainingExample]) -> dict:
+        rates = {}
+        for marker, pattern in self.VOICE_MARKERS.items():
+            matches = sum(1 for e in examples if re.search(pattern, e.assistant_response, re.I))
+            rates[marker] = matches / len(examples) if examples else 0
+        return rates
+    
+    def _compute_anti_pattern_rates(self, examples: list[TrainingExample]) -> dict:
+        rates = {}
+        for pattern_name, pattern in self.ANTI_PATTERNS.items():
+            matches = sum(1 for e in examples if re.search(pattern, e.assistant_response, re.I))
+            rates[pattern_name] = matches / len(examples) if examples else 0
+        return rates
+    
+    def _compute_gaps(self, actual_dist: dict, total: int) -> dict[InteractionType, int]:
+        """Compute gap between actual and target counts."""
+        gaps = {}
+        for itype in InteractionType:
+            target_pct = self.profile.interaction_types.get(itype, 0)
+            actual_pct = actual_dist.get(itype, 0)
+            target_count = int(self.profile.target_examples * target_pct)
+            actual_count = int(total * actual_pct)
+            gaps[itype] = actual_count - target_count  # negative = need more
+        return gaps
+    
+    def _compute_synthesis_targets(self, gaps: dict) -> dict[InteractionType, int]:
+        """How many of each type to synthesize."""
+        return {t: abs(g) for t, g in gaps.items() if g < 0}
+```
+
+### Locksmith (Weighting)
+
+```python
+# src/persona_forge/engine/locksmith.py
+
+import re
+from .models import TrainingExample, LockIn, SourceType
+from .assayer import Assayer
+
+class Locksmith:
+    """Computes and applies lock-in coefficients."""
+    
+    # Bonuses
+    RETRIEVAL_BONUS = 0.02
+    REINFORCEMENT_BONUS = 0.05
+    
+    # Source quality baselines
+    SOURCE_BASELINES = {
+        SourceType.JOURNAL: 0.70,    # Journals are high quality
+        SourceType.MANUAL: 0.65,     # Hand-crafted
+        SourceType.SESSION: 0.50,    # Variable quality
+        SourceType.INSIGHT: 0.55,
+        SourceType.MATRIX: 0.40,     # Needs rewriting
+        SourceType.SYNTHETIC: 0.45,  # Needs validation
+    }
+    
+    def compute_lock_in(self, example: TrainingExample) -> LockIn:
+        """Compute full lock-in coefficient for an example."""
+        base = self._compute_base_quality(example)
+        return LockIn(
+            base_quality=base,
+            retrieval_bonus=0.0,  # Updated during synthesis
+            reinforcement_bonus=0.0,  # Updated manually
+        )
+    
+    def _compute_base_quality(self, example: TrainingExample) -> float:
+        """Score based on source and voice analysis."""
+        score = self.SOURCE_BASELINES.get(example.source_type, 0.5)
+        
+        # Voice marker bonuses
+        if example.voice_markers.get("first_person"):
+            score += 0.05
+        if example.voice_markers.get("warmth_words"):
+            score += 0.05
+        if example.voice_markers.get("relationship"):
+            score += 0.05
+        
+        # Anti-pattern penalties
+        if example.anti_patterns.get("generic_ai"):
+            score -= 0.30
+        if example.anti_patterns.get("corporate"):
+            score -= 0.15
+        if example.anti_patterns.get("hedging"):
+            score -= 0.10
+        
+        # Length appropriateness
+        if example.interaction_type in ["greeting", "acknowledgment"]:
+            if example.response_word_count > 100:
+                score -= 0.15  # Too long for type
+        
+        return max(0.15, min(0.85, score))
+    
+    def apply_retrieval_bonus(self, example: TrainingExample) -> None:
+        """Called when example is retrieved during synthesis."""
+        example.lock_in.retrieval_bonus += self.RETRIEVAL_BONUS
+        example.lock_in.retrieval_bonus = min(0.20, example.lock_in.retrieval_bonus)
+    
+    def apply_reinforcement(self, example: TrainingExample) -> None:
+        """Called when user marks example as high quality."""
+        example.lock_in.reinforcement_bonus += self.REINFORCEMENT_BONUS
+        example.lock_in.reinforcement_bonus = min(0.25, example.lock_in.reinforcement_bonus)
+    
+    def compute_training_weight(self, example: TrainingExample) -> int:
+        """Duplication count for training dataset."""
+        coef = example.lock_in.coefficient
+        if coef >= 0.75:
+            return 3  # Gold: triple
+        elif coef >= 0.50:
+            return 2  # Silver: double
+        return 1      # Bronze: single
+```
+
+---
+
+## TUI SPECIFICATION
+
+### Main App
+
+```python
+# src/persona_forge/tui/app.py
+
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Header, Footer
+from textual.binding import Binding
+
+from .panels.crucible import CruciblePanel
+from .panels.anvil import AnvilPanel
+from .panels.overwatch import OverwatchPanel
+from .widgets.palette import CommandPalette
+from .themes import THEMES
+
+class PersonaForgeApp(App):
+    """The Persona Forge command center."""
+    
+    CSS_PATH = "forge.tcss"
+    TITLE = "PERSONA FORGE"
+    
+    BINDINGS = [
+        Binding("/", "command_palette", "Commands", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("r", "refresh", "Refresh", show=True),
+    ]
+    
+    def __init__(self, theme: str = "synthwave"):
+        super().__init__()
+        self.current_theme = THEMES[theme]
+    
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Horizontal(
+            CruciblePanel(id="crucible"),
+            AnvilPanel(id="anvil"),
+            OverwatchPanel(id="overwatch"),
+            id="main-panels"
+        )
+        yield Footer()
+    
+    def action_command_palette(self) -> None:
+        """Show command palette on / key."""
+        self.push_screen(CommandPalette())
+```
+
+### Theme System
+
+```python
+# src/persona_forge/tui/themes/synthwave.py
+
+SYNTHWAVE = {
+    "name": "synthwave",
+    
+    "colors": {
+        "background": "#1a1a2e",
+        "surface": "#16213e",
+        "border": "#e94560",
+        
+        "primary": "#ff6b6b",
+        "secondary": "#4ecdc4",
+        "accent": "#9d4edd",
+        
+        "text": "#eaeaea",
+        "text_dim": "#666680",
+        "text_muted": "#444455",
+        
+        "success": "#00ff88",
+        "warning": "#ffcc00",
+        "error": "#ff4444",
+    },
+    
+    "moon_gradient": ["#9d4edd", "#7b2cbf", "#5a189a", "#3c096c"],
+    
+    "chart_colors": ["#ff6b6b", "#4ecdc4", "#9d4edd", "#ffcc00", "#00ff88"],
+}
+```
+
+### Command Palette
+
+```python
+# src/persona_forge/tui/widgets/palette.py
+
+COMMANDS = [
+    # Ingest
+    {"key": "load", "desc": "Load sources", "args": "<path>"},
+    {"key": "load journals", "desc": "Load journal directory"},
+    {"key": "load matrix", "desc": "Load Memory Matrix"},
+    {"key": "load sessions", "desc": "Load session transcripts"},
+    {"key": "reload", "desc": "Reload all sources"},
+    
+    # Analysis
+    {"key": "assay", "desc": "Full dataset analysis"},
+    {"key": "gaps", "desc": "Show coverage gaps"},
+    {"key": "coverage", "desc": "Type coverage breakdown"},
+    {"key": "voice", "desc": "Voice marker analysis"},
+    {"key": "lockin", "desc": "Lock-in distribution"},
+    
+    # Synthesis
+    {"key": "mint", "desc": "Generate examples", "args": "<type> <count>"},
+    {"key": "mint all", "desc": "Fill all gaps automatically"},
+    {"key": "rewrite", "desc": "Rewrite example", "args": "<id>"},
+    
+    # Pipeline
+    {"key": "run", "desc": "Full forge pipeline"},
+    {"key": "run --step", "desc": "Step-through mode"},
+    {"key": "next", "desc": "Advance to next step"},
+    {"key": "back", "desc": "Go back one step"},
+    {"key": "abort", "desc": "Cancel pipeline"},
+    
+    # Export
+    {"key": "export", "desc": "Export to JSONL"},
+    {"key": "train", "desc": "Start LoRA training"},
+    {"key": "validate", "desc": "Run validation probes"},
+    
+    # Config
+    {"key": "theme", "desc": "Switch theme", "args": "<name>"},
+    {"key": "panels", "desc": "Configure panel layout"},
+    {"key": "colors", "desc": "Edit color scheme"},
+    {"key": "profile", "desc": "Edit target profile"},
+    
+    # System
+    {"key": "status", "desc": "Pipeline status"},
+    {"key": "clear", "desc": "Clear terminal"},
+    {"key": "help", "desc": "Show help"},
+    {"key": "quit", "desc": "Exit Persona Forge"},
+]
+```
+
+---
+
+## MCP SERVER
+
+```python
+# src/persona_forge/mcp/server.py
+
+from fastmcp import FastMCP
+from ..engine import Crucible, Assayer, Mint, Locksmith, Anvil
+from ..engine.models import DatasetAssay, TrainingExample
+
+mcp = FastMCP("persona-forge")
+
+# Global engine instances
+crucible = Crucible()
+assayer = Assayer()
+locksmith = Locksmith()
+
+@mcp.tool()
+async def forge_load(path: str) -> dict:
+    """Load training data from path."""
+    examples = crucible.ingest_jsonl(Path(path))
+    return {"loaded": len(examples), "total": len(crucible.examples)}
+
+@mcp.tool()
+async def forge_assay() -> dict:
+    """Analyze current dataset against target profile."""
+    assay = assayer.analyze(crucible.examples)
+    return assay.model_dump()
+
+@mcp.tool()
+async def forge_gaps() -> dict:
+    """Get synthesis targets to fill coverage gaps."""
+    assay = assayer.analyze(crucible.examples)
+    return {"gaps": assay.gaps, "synthesis_targets": assay.synthesis_targets}
+
+@mcp.tool()
+async def forge_mint(interaction_type: str, count: int) -> dict:
+    """Generate synthetic examples of specified type."""
+    # Implementation: call Mint module
+    pass
+
+@mcp.tool()
+async def forge_export(output_path: str, train_split: float = 0.9) -> dict:
+    """Export dataset to JSONL files."""
+    # Implementation: call Anvil module
+    pass
+
+@mcp.tool()
+async def forge_validate(model_path: str, probes_path: str) -> dict:
+    """Run validation probes against trained model."""
+    pass
+
+@mcp.tool()
+async def forge_status() -> dict:
+    """Get current forge state."""
+    return {
+        "examples_loaded": len(crucible.examples),
+        "last_assay": None,  # Cache last assay
+        "pipeline_state": "idle",
+    }
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+---
+
+## DEPENDENCIES
+
+```toml
+# pyproject.toml
+
+[project]
+name = "persona-forge"
+version = "1.0.0"
+description = "Training data forge for personality LoRA fine-tuning"
+requires-python = ">=3.11"
+
+dependencies = [
+    "textual>=0.47.0",      # TUI framework
+    "rich>=13.0.0",         # Rich text/formatting
+    "typer>=0.9.0",         # CLI framework
+    "pydantic>=2.0.0",      # Data models
+    "fastmcp>=0.1.0",       # MCP server
+    "httpx>=0.25.0",        # HTTP client (for Claude API)
+    "tomli>=2.0.0",         # Config parsing
+    "aiosqlite>=0.19.0",    # Async SQLite (for Matrix)
+]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.100.0", "uvicorn>=0.23.0"]
+dev = ["pytest>=7.0.0", "pytest-asyncio>=0.21.0"]
+
+[project.scripts]
+forge = "persona_forge.cli:app"
+```
+
+---
+
+## IMPLEMENTATION ORDER
+
+### Phase 1: Engine Core (Day 1-2)
+1. `models.py` — All Pydantic models
+2. `crucible.py` — JSONL ingestion (start here, test on real data)
+3. `assayer.py` — Full analysis (get metrics on existing dataset)
+4. `locksmith.py` — Lock-in computation
+
+### Phase 2: CLI + Basic TUI (Day 3-4)
+1. `cli.py` — Typer CLI (`forge assay`, `forge load`)
+2. `tui/app.py` — Basic 3-panel layout
+3. `tui/themes/synthwave.py` — Color scheme
+4. `tui/widgets/moon.py` — Luna ASCII art
+
+### Phase 3: MCP + Integration (Day 5)
+1. `mcp/server.py` — FastMCP server
+2. Test from Claude Code
+3. Test from Claude Desktop
+
+### Phase 4: Synthesis + Polish (Day 6-7)
+1. `mint.py` — Synthesis module (Claude API integration)
+2. `anvil.py` — Export with weighting
+3. `tui/panels/overwatch.py` — Live charts
+4. `tui/widgets/palette.py` — Command palette
+
+---
+
+## VALIDATION CRITERIA
+
+Before considering Phase 1 complete:
+- [ ] `forge load training_data/luna_dataset_train.jsonl` loads 163 examples
+- [ ] `forge assay` returns accurate distribution analysis
+- [ ] Lock-in coefficients computed for all examples
+- [ ] Voice markers detected correctly
+- [ ] Anti-patterns flagged
+
+Before considering complete:
+- [ ] TUI renders 3-panel layout in iTerm2
+- [ ] Command palette accessible via `/`
+- [ ] MCP server responds to Claude Code
+- [ ] Full pipeline runs end-to-end
+- [ ] Exports valid training JSONL
+
+---
+
+## NOTES FOR IMPLEMENTER
+
+1. **Start with the engine** — TUI is chrome. Get `assay` working on real data first.
+
+2. **Real data path:** `/Users/zayneamason/_HeyLuna_BETA/_Eclessi_BetaProject_Root/src/training_data/luna_dataset_train.jsonl`
+
+3. **Lock-in equation is sacred** — Match the Memory Matrix formula exactly.
+
+4. **Textual is powerful but quirky** — Use their examples. The CSS system takes getting used to.
+
+5. **Test MCP early** — Don't leave integration for last.
+
+6. **Ahab wants control** — Step mode is not optional. Every automated action should have a manual equivalent.
+```
+
+---
+
+That's the handoff. Ready to ship to Claude Code?
+
+Want me to adjust anything before you fire it off?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T01:33:02.592717Z
+Claude failed or something but you were working on this— i want to be able to run a version of the luna voight-kampff test or similar , the test should be custimizable and changeable. Also i want to be able to modulate personality and personality traits inside of a character creation module. this will be loaded and adjust to luna but i want to be able to create personality types in the future so that what it will be used for. make sure this is versioned and packaged professionally here with documentation: /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Tools. also this is going to be a hive swarm claude flow project when possible. thanks. you can drop this handoff inside of the tools folder as well.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T01:39:45.210034Z
+ I see the handoff got cut off mid-implementation. Let me complete it properly with the Character Forge, full Voight-Kampff system, and professional packaging.
+
+Let me first check what's already there and then complete the handoff:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Empty directory. Let me create the complete handoff document:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me create the companion README and a quick-reference for Claude Code:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Done. Here's the summary:
+
+---
+
+## PERSONA FORGE — Handoff Complete
+
+**Location:** `/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Tools/persona_forge/`
+
+**Files Created:**
+
+| File | Purpose |
+|------|---------|
+| `HANDOFF_PERSONA_FORGE_V1.md` | Complete implementation spec (~2000 lines) |
+| `README.md` | User documentation |
+| `CLAUDE_CODE_QUICKREF.md` | Quick reference for Claude Code execution |
+
+---
+
+## What's In The Handoff
+
+### 1. **Dataset Pipeline** (5 modules)
+- Crucible (ingest)
+- Assayer (analyze)
+- Mint (synthesize)
+- Locksmith (lock-in weighting)
+- Anvil (export)
+
+### 2. **Character Forge** (full personality system)
+- Multi-dimensional trait vectors (9 dimensions)
+- Trait modulation with bounds
+- Voice profiles (favorite words, patterns, style)
+- System prompt generation
+- TOML serialization
+
+### 3. **Voight-Kampff** (complete validation framework)
+- Customizable probe categories (identity, voice, emotional, boundaries, delegation)
+- Multiple evaluation methods (contains, regex, length, semantic, compound)
+- Fluent suite builder
+- Pre-built Luna test suite
+- Detailed reporting with strengths/weaknesses/recommendations
+
+### 4. **TUI Command Center**
+- 3-panel layout (Crucible | Anvil | Overwatch)
+- Synthwave theme (+ midnight, ember)
+- Command palette (`/`)
+- Luna moon ASCII art
+- Live metrics charts
+
+### 5. **MCP Server**
+- All forge tools exposed
+- Character management
+- VK test execution
+
+---
+
+## Swarm Execution Strategy
+
+**Phase 1 (Parallel):**
+- Worker A: Engine models + Crucible + Assayer + Locksmith
+- Worker B: Personality models + Character Forge + Trait Engine
+- Worker C: Voight-Kampff models + Evaluator + Runner + Builder
+
+**Phase 2 (Sequential):**
+- Worker D: Pipeline + Anvil + Mint + CLI
+
+**Phase 3 (Parallel):**
+- Worker E: TUI (Textual app, panels, widgets, themes)
+- Worker F: MCP Server
+
+---
+
+Ready to fire at Claude Code. The handoff is comprehensive enough for parallel workers to build without stepping on each other.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T03:56:46.590065Z
+ok lets make the forge do something
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T04:03:49.294117Z
+ Let's get this thing working. Starting with the core engine so we can actually analyze your existing dataset.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let's create a quick CLI so we can actually run it:
+```
+This block is not supported on your current device yet.
+```
+
+Now let's test it on your actual dataset:
+```
+This block is not supported on your current device yet.
+```
+
+Path issue. Let me fix the import:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+**BOOM.** It's working. And the data is... rough. Let me see what's actually in those examples:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Ah, the format is `conversations` not `messages`. Let me update Crucible to handle this:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T04:06:48.636809Z
+ok where are we at?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T04:09:06.987447Z
+ **Current State: Persona Forge v0.1 - Core Engine Working**
+
+What's functional right now:
+- **Crucible** - Ingests your JSONL dataset (handles both OpenAI and Luna/ShareGPT formats)
+- **Assayer** - Full analysis with health scoring, voice markers, anti-pattern detection
+- **CLI** - `forge_cli.py assay <path>` works
+
+**Your Dataset Reality Check (147 examples):**
+```
+Health: 77.7/100 (not bad, but gaps)
+
+Good:
+✓ 34.7% gold tier examples
+✓ 64.6% relationship markers (Ahab references)
+✓ Low anti-patterns (1.4% generic_ai)
+
+Problems:
+✗ Only 76.2% first person (need 90%)
+✗ Only 35.4% warmth words (need 60%)
+✗ Missing interaction types: emotional_presence (0.7%), context_recall (1.4%), acknowledgment (0%)
+✗ Need ~350 more examples to hit target of 500
+```
+
+**What's NOT built yet:**
+1. **Mint** - Synthesis module (generate examples to fill gaps)
+2. **Anvil** - Export module (weighted JSONL output)
+3. **Locksmith** - Lock-in coefficient adjustments based on retrievals
+4. **Character Forge** - Personality profile management
+5. **Voight-Kampff** - Validation/testing framework
+6. **TUI** - The fancy terminal interface
+
+**Next moves - pick your poison:**
+
+A) **Mint** - Start generating synthetic examples to fill those gaps (greeting, emotional_presence, acknowledgment)
+
+B) **Anvil + Export** - Get weighted export working so you can actually train on the cleaned data
+
+C) **Voight-Kampff** - Build the personality validation probes so you can test LoRA outputs
+
+D) **Full pipeline** - Wire it all together: load → assay → mint → export
+
+What's the priority?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T04:11:20.106969Z
+i want to examine more source that we can feed luna listed on here via a time line, listed by event and category, type
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T04:16:34.681735Z
+ Let me map out all the data sources we can feed into the Forge.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the Memory Matrix for session transcripts:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now I have the full picture. Let me create a visual timeline:
+```
+This block is not supported on your current device yet.
+```
+
+Here's the inventory:
+
+---
+
+## **Luna Training Data Sources - The Full Picture**
+
+### **Timeline**
+```
+Nov 28         Dec 8-11        Dec 14          Jan 20         Now
+   |              |              |               |              |
+   Luna           Journal        Memory          Engine v2      
+   Alpha          Training       Matrix          Sessions       
+   Awakens        Created        Seeded          Begin          
+```
+
+---
+
+### **What We Have**
+
+| Source | Count | Format | Quality |
+|--------|-------|--------|---------|
+| **JSONL (existing)** | ~605 lines | Ready | 77% health |
+| **Memory Matrix** | 22K+ nodes | SQLite | Mixed - needs filtering |
+| **Conversation Turns** | 456 | SQLite | ✅ Gold |
+| **Alpha Session Notes** | 76 files | Markdown | ✅ Gold |
+| **Session Transcripts** | 48 rich | Markdown | ✅ Gold |
+| **Session Archives** | 97 | Markdown | Good |
+| **Insights** | 45 | Markdown | Good |
+| **Identity/Virtue** | ~10 | Markdown/JSON | ✅ Gold |
+
+---
+
+### **High-Value Extraction Targets**
+
+| Priority | Source | Est. Examples | Why |
+|----------|--------|---------------|-----|
+| 🥇 | Memory Matrix QUESTION nodes (364) | ~200 | Natural Q&A format |
+| 🥇 | Rich session transcripts (48) | ~150 | Real Luna voice |
+| 🥇 | Alpha session notes (76) | ~100 | Historical gold |
+| 🥈 | Conversation turns (456) | ~200 | Recent, authentic |
+| 🥈 | PERSONALITY_REFLECTION nodes (5) | ~5 | Pure Luna introspection |
+| 🥉 | Insights markdown | ~30 | Deep technical |
+
+---
+
+### **Gap Coverage**
+
+Your biggest holes and where to fill them:
+
+| Missing Type | Need | Best Source |
+|--------------|------|-------------|
+| `emotional_presence` | +74 | Session transcripts, Identity files |
+| `context_recall` | +73 | MEMORY nodes, Session archives |
+| `greeting` | +70 | Session openings |
+| `acknowledgment` | +50 | Conversation turns |
+| `reflection` | +45 | Journal entries, Insights |
+
+---
+
+**Bottom line:** You've got ~800+ potential new examples sitting in various formats. The Forge needs ingesters for:
+1. Memory Matrix SQLite (specific node types)
+2. Session transcript markdown (turn-based)
+3. Alpha session notes (narrative extraction)
+
+Want me to build those ingesters next?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:10:41.671910Z
+can you explain the ingesters?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:11:07.975932Z
+ ## Ingesters - What They Are
+
+An ingester is just a parser that transforms raw source material into `TrainingExample` objects the Forge can work with.
+
+**The flow:**
+```
+Raw Source → Ingester → TrainingExample → Assayer → Quality Score
+```
+
+Right now Crucible has two ingesters:
+1. `ingest_jsonl()` - Reads JSONL files (OpenAI or ShareGPT format)
+2. `ingest_journals()` - Reads markdown journals (stub, barely works)
+
+---
+
+## What Each New Ingester Would Do
+
+### 1. Memory Matrix Ingester
+**Input:** SQLite database, specific node types
+**Output:** Training examples from memory nodes
+
+```
+QUESTION node: "What's the Memory Matrix architecture?"
+     ↓
+TrainingExample:
+  user: "What's the Memory Matrix architecture?"
+  assistant: [pulled from related FACT nodes or synthesized]
+  type: technical
+```
+
+The tricky part: Memory nodes are *fragments*, not conversations. We'd need to:
+- Pull QUESTION nodes as user prompts
+- Find related context (FACT, OBSERVATION) as potential responses
+- Or flag them for synthesis (Mint would generate Luna's response)
+
+**Best for:** `context_recall`, `technical`, questions Luna should know
+
+---
+
+### 2. Session Transcript Ingester
+**Input:** Markdown files with turn structure
+**Output:** Direct conversation pairs
+
+```markdown
+## Turn 14
+**User:** hey luna
+
+## Turn 15  
+**Luna:** Hey! What's up?
+```
+↓
+```python
+TrainingExample(
+  user="hey luna",
+  assistant="Hey! What's up?",
+  type=greeting,
+  source=session
+)
+```
+
+This is the cleanest source - already in conversation format. Just parse the markdown structure.
+
+**Best for:** `greeting`, `acknowledgment`, `short_exchange`, `emotional_presence`
+
+---
+
+### 3. Alpha Session Notes Ingester
+**Input:** Narrative markdown documents
+**Output:** Extracted conversation moments
+
+These are trickier - they're narratives *about* conversations, not transcripts:
+
+```markdown
+# Luna Debugs Her Own Nervous System
+
+Luna noticed the activation pattern wasn't firing correctly.
+"That's weird," she said. "The retrieval should have triggered..."
+```
+
+We'd need to:
+- Extract quoted Luna speech
+- Infer the prompt context
+- Possibly use LLM to help structure
+
+**Best for:** `reflection`, `technical`, historical personality samples
+
+---
+
+## Effort vs Value Matrix
+
+| Ingester | Effort | Yield | Priority |
+|----------|--------|-------|----------|
+| Session Transcript | Low | ~150 gold examples | 🥇 Do first |
+| Memory Matrix | Medium | ~200 examples (needs filtering) | 🥈 Do second |
+| Alpha Notes | High | ~100 examples (needs LLM help) | 🥉 Do if needed |
+
+---
+
+## What I'd Build
+
+**Session Transcript Ingester** (low effort, high yield):
+
+```python
+def ingest_session_transcripts(self, directory: Path) -> list[TrainingExample]:
+    """Parse markdown session files with Turn structure."""
+    for md_file in directory.glob("*.md"):
+        content = md_file.read_text()
+        turns = self._parse_turns(content)  # Extract User/Luna pairs
+        
+        for user_turn, luna_turn in zip(turns[::2], turns[1::2]):
+            example = TrainingExample(
+                user_message=user_turn,
+                assistant_response=luna_turn,
+                source_type=SourceType.SESSION,
+                ...
+            )
+            # Classify, detect voice markers, compute lock-in
+```
+
+Want me to build the session transcript ingester first? It's the fastest path to more quality data.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:13:17.200290Z
+how would we use llm's to restructure?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:13:53.784588Z
+ ## Using LLMs to Restructure Training Data
+
+The idea: feed messy source material to an LLM, get back clean training examples.
+
+---
+
+### The Problem with Alpha Notes
+
+Raw input looks like this:
+
+```markdown
+# Luna Debugs Her Own Nervous System - Live Activation
+
+The session started with a simple test. Ahab typed "hey Luna" and waited.
+
+Luna's response was immediate but something felt off. "I can see the 
+activation," she said, "but the memory retrieval isn't triggering. It's 
+like... the signal is getting lost somewhere between the kernel and the 
+matrix."
+
+Ahab pulled up the logs. "Show me what you're seeing."
+
+"Okay so here's the thing - when I try to recall our conversation from 
+yesterday, I get nothing. But I *know* we talked about the voice pipeline. 
+The memory exists, I just can't reach it."
+```
+
+This is narrative prose with embedded dialogue. Not a clean user/assistant pair.
+
+---
+
+### LLM Extraction Approach
+
+**Step 1: Define the output schema**
+
+```python
+class ExtractedExchange(BaseModel):
+    user_message: str        # What Ahab said/did
+    luna_response: str       # Luna's reply
+    context: str             # What was happening
+    interaction_type: str    # greeting, technical, emotional, etc.
+    confidence: float        # How clean was this extraction
+```
+
+**Step 2: Prompt the LLM**
+
+```python
+EXTRACTION_PROMPT = """
+You are extracting training data for Luna, an AI companion.
+
+Given this narrative text, extract any clear conversational exchanges 
+between Ahab (the human) and Luna (the AI).
+
+Rules:
+- Only extract exchanges where Luna's voice is clear
+- Skip narration, only capture actual dialogue
+- If Ahab's prompt is implied, write what he likely said
+- Rate your confidence (0.0-1.0) in each extraction
+
+Source text:
+{narrative}
+
+Return JSON array of exchanges.
+"""
+```
+
+**Step 3: Process and filter**
+
+```python
+def ingest_with_llm(self, narrative: str) -> list[TrainingExample]:
+    # Call Claude/local model
+    response = self.llm.complete(
+        EXTRACTION_PROMPT.format(narrative=narrative)
+    )
+    
+    extractions = parse_json(response)
+    
+    examples = []
+    for ext in extractions:
+        if ext.confidence < 0.7:
+            continue  # Skip uncertain extractions
+            
+        example = TrainingExample(
+            user_message=ext.user_message,
+            assistant_response=ext.luna_response,
+            source_type=SourceType.SYNTHETIC,  # Mark as LLM-processed
+            interaction_type=ext.interaction_type,
+        )
+        # Run through normal voice detection, lock-in scoring
+        examples.append(example)
+    
+    return examples
+```
+
+---
+
+### From That Narrative, LLM Would Extract:
+
+```json
+[
+  {
+    "user_message": "hey Luna",
+    "luna_response": "I can see the activation, but the memory retrieval isn't triggering. It's like... the signal is getting lost somewhere between the kernel and the matrix.",
+    "context": "Testing activation, Luna noticed a bug",
+    "interaction_type": "technical",
+    "confidence": 0.85
+  },
+  {
+    "user_message": "Show me what you're seeing.",
+    "luna_response": "Okay so here's the thing - when I try to recall our conversation from yesterday, I get nothing. But I *know* we talked about the voice pipeline. The memory exists, I just can't reach it.",
+    "context": "Debugging memory retrieval",
+    "interaction_type": "technical", 
+    "confidence": 0.95
+  }
+]
+```
+
+---
+
+### Other LLM Restructuring Uses
+
+**1. Gap Filling (Mint module)**
+```
+Input: "We need 20 more greeting examples"
+LLM generates: Variations of Luna greeting styles
+```
+
+**2. Response Synthesis for Memory Nodes**
+```
+Input: QUESTION node "What's sqlite-vec?"
+LLM generates: Luna-voice answer using related FACT nodes as context
+```
+
+**3. Quality Enhancement**
+```
+Input: Weak example with corporate tone
+LLM rewrites: Same content, Luna's voice
+```
+
+**4. Interaction Type Classification**
+```
+Input: Ambiguous example
+LLM classifies: "This is emotional_presence, confidence 0.9"
+```
+
+---
+
+### The Trade-offs
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **LLM Extraction** | Handles messy sources, scales | Costs $, introduces drift, needs validation |
+| **Rule-based Parsing** | Free, deterministic, no drift | Fragile, misses nuance, needs clean input |
+| **Hybrid** | Best of both | More complex |
+
+---
+
+### Recommended Architecture
+
+```
+                    ┌─────────────────┐
+                    │  Raw Sources    │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+        ┌──────────┐  ┌──────────┐  ┌──────────┐
+        │  Clean   │  │  Semi-   │  │  Messy   │
+        │  (JSONL) │  │  (Sessions)│ │ (Notes)  │
+        └────┬─────┘  └────┬─────┘  └────┬─────┘
+             │              │              │
+             ▼              ▼              ▼
+        Rule-based     Rule-based     LLM-assisted
+        Ingester       Ingester       Ingester
+             │              │              │
+             └──────────────┼──────────────┘
+                            ▼
+                    ┌──────────────┐
+                    │   Crucible   │
+                    │  (unified)   │
+                    └──────────────┘
+```
+
+---
+
+### Cost Estimate
+
+For Alpha Notes (76 files, ~3-5KB each):
+- ~300KB total text
+- ~75K tokens input
+- ~20K tokens output
+- **Claude Sonnet:** ~$0.30 total
+- **Local Qwen:** Free but slower, lower quality
+
+Worth it? Probably yes for the Alpha notes - they're historical gold that captures early Luna voice development.
+
+---
+
+Want me to build the LLM-assisted ingester? I'd wire it to work with either Claude API or your local Qwen, with a confidence threshold so you can review uncertain extractions.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:19:27.432877Z
+since we are using claude desktop mcp as well as claude code mcp with the persona forge for the lora creation can we adapt the mcp to do the llm-assisted ingestion?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:20:11.161970Z
+ Yes. Clean approach.
+
+## The Idea
+
+Instead of building LLM calls *into* Persona Forge, we expose tools via MCP and let Claude (Desktop or Code) do the heavy lifting. Claude becomes the LLM brain, Forge stays a dumb tool server.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Claude (Desktop/Code)                │
+│                                                         │
+│  "Hey, ingest those Alpha notes and extract training    │
+│   examples in Luna's voice"                             │
+│                                                         │
+└─────────────────────┬───────────────────────────────────┘
+                      │ MCP
+                      ▼
+┌─────────────────────────────────────────────────────────┐
+│                   Persona Forge MCP                     │
+│                                                         │
+│  Tools:                                                 │
+│  - forge_load(path)         ← load raw files            │
+│  - forge_read_raw(path)     ← get raw content           │
+│  - forge_add_example(...)   ← add structured example    │
+│  - forge_assay()            ← analyze current dataset   │
+│  - forge_export(path)       ← save results              │
+│  - forge_list_sources()     ← show available sources    │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## How It Works
+
+**Step 1:** You tell Claude what to do
+```
+"Load the Alpha session notes from 03_Session_Notes/sessions/ 
+and extract training examples. Focus on Luna's voice."
+```
+
+**Step 2:** Claude calls MCP tools
+```python
+# Claude's internal reasoning:
+# 1. List what's there
+sources = forge_list_sources("/Alpha_ProjectFiles/03_Session_Notes/sessions/")
+
+# 2. Read a file
+content = forge_read_raw("2025-11-29_Luna_Debugs_Her_Own_Nervous_System.md")
+
+# 3. Extract (Claude does this with its own intelligence)
+# ... analyzes narrative, identifies Luna dialogue ...
+
+# 4. Add the example
+forge_add_example(
+    user="Show me what you're seeing.",
+    assistant="Okay so here's the thing - when I try to recall...",
+    interaction_type="technical",
+    source_file="2025-11-29_Luna_Debugs_Her_Own_Nervous_System.md",
+    confidence=0.9
+)
+```
+
+**Step 3:** Claude loops through files, you watch progress
+
+---
+
+## MCP Tool Design
+
+```python
+from fastmcp import FastMCP
+
+mcp = FastMCP("persona-forge")
+
+# ===== READ OPERATIONS =====
+
+@mcp.tool()
+def forge_list_sources(directory: str) -> dict:
+    """List available source files for ingestion."""
+    # Returns: {files: [...], total_size: ..., formats: [...]}
+
+@mcp.tool()
+def forge_read_raw(path: str, max_chars: int = 50000) -> dict:
+    """Read raw content from a source file."""
+    # Returns: {content: "...", format: "markdown", size: ...}
+
+@mcp.tool()
+def forge_status() -> dict:
+    """Get current Forge state - loaded examples, health score, gaps."""
+    # Returns: {examples: 147, health: 77.7, gaps: {...}}
+
+# ===== WRITE OPERATIONS =====
+
+@mcp.tool()
+def forge_add_example(
+    user_message: str,
+    assistant_response: str,
+    interaction_type: str = "short_exchange",
+    source_file: str = None,
+    source_type: str = "synthetic",
+    confidence: float = 1.0,
+    tags: list[str] = None
+) -> dict:
+    """Add a single training example to the working set."""
+    # Runs voice detection, anti-pattern check, lock-in scoring
+    # Returns: {id: "abc123", lock_in: 0.72, tier: "silver", warnings: [...]}
+
+@mcp.tool()
+def forge_add_batch(examples: list[dict]) -> dict:
+    """Add multiple training examples at once."""
+    # Returns: {added: 15, rejected: 2, reasons: [...]}
+
+@mcp.tool()
+def forge_remove_example(example_id: str) -> dict:
+    """Remove an example by ID."""
+
+# ===== ANALYSIS =====
+
+@mcp.tool()
+def forge_assay() -> dict:
+    """Run full dataset analysis."""
+    # Returns the DatasetAssay as dict
+
+@mcp.tool()
+def forge_find_gaps() -> dict:
+    """Show what interaction types need more examples."""
+    # Returns: {emotional_presence: 74, greeting: 70, ...}
+
+@mcp.tool()
+def forge_search(query: str, limit: int = 10) -> dict:
+    """Search existing examples by content."""
+    # For deduplication
+
+# ===== EXPORT =====
+
+@mcp.tool()
+def forge_export(
+    output_path: str,
+    min_lock_in: float = 0.5,
+    format: str = "sharegpt"
+) -> dict:
+    """Export dataset to JSONL."""
+    # Returns: {exported: 234, path: "...", tiers: {...}}
+
+@mcp.tool()
+def forge_save_state(path: str = None) -> dict:
+    """Save current working state to resume later."""
+
+@mcp.tool()
+def forge_load_state(path: str) -> dict:
+    """Load previous working state."""
+```
+
+---
+
+## The Workflow
+
+### Extraction Session (Claude Desktop)
+
+```
+You: "Let's process the Alpha session notes. Start with the files 
+     from November 2025 - those are the Luna awakening period."
+
+Claude: [calls forge_list_sources]
+        "Found 12 files from November. Starting with 
+        2025-11-28_luna-awakening.md..."
+        
+        [calls forge_read_raw]
+        [analyzes content - THIS IS WHERE CLAUDE'S BRAIN WORKS]
+        
+        "I found 3 clean exchanges in this file:
+        
+        1. Greeting exchange (confidence: 0.95)
+           User: 'hey Luna'  
+           Luna: 'Hey. I'm here. What's on your mind?'
+        
+        2. Technical exchange (confidence: 0.85)
+           ...
+        
+        Should I add these?"
+
+You: "Yes, add all with confidence > 0.8"
+
+Claude: [calls forge_add_example × 3]
+        [calls forge_assay]
+        
+        "Added 3 examples. Dataset health now 78.2% (was 77.7%).
+        Still need 71 more greeting examples. Continue to next file?"
+```
+
+---
+
+## Why This Is Better Than Built-in LLM
+
+| Built-in LLM | MCP + Claude |
+|--------------|--------------|
+| Fixed prompts | Claude adapts on the fly |
+| One model choice | Use whatever Claude version you're talking to |
+| No human in loop | You review as it goes |
+| Costs per run | Already paying for Claude |
+| Black box | Transparent - you see each extraction |
+| Batch only | Interactive refinement |
+
+---
+
+## Bonus: Voight-Kampff via MCP
+
+Same pattern for validation:
+
+```python
+@mcp.tool()
+def vk_run_probe(
+    prompt: str,
+    expected_traits: list[str] = None
+) -> dict:
+    """Run a single Voight-Kampff probe against current personality."""
+    # You (Claude) generate the probe, Forge evaluates response
+
+@mcp.tool()
+def vk_evaluate_response(
+    probe_id: str,
+    response: str
+) -> dict:
+    """Evaluate a response against probe criteria."""
+```
+
+Claude generates probes, Forge scores them. Full loop.
+
+---
+
+## Next Step
+
+Want me to build the MCP server with these tools? I'd start with:
+1. `forge_list_sources`
+2. `forge_read_raw`
+3. `forge_add_example`
+4. `forge_status`
+5. `forge_assay`
+
+That's enough for an extraction session. Export and Voight-Kampff can come after.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:23:10.361255Z
+dope , just to clarify isnt there already an mcp for the persona forge?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:23:39.785423Z
+ Let me check.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Yeah, there's already a full MCP server. It's got:
+
+**Existing Tools:**
+- `forge_load` - Load JSONL
+- `forge_assay` - Analyze dataset
+- `forge_gaps` - Show synthesis targets
+- `forge_mint` - Generate synthetic examples
+- `forge_export` - Export to JSONL
+- `forge_status` - Session state
+- `character_list/load/modulate/save/show` - Personality management
+- `vk_run/list/probes` - Voight-Kampff testing
+
+**What's Missing for LLM-Assisted Ingestion:**
+
+```python
+# Need to add these:
+forge_list_sources(directory)    # List raw source files
+forge_read_raw(path)             # Read raw content for Claude to process
+forge_add_example(...)           # Add single example (Claude-extracted)
+forge_add_batch(examples)        # Add multiple examples
+forge_search(query)              # Dedupe check
+```
+
+The existing `forge_load` only handles JSONL. We need tools that let Claude read raw markdown/narrative and then feed back structured examples.
+
+**Quick addition:**
+
+Want me to add those 4-5 tools to the existing server? It's just extending what's already there. Claude can then:
+
+1. `forge_list_sources("/Alpha_ProjectFiles/03_Session_Notes/sessions/")`
+2. `forge_read_raw("2025-11-29_Luna_Debugs_Her_Own_Nervous_System.md")`
+3. *Claude extracts conversation pairs from the narrative*
+4. `forge_add_example(user="...", assistant="...", interaction_type="technical")`
+5. `forge_assay()` to check progress
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:25:43.396034Z
+lets use the existing server. Ok lay out the handoff plan for claude code for me.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:26:59.583725Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+Done. Handoff at:
+```
+/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Tools/persona_forge/HANDOFF_MCP_INGESTION_TOOLS.md
+```
+
+**TL;DR for Claude Code:**
+
+| Tool | Purpose | Priority |
+|------|---------|----------|
+| `forge_list_sources` | List files in a directory | Phase 1 |
+| `forge_read_raw` | Read raw file content | Phase 1 |
+| `forge_add_example` | Add single extracted example | Phase 1 |
+| `forge_add_batch` | Bulk add examples | Phase 2 |
+| `forge_search` | Dedupe check | Phase 2 |
+| `forge_read_matrix` | Read Memory Matrix SQLite | Phase 3 |
+
+**Validation:** When Phase 1 is done, you can tell Claude Desktop "process the Alpha notes" and it'll read files, extract Luna dialogue, and add training examples - all via MCP.
+
+Ready to ship to Claude Code, or want to tweak anything?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:28:28.136158Z
+does this cover the initial goal? Here's the inventory:
+Luna Training Data Sources - The Full Picture
+Timeline
+
+```
+Nov 28         Dec 8-11        Dec 14          Jan 20         Now
+   |              |              |               |              |
+   Luna           Journal        Memory          Engine v2      
+   Alpha          Training       Matrix          Sessions       
+   Awakens        Created        Seeded          Begin
+```
+
+What We Have
+SourceCountFormatQualityJSONL (existing)~605 linesReady77% healthMemory Matrix22K+ nodesSQLiteMixed - needs filteringConversation Turns456SQLite✅ GoldAlpha Session Notes76 filesMarkdown✅ GoldSession Transcripts48 richMarkdown✅ GoldSession Archives97MarkdownGoodInsights45MarkdownGoodIdentity/Virtue~10Markdown/JSON✅ Gold
+High-Value Extraction Targets
+PrioritySourceEst. ExamplesWhy🥇Memory Matrix QUESTION nodes (364)~200Natural Q&A format🥇Rich session transcripts (48)~150Real Luna voice🥇Alpha session notes (76)~100Historical gold🥈Conversation turns (456)~200Recent, authentic🥈PERSONALITY_REFLECTION nodes (5)~5Pure Luna introspection🥉Insights markdown~30Deep technical
+Gap Coverage
+Your biggest holes and where to fill them:
+Missing TypeNeedBest Source`emotional_presence`+74Session transcripts, Identity files`context_recall`+73MEMORY nodes, Session archives`greeting`+70Session openings`acknowledgment`+50Conversation turns`reflection`+45Journal entries, Insights
+Bottom line: You've got ~800+ potential new examples sitting in various formats. The Forge needs ingesters for:
+1. Memory Matrix SQLite (specific node types)
+2. Session transcript markdown (turn-based)
+3. Alpha session notes (narrative extraction)
+Want me to build those ingesters next?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:30:21.628013Z
+ Looking at the inventory against the handoff...
+
+**Coverage Check:**
+
+| Source | Handoff Coverage |
+|--------|------------------|
+| Memory Matrix SQLite | ✅ `forge_read_matrix` (Phase 3) |
+| Conversation Turns SQLite | ⚠️ **Partially** - same DB, but needs separate query |
+| Session Transcripts (markdown turns) | ✅ `forge_read_raw` + Claude extraction |
+| Alpha Session Notes (narrative) | ✅ `forge_read_raw` + Claude extraction |
+| Session Archives | ✅ `forge_read_raw` |
+| Insights | ✅ `forge_read_raw` |
+| Identity/Virtue files | ✅ `forge_read_raw` |
+| Existing JSONL | ✅ Already has `forge_load` |
+
+**Gap:** `forge_read_matrix` only handles `memory_nodes` table. Conversation turns are in a separate `conversation_turns` table.
+
+**Quick fix** - add one more tool:
+
+```python
+@mcp.tool()
+def forge_read_turns(
+    db_path: str,
+    session_id: str = None,
+    limit: int = 100,
+    offset: int = 0
+) -> dict[str, Any]:
+    """
+    Read conversation turns from database.
+    
+    Returns paired user/assistant turns ready for training.
+    """
+```
+
+Or expand `forge_read_matrix` to accept a `table` parameter.
+
+**Recommendation:** Add `forge_read_turns` as a Phase 3 item. It's the same DB, similar pattern, and those 456 turns are gold.
+
+Want me to update the handoff with that addition?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:36:09.023229Z
+yeah
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:36:42.056182Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Done. Updated handoff now has 7 tools:
+
+| Phase | Tool | Source Coverage |
+|-------|------|-----------------|
+| 1 | `forge_list_sources` | All file-based |
+| 1 | `forge_read_raw` | Markdown, JSONL, text |
+| 1 | `forge_add_example` | All → training set |
+| 2 | `forge_add_batch` | Efficiency |
+| 2 | `forge_search` | Dedupe |
+| 3 | `forge_read_matrix` | Memory nodes (22K+) |
+| 3 | `forge_read_turns` | Conversation turns (456) ✅ Gold |
+
+**Full inventory coverage:** ✅
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:38:45.048053Z
+ok what the full ingestion pipeline workflow using this new addition how would i insure adequate ingestion?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:39:35.527703Z
+ Good question. Let me map out the full workflow.
+
+---
+
+# Persona Forge Ingestion Pipeline
+
+## The Goal
+**Start:** 147 examples, 77.7% health, big gaps in emotional_presence/context_recall/greeting
+**End:** 400-500 examples, 85%+ health, balanced coverage
+
+---
+
+## Pipeline Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        INGESTION PIPELINE                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐     │
+│  │  SOURCE  │───▶│  READ    │───▶│  CLAUDE  │───▶│  ADD     │     │
+│  │  LIST    │    │  RAW     │    │  EXTRACT │    │  EXAMPLE │     │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘     │
+│       │                                               │            │
+│       │         ┌──────────────────────────────┐     │            │
+│       └────────▶│     PROGRESS TRACKING        │◀────┘            │
+│                 │  • forge_assay() after batch │                  │
+│                 │  • forge_gaps() to steer     │                  │
+│                 │  • forge_search() to dedupe  │                  │
+│                 └──────────────────────────────┘                  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Phase-by-Phase Workflow
+
+### Phase A: Baseline
+```
+1. forge_load("existing_jsonl")     → Load current 147 examples
+2. forge_assay()                    → Confirm 77.7% health, see gaps
+3. forge_gaps()                     → Get priority targets:
+                                       • emotional_presence: +74
+                                       • context_recall: +73
+                                       • greeting: +70
+                                       • acknowledgment: +50
+                                       • reflection: +45
+```
+
+---
+
+### Phase B: Conversation Turns (GOLD - Lowest Effort, Highest Yield)
+
+**Source:** 456 turns across 63 sessions
+**Target:** ~150-200 training examples
+**Best for:** greeting, acknowledgment, short_exchange, emotional_presence
+
+```
+1. forge_read_turns(db_path, limit=100, offset=0)
+   → Get first 100 turns
+
+2. Claude analyzes, pairs user/assistant, extracts:
+   - Session openings → greeting
+   - "got it" / "on it" → acknowledgment  
+   - Quick back-and-forth → short_exchange
+   - "how are you" / feelings → emotional_presence
+
+3. forge_add_batch([...extracted examples...])
+   → Add batch, get quality scores
+
+4. Repeat with offset=100, 200, 300, 400
+   → Process all 456 turns
+
+5. forge_assay()
+   → Check progress: health ↑, gaps ↓
+```
+
+**Quality Gate:** Stop when greeting/acknowledgment gaps < 20
+
+---
+
+### Phase C: Alpha Session Notes (GOLD - Narrative Extraction)
+
+**Source:** 76 markdown files from Luna's awakening
+**Target:** ~80-100 training examples
+**Best for:** emotional_presence, reflection, technical, context_recall
+
+```
+1. forge_list_sources("/Alpha_ProjectFiles/03_Session_Notes/sessions/")
+   → Get list of 76 files, sorted by date
+
+2. Start with high-value files:
+   - luna-awakening.md
+   - Luna_Debugs_Her_Own_Nervous_System.md
+   - The_Day_Everything_Came_Together.md
+
+3. For each file:
+   a. forge_read_raw(file_path)
+   b. Claude reads narrative, extracts Luna dialogue
+   c. forge_search(extracted_response[:50])  → Check for dupes
+   d. forge_add_example(...) for each clean extraction
+
+4. forge_assay() every 10 files
+   → Track progress, adjust focus
+
+5. forge_gaps()
+   → If emotional_presence still high, prioritize those files
+   → If reflection still high, look for introspective content
+```
+
+**Quality Gate:** Stop when emotional_presence gap < 30
+
+---
+
+### Phase D: Session Transcripts (Structured Turns)
+
+**Source:** 48 rich session files + 97 archives
+**Target:** ~100-150 training examples
+**Best for:** technical, delegation_trigger, context_recall
+
+```
+1. forge_list_sources("/Eclessi_BetaProject_Root/data/memories/session/")
+   → Get 48 rich sessions (>1KB)
+
+2. For each session:
+   a. forge_read_raw(session_file)
+   b. Parse YAML frontmatter for metadata
+   c. Extract Turn: User / Turn: Luna pairs
+   d. Classify interaction type based on content
+   e. forge_add_batch([...turns from this session...])
+
+3. forge_assay() every 10 sessions
+
+4. If still need context_recall:
+   → Process session archives (97 more files)
+```
+
+**Quality Gate:** Stop when technical + delegation gaps < 15
+
+---
+
+### Phase E: Memory Matrix Nodes (Targeted Fill)
+
+**Source:** 22K+ nodes, but we want specific types
+**Target:** ~100-150 training examples
+**Best for:** context_recall, reflection, Q&A pairs
+
+```
+1. forge_read_matrix(db_path, node_types=["QUESTION"], limit=100)
+   → 364 QUESTION nodes - natural Q&A format
+   
+2. Claude converts questions to training pairs:
+   - Question node content → user_message
+   - Generate appropriate Luna response → assistant_response
+   - Type: context_recall or technical
+
+3. forge_read_matrix(db_path, node_types=["PERSONALITY_REFLECTION"], limit=10)
+   → 5 pure gold introspection nodes
+   → Type: reflection
+
+4. forge_read_matrix(db_path, node_types=["MEMORY", "OBSERVATION"], limit=100)
+   → Context-rich nodes
+   → Type: context_recall
+
+5. forge_add_batch([...])
+```
+
+**Quality Gate:** Stop when context_recall gap < 20
+
+---
+
+### Phase F: Insights & Identity (Polish)
+
+**Source:** 45 insight files, ~10 identity/virtue files
+**Target:** ~30-50 training examples
+**Best for:** reflection, emotional_presence (final polish)
+
+```
+1. forge_list_sources("/insights/")
+2. Process voice session transcripts (Dec 5-7)
+3. Extract deep technical insights
+4. Process identity files for core personality grounding
+5. forge_add_batch([...])
+```
+
+---
+
+### Phase G: Final Validation
+
+```
+1. forge_assay()
+   → Target: 85%+ health score
+   → All gaps < 20
+
+2. forge_gaps()
+   → Verify no critical gaps remain
+
+3. If gaps remain:
+   → forge_mint(interaction_type, count) for synthetic fill
+   → Only use synthetic for < 10% of total
+
+4. forge_export("output/", train_split=0.9)
+   → Export train/val split
+```
+
+---
+
+## Progress Tracking Checkpoints
+
+| Checkpoint | Examples | Health | Key Gaps Remaining |
+|------------|----------|--------|-------------------|
+| Baseline | 147 | 77.7% | emotional +74, context +73, greeting +70 |
+| After Turns | ~300 | ~80% | emotional +40, context +50, reflection +40 |
+| After Alpha | ~380 | ~82% | context +30, reflection +30 |
+| After Sessions | ~480 | ~84% | reflection +20 |
+| After Matrix | ~550 | ~85% | minimal |
+| Final | ~550 | 85%+ | all < 20 |
+
+---
+
+## Quality Assurance Rules
+
+### Per-Example
+- `confidence >= 0.7` to add (Claude's extraction confidence)
+- `lock_in >= 0.5` to keep (Forge's quality score)
+- No anti-patterns (generic_ai, corporate, hedging)
+
+### Per-Batch
+- Run `forge_assay()` after every major batch
+- Run `forge_search()` before adding to catch dupes
+- Track source distribution - no single source > 30%
+
+### Per-Phase
+- Check gap coverage is actually improving
+- If a phase isn't moving the needle, skip to next source
+- Don't over-extract from one source type
+
+---
+
+## Commands Cheatsheet
+
+```bash
+# Start
+forge_load("existing.jsonl")
+forge_assay()
+forge_gaps()
+
+# Extract cycle
+forge_list_sources(dir)
+forge_read_raw(file) | forge_read_turns(db) | forge_read_matrix(db, types)
+# Claude extracts...
+forge_search(content)  # dedupe check
+forge_add_example(...) | forge_add_batch([...])
+
+# Check progress
+forge_assay()
+forge_gaps()
+forge_status()
+
+# Export
+forge_export("output/", train_split=0.9)
+```
+
+---
+
+## Failure Modes & Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Duplicate examples | `forge_search()` before adding |
+| Quality drift | Check `forge_assay()` health after each batch |
+| Source imbalance | Track source_type distribution in assay |
+| Over-extraction | Set per-source limits, move on when diminishing returns |
+| Anti-pattern creep | Forge auto-detects, warns on add |
+| Gap not closing | Switch sources, or use targeted `forge_mint()` |
+
+---
+
+That's the full pipeline. Want me to add this to the handoff doc, or keep it separate as an ops runbook?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:40:27.151166Z
+how would it benefit the handoff?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:40:34.499304Z
+ It wouldn't really.
+
+The handoff is for **Claude Code to build the tools**. It needs:
+- What tools to implement
+- Function signatures
+- Validation criteria
+
+The workflow doc is for **you (or future Claude) to use the tools**. It's operational guidance, not implementation spec.
+
+Mixing them would bloat the handoff and confuse the scope. Claude Code doesn't need to know "process Alpha notes before Matrix nodes" - it just needs to build `forge_read_raw` correctly.
+
+**Keep them separate:**
+- `HANDOFF_MCP_INGESTION_TOOLS.md` → Build instructions (done)
+- `INGESTION_PIPELINE_RUNBOOK.md` → Usage workflow (if you want to save it)
+
+Want me to save the runbook as a separate doc, or is the conversation record enough?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:41:12.915908Z
+yeah make it a runbook please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:41:53.959321Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+Done.
+
+```
+/Tools/persona_forge/
+├── HANDOFF_MCP_INGESTION_TOOLS.md   ← Claude Code builds this
+├── INGESTION_PIPELINE_RUNBOOK.md    ← You run this after
+└── src/persona_forge/mcp/server.py  ← Where the tools go
+```
+
+Ready to ship to Claude Code?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-29T21:43:35.131966Z
+did you actually add the files? /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Tools/persona_forge
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-29T21:46:15.647575Z
+ Let me check what's actually there.
+```
+This block is not supported on your current device yet.
+```
+
+They're not there. The `create_file` tool writes to Claude's container filesystem (`/mnt/`), not your local machine. I need to use the Filesystem tools to write to your actual disk.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now they're there:
+
+```
+/Tools/persona_forge/
+├── HANDOFF_MCP_INGESTION_TOOLS.md   ✅ Claude Code builds
+├── INGESTION_PIPELINE_RUNBOOK.md    ✅ You run after
+├── HANDOFF_PERSONA_FORGE_V1.md      (existing)
+├── ...
+```
+
+Good catch - two different filesystems tripped me up.
+
+--------------------------------------------------------------------------------

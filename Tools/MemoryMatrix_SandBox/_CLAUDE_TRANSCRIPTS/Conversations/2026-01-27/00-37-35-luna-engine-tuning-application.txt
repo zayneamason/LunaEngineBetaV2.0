@@ -1,0 +1,847 @@
+Conversation: Luna engine tuning application
+UUID: b75afa1d-43e6-4af8-99d9-f7a04d942460
+Created: 2026-01-27T00:37:35.416742Z
+Updated: 2026-01-27T01:15:02.088774Z
+================================================================================
+
+[HUMAN] 2026-01-27T00:37:37.722214Z
+yo dude i want to make a tuning application for luna engine
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T00:37:48.751925Z
+ Yo, what's up.
+
+Tuning application for Luna engine — let's scope this before I start sketching.
+
+**Quick clarifying questions:**
+
+1. **What are we tuning?** I'm thinking:
+   - Personality parameters (virtues, emotional weights, response tendencies)
+   - Memory Matrix settings (decay rates, relevance thresholds, graph traversal depth)
+   - PersonaCore pipeline knobs (budget presets, activation thresholds)
+   - State machine transitions
+   - All of the above?
+
+2. **Who's the user?** Just you for dev/experimentation, or is this something you'd eventually expose to Luna owners so they can dial in their companion's personality?
+
+3. **Live tuning or batch?** Like, tweak-and-see-immediately while chatting with Luna? Or more of a "configure, save, restart" workflow?
+
+4. **UI context?** Part of the Eclissi swipeable interface you mentioned, or a separate dev tool?
+
+My gut says this is about making Luna's personality and cognition adjustable without code changes — a control surface for the consciousness substrate. But I want to make sure I'm solving the right problem before I map out components.
+
+What's the real itch here?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-27T00:39:14.145258Z
+do you see the tuning tab in the luna engine ui?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T00:39:29.063020Z
+ Yeah, I see it. Top nav: **Tuning | Personality | Debug** — with Tuning as the first tab.
+
+So you've already got the shell in place. The question is what goes *inside* that Tuning panel.
+
+Looking at what's visible:
+- Chat interface (left)
+- Voice Mode panel (right) with debug info showing state
+- Connection status indicator
+
+**So what do you want the Tuning tab to expose?**
+
+My read: This is where you'd surface the dials for Luna's cognitive/personality engine — stuff that's currently buried in config files or code constants. Things like:
+
+- **Memory Matrix tuning** (relevance thresholds, decay rates, traversal depth)
+- **PersonaCore knobs** (budget presets, activation sensitivity)
+- **Response behavior** (verbosity, formality, emotional expressiveness)
+- **State machine tweaks** (transition thresholds, cooldowns)
+
+Is that the direction? Or are you thinking something more specific — like just exposing the virtue/personality weights for now and expanding later?
+
+Also: live preview while tuning, or save-and-apply?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-27T00:39:50.281540Z
+well can i get a list of everything that it already exposes?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T00:40:34.763924Z
+ Let me check the Luna engine codebase to see what's already wired up.
+```
+This block is not supported on your current device yet.
+```
+
+Now let me find the UI source — that `eclissi-v4.jsx` or the `src/eclissi` directory should have the Tuning tab implementation:
+```
+This block is not supported on your current device yet.
+```
+
+Let me check the src/eclissi directory for the actual engine UI with the Tuning tab:
+```
+This block is not supported on your current device yet.
+```
+
+Let me look at the main App.jsx to understand the tab structure and what Tuning exposes:
+```
+This block is not supported on your current device yet.
+```
+
+Okay wait — the screenshot you showed has tabs "Tuning | Personality | Debug" but this Eclissi app has 11 swipeable pages. Different UI. Let me search for the "Luna Hub" / "Engine V2.0" UI you showed in the screenshot:
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-27T00:42:23.256510Z
+well can i get a list of everything that it already exposes? oh and check this out i just changed the project location in the instructions it was pointing towards the wrong folder but here is the actual project im refering to: /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T00:43:31.870099Z
+ Ah, there it is. Let me check the actual Luna Engine V2.0 project:
+```
+This block is not supported on your current device yet.
+```
+
+Good. Now let me look at the frontend to find the Tuning tab:
+```
+This block is not supported on your current device yet.
+```
+
+Found it — `TuningPanel.jsx`. Let me read that:
+```
+This block is not supported on your current device yet.
+```
+
+Let me continue reading to get the full picture of what parameters are exposed:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the backend to see what parameters are actually registered in the tuning system:
+```
+This block is not supported on your current device yet.
+```
+
+Let me check the tuning params file to see what parameters are defined:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me also check the Personality panel to see what it exposes:
+```
+This block is not supported on your current device yet.
+```
+
+Now I've got the full picture. Let me summarize what the Tuning tab **already exposes**:
+
+---
+
+## Luna Engine V2.0 - Tuning Tab: Current Exposure
+
+### **Three Sub-Tabs**
+
+| Tab | Purpose |
+|-----|---------|
+| **🎛️ Parameters** | Browse & adjust tunable params by category |
+| **📊 Session** | Track tuning sessions with iteration history |
+| **🧪 Evaluate** | Run performance evals across memory, routing, latency |
+
+---
+
+### **Parameters Tab - 35 Tunable Parameters**
+
+**Inference (5)**
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `inference.temperature` | 0.7 | 0.0–2.0 | Response creativity |
+| `inference.top_p` | 0.9 | 0.1–1.0 | Nucleus sampling |
+| `inference.repetition_penalty` | 1.1 | 1.0–2.0 | Repetition penalty |
+| `inference.hot_path_timeout_ms` | 200 | 50–1000 | Local inference timeout |
+| `inference.max_tokens` | 512 | 64–2048 | Max response tokens |
+
+**Memory Lock-In (7)**
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `memory.lock_in.enabled` | 1.0 | 0–1 | Toggle lock-in system |
+| `memory.lock_in.access_weight` | 0.3 | 0–1 | Weight of retrieval frequency |
+| `memory.lock_in.reinforcement_weight` | 0.5 | 0–1 | Weight of user confirmations |
+| `memory.lock_in.recency_weight` | 0.2 | 0–1 | Weight of newness |
+| `memory.lock_in.sigmoid_k` | 10.0 | 1–50 | Curve steepness |
+| `memory.lock_in.settled_threshold` | 0.70 | 0.5–0.95 | Threshold for "settled" |
+| `memory.lock_in.drifting_threshold` | 0.30 | 0.1–0.5 | Threshold for "drifting" |
+
+**Router (6)**
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `router.direct_threshold` | 0.2 | 0–0.5 | Simple/cached response cutoff |
+| `router.simple_threshold` | 0.5 | 0.3–0.7 | Local model cutoff |
+| `router.full_threshold` | 0.8 | 0.6–1.0 | Full delegation cutoff |
+| `router.force_memory_to_plan` | 1.0 | 0–1 | Force memory→SIMPLE_PLAN |
+| `router.memory_min_complexity` | 0.3 | 0.1–0.6 | Memory query floor |
+| `router.force_research_to_full` | 1.0 | 0–1 | Force research→FULL_PLAN |
+
+**History (3)**
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `history.max_active_tokens` | 1000 | 500–4000 | Active window tokens |
+| `history.max_active_turns` | 10 | 3–20 | Active window turns |
+| `history.compression_ratio` | 0.3 | 0.1–0.5 | Summary compression |
+
+**Context (4)**
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `context.token_budget` | 8000 | 2000–16000 | Total context budget |
+| `context.memory_allocation` | 0.3 | 0.1–0.5 | Memory fraction |
+| `context.decay_factor` | 0.95 | 0.8–0.99 | Attention decay |
+| `context.rebalance_threshold` | 0.3 | 0.1–0.5 | Rebalance trigger |
+
+**Retrieval (4)**
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `retrieval.top_k` | 10 | 3–50 | Memories to retrieve |
+| `retrieval.min_similarity` | 0.5 | 0–0.9 | Similarity threshold |
+| `retrieval.recency_boost` | 0.1 | 0–0.5 | Recency factor |
+| `retrieval.importance_boost` | 0.2 | 0–0.5 | Importance factor |
+
+**Engine Tick (2)**
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `engine.cognitive_interval` | 0.5 | 0.1–2.0 | Cognitive tick interval (sec) |
+| `engine.reflective_interval` | 300 | 60–600 | Reflective tick interval (sec) |
+
+---
+
+### **Session Tab**
+
+- **Session states**: Active / No Session
+- **Focus modes**: all, memory, routing, latency
+- **Metrics tracked**: iteration count, best score, best iteration
+- **Actions**: Start Session, End Session, Apply Best
+- **Iteration History**: Shows each tuning iteration with score and params changed
+
+---
+
+### **Session Tab - Ring Buffer Controls**
+
+- **Current Turns** display
+- **Max Turns** slider (2–20)
+- **Detected Topics** (from conversation)
+- **Actions**: Apply Size, Clear Memory
+
+---
+
+### **Session Tab - System Controls**
+
+- **Relaunch Engine** button (restart without manual CLI)
+
+---
+
+### **Evaluate Tab**
+
+Runs evaluations and displays:
+- **Overall Score** (%)
+- **Memory Recall Score** (%)
+- **Context Retention Score** (%)
+- **Routing Score** (%)
+- **Tests passed/total**
+- **Average Latency (ms)**
+
+---
+
+### **Personality Panel** (separate tab in nav)
+
+- **Mood state** indicator (curious, engaged, neutral, focused, reflective, excited)
+- **Patch distribution** by topic (pie chart)
+- **Lock-in state distribution** (bar chart: settled/fluid/drifting)
+- **Stats**: Total patches, Active patches, Avg Lock-in %, Session messages
+- **Patches browser** with details
+- **Maintenance tools** (in tab)
+
+---
+
+**That's what you've got.** What are you thinking of adding or changing?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-27T00:48:05.413367Z
+so i need to be able to use a tool that can basically auto tune luna to influence her in different ways. one of the main ways that i need to influence her is how she uses her memory matrix, when she accesses memories how she navigates putting together the fragments and so maybe like the assembly. lets actually do a quick study on all of these endpoints to see what kind of control i do have. keep in mind that the end goal is to basically auto tune luna
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T00:50:24.808968Z
+ Got it. Let me map out what control surfaces actually exist for memory retrieval and assembly. I'll trace from the API endpoints down to the implementation.
+```
+This block is not supported on your current device yet.
+```
+
+Let me find the tuning endpoints and memory-related endpoints:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Let me read the server file more systematically to map the full API surface:
+```
+This block is not supported on your current device yet.
+```
+
+Let me now look at the tuning endpoints specifically:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me look at the Matrix actor to understand the actual memory retrieval logic:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check how `get_context` actually works in the MemoryMatrix substrate:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the lock-in calculation and see what else is tunable:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the evaluator to understand what gets measured:
+```
+This block is not supported on your current device yet.
+```
+
+Now I have a clear picture. Let me compile this into a comprehensive study:
+
+---
+
+## Luna Engine V2.0 — Memory & Tuning Control Surface Study
+
+### **The Goal: Auto-Tune Luna**
+You want to programmatically influence *how* Luna retrieves, assembles, and weighs memory fragments. Here's what control you actually have:
+
+---
+
+## 1. EXISTING TUNABLE PARAMETERS (via `/tuning/params`)
+
+### Memory Lock-In Controls
+| Parameter | Current | Range | What It Does |
+|-----------|---------|-------|--------------|
+| `memory.lock_in.enabled` | 1.0 | 0-1 | **Master switch** — when off, all memories equal weight |
+| `memory.lock_in.access_weight` | 0.3 | 0-1 | How much "times accessed" matters |
+| `memory.lock_in.reinforcement_weight` | 0.5 | 0-1 | How much explicit reinforcement matters |
+| `memory.lock_in.recency_weight` | 0.2 | 0-1 | How much newness matters |
+| `memory.lock_in.sigmoid_k` | 10.0 | 1-50 | Curve steepness (high = sharp cutoffs) |
+| `memory.lock_in.settled_threshold` | 0.70 | 0.5-0.95 | Lock-in score to become "settled" |
+| `memory.lock_in.drifting_threshold` | 0.30 | 0.1-0.5 | Lock-in score below which memories "drift" |
+
+### Retrieval Controls
+| Parameter | Current | Range | What It Does |
+|-----------|---------|-------|--------------|
+| `retrieval.top_k` | 10 | 3-50 | **How many memories to retrieve** |
+| `retrieval.min_similarity` | 0.5 | 0-0.9 | Similarity floor (lower = more permissive) |
+| `retrieval.recency_boost` | 0.1 | 0-0.5 | Boost recent memories in ranking |
+| `retrieval.importance_boost` | 0.2 | 0-0.5 | Boost high-importance memories |
+
+### Context Assembly Controls
+| Parameter | Current | Range | What It Does |
+|-----------|---------|-------|--------------|
+| `context.token_budget` | 8000 | 2000-16000 | Total context window size |
+| `context.memory_allocation` | 0.3 | 0.1-0.5 | **Fraction of context for memories** |
+| `context.decay_factor` | 0.95 | 0.8-0.99 | Attention decay over time |
+| `context.rebalance_threshold` | 0.3 | 0.1-0.5 | When to rebalance context |
+
+### History Window
+| Parameter | Current | Range | What It Does |
+|-----------|---------|-------|--------------|
+| `history.max_active_tokens` | 1000 | 500-4000 | Active conversation window |
+| `history.max_active_turns` | 10 | 3-20 | Max turns to keep active |
+| `history.compression_ratio` | 0.3 | 0.1-0.5 | Summary compression ratio |
+
+---
+
+## 2. WHAT'S NOT TUNABLE YET (Gaps)
+
+Looking at `memory.py`'s `get_context()`, here's what's **hardcoded** that could be exposed:
+
+### Search Strategy
+```python
+# Hardcoded in get_context():
+- compound_phrase boosting (always prioritizes multi-word matches)
+- ORDER BY lock_in DESC, length(content) ASC, created_at DESC
+- 50-node search limit before budget filtering
+- 5000-char max per node (skips larger)
+```
+
+### Fragment Assembly Logic
+```python
+# Hardcoded filtering rules:
+- Filters out "my name is X" nodes (identity confusion prevention)
+- Filters out system prompt dumps
+- Filters out dev notes (### headers)
+- Filters out raw conversation logs
+- Prefers shorter nodes over longer ones
+```
+
+### Backward Reference Detection
+```python
+# Hardcoded patterns:
+backward_patterns = [
+    "what were we", "what did we", "what was that",
+    "earlier", "before", "last time", "just now", ...
+]
+# When detected → fetches conversation_turns, NOT memory_nodes
+```
+
+### Lock-In Computation (in `lock_in.py`)
+```python
+DEFAULT_WEIGHTS = {
+    "retrieval": 0.4,      # Hardcoded
+    "reinforcement": 0.3,  # Hardcoded  
+    "network": 0.2,        # Hardcoded (connected settled nodes)
+    "tag_siblings": 0.1    # Hardcoded (nodes sharing tags)
+}
+DEFAULT_SIGMOID_K = 1.2    # Steeper than what tuning exposes
+DEFAULT_SIGMOID_X0 = 0.5   # Midpoint
+```
+
+**Note:** The tuning params expose *some* of these, but with different values. There's a mismatch:
+- `tuning/params.py` has `memory.lock_in.access_weight = 0.3` 
+- `lock_in.py` DEFAULT_WEIGHTS has `retrieval = 0.4`
+
+These may not be wired together!
+
+---
+
+## 3. API ENDPOINTS FOR AUTO-TUNING
+
+### Parameter CRUD
+```
+GET  /tuning/params                    → List all params + categories
+GET  /tuning/params/{name}             → Get single param with metadata
+POST /tuning/params/{name}             → Set value (runs eval if session active)
+POST /tuning/param-reset/{name}        → Reset to default
+```
+
+### Session Management
+```
+POST /tuning/session/new               → Start session (baseline eval)
+GET  /tuning/session                   → Get current session + iterations
+POST /tuning/session/end               → End session
+GET  /tuning/sessions                  → List past sessions
+```
+
+### Evaluation
+```
+POST /tuning/eval                      → Run full eval (or category)
+GET  /tuning/compare?iter1=1&iter2=5   → Compare iterations
+GET  /tuning/best                      → Get best params
+POST /tuning/apply-best                → Apply best params
+```
+
+### Ring Buffer (Short-term Memory)
+```
+GET  /api/ring/status                  → Current turns, topics
+POST /api/ring/config                  → Set max_turns (2-20)
+POST /api/ring/clear                   → Clear conversation memory
+```
+
+---
+
+## 4. WHAT AUTO-TUNING WOULD NEED
+
+To truly auto-tune Luna's memory behavior, you'd need:
+
+### A. **New Tunable Parameters** (not yet exposed)
+| Gap | What to Add |
+|-----|-------------|
+| Search ordering | `retrieval.order_by` (lock_in vs recency vs importance) |
+| Node size limits | `retrieval.max_node_chars` (currently hardcoded 5000) |
+| Compound phrase weight | `retrieval.compound_boost` (how much to prefer multi-word matches) |
+| Backward ref sensitivity | `context.backward_ref_turn_limit` (how many turns to fetch) |
+| Network effects | `memory.lock_in.network_weight` (settled neighbors influence) |
+| Tag sibling effects | `memory.lock_in.tag_sibling_weight` |
+
+### B. **Evaluation Tests for Memory Quality**
+The current eval suite tests:
+- Memory recall (does Luna remember X?)
+- Context retention (multi-turn coherence)
+- Routing accuracy
+- Latency
+
+**Missing tests for auto-tuning:**
+- Fragment relevance scoring (were the RIGHT memories retrieved?)
+- Assembly coherence (did the fragments make sense together?)
+- False positive rate (were irrelevant memories injected?)
+- Coverage (did we miss important context?)
+
+### C. **Feedback Loop**
+Auto-tuning needs:
+1. **Objective function** — what are we optimizing for?
+2. **Exploration strategy** — grid search? bayesian? gradient-free?
+3. **Safety bounds** — don't let Luna forget everything
+4. **Rollback mechanism** — revert bad changes
+
+---
+
+## 5. RECOMMENDATION: Tuning Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   AUTO-TUNER                        │
+├─────────────────────────────────────────────────────┤
+│  Profiles (presets):                                │
+│  ├─ "nostalgic" → high recency, low decay          │
+│  ├─ "focused" → high relevance threshold           │
+│  ├─ "expansive" → high top_k, low similarity       │
+│  └─ "core_only" → high lock_in thresholds          │
+├─────────────────────────────────────────────────────┤
+│  Optimization Loop:                                 │
+│  1. Apply param set                                 │
+│  2. Run eval suite                                  │
+│  3. Compute objective                               │
+│  4. Adjust params (bayesian/grid)                   │
+│  5. Repeat until converged                          │
+├─────────────────────────────────────────────────────┤
+│  Safety:                                            │
+│  - Bounds checking on all params                    │
+│  - A/B comparison before committing                 │
+│  - Session history for rollback                     │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+**What direction do you want to take this?**
+
+1. **Expose more parameters** — wire the hardcoded stuff into tuning
+2. **Build auto-tuner** — optimization loop with existing params
+3. **Add "profiles"** — curated presets for different Luna moods
+4. **Improve eval suite** — better tests for memory quality
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-27T00:58:06.185999Z
+can i get an artifact going off of this that prototypes this auto tuning tool for the luna engine?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T01:02:19.790325Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Here's your Luna Auto-Tuner prototype. Let me also render it so you can see it in action:
+```
+This block is not supported on your current device yet.
+```
+
+Done. Here's what you've got:
+
+---
+
+## Luna Auto-Tuner Prototype
+
+**File delivered:** `luna-auto-tuner.jsx`
+**Also written to:** `frontend/src/components/LunaAutoTuner.jsx` in your project
+
+### Features
+
+**🎭 Profiles Tab**
+- 5 curated presets: Nostalgic, Focused, Expansive, Present, Core Only
+- Each profile bundles related params into a one-click behavior shift
+- Shows radar chart of current performance after eval
+
+**🎛️ Parameters Tab**
+- All 14 tunable parameters organized by category
+- Sliders with bounds, defaults, and pending change indicators
+- Visual feedback for modified params
+
+**⚡ Auto-Tune Tab**
+- Objective selection (Balanced, Memory, Speed, Context)
+- Strategy selection (Bayesian, Grid, Random)
+- Iteration count slider (5-50)
+- Live progress chart during optimization
+- Improvement tracking
+
+**📊 History Tab**
+- Evaluation history with timestamps
+- Score tracking over time
+
+### Integration
+
+To wire it into your existing UI, add a button to open the tuner:
+
+```jsx
+import LunaAutoTuner from './components/LunaAutoTuner';
+
+// In your App or TuningPanel:
+const [tunerOpen, setTunerOpen] = useState(false);
+
+// Button to open:
+<button onClick={() => setTunerOpen(true)}>🧠 Auto-Tuner</button>
+
+// The modal:
+<LunaAutoTuner isOpen={tunerOpen} onClose={() => setTunerOpen(false)} />
+```
+
+### What's Next?
+
+This is a **prototype** — it talks to your existing `/tuning/*` endpoints but the auto-optimization loop is currently simulated. To make it real:
+
+1. **Wire the optimization loop** to actually search param space
+2. **Add the missing params** we identified (search ordering, compound boost, etc.)
+3. **Improve the eval suite** with fragment-relevance tests
+4. **Persist profiles** so custom presets can be saved
+
+Want me to dive deeper on any of these?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-27T01:07:42.418732Z
+its still white can you fix?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T01:09:48.074193Z
+ Yeah, the Tailwind colors aren't applying because the artifact renderer doesn't have the full Tailwind config. Let me fix it with inline styles and explicit color values:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Fixed. Now using inline styles with explicit hex colors instead of Tailwind classes. The dark purple/violet theme should render properly now with:
+
+- Deep purple/black gradient background
+- Ambient glow orbs
+- Violet accent colors for active states
+- Proper contrast on all text
+
+Try it out — you should see the dark theme now.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-27T01:13:59.268290Z
+im confused at how this would actually work in practice
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-27T01:15:02.088774Z
+ Fair point. Let me break down what this tool *actually does* vs what's just UI chrome.
+
+---
+
+## What's Real vs What's Prototype
+
+### Currently Real (wired to your API)
+
+```
+GET  /tuning/params           → Lists the 35 params you already have
+POST /tuning/params/{name}    → Sets a param value
+POST /tuning/eval             → Runs the eval suite (memory recall, context, routing, latency)
+```
+
+The UI calls these endpoints. When you move a slider and hit "Apply", it POSTs to your server. When you click "Run Eval", it actually runs your test suite.
+
+### Currently Fake (simulated in prototype)
+
+**The "Auto-Tune" loop** — right now it just:
+1. Waits 600ms
+2. Runs eval
+3. Repeats N times
+4. Shows a pretty chart
+
+It doesn't actually *search* the parameter space or *learn* anything.
+
+---
+
+## How Auto-Tuning Would Actually Work
+
+Here's the real flow:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         AUTO-TUNE LOOP                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. BASELINE                                                    │
+│     └─ Snapshot current params                                  │
+│     └─ Run eval → get baseline score                            │
+│                                                                 │
+│  2. PROPOSE (per iteration)                                     │
+│     └─ Pick which params to adjust                              │
+│     └─ Generate candidate values (within bounds)                │
+│        - Grid: systematic sweep                                 │
+│        - Bayesian: informed by previous results                 │
+│        - Random: within safe bounds                             │
+│                                                                 │
+│  3. APPLY                                                       │
+│     └─ POST /tuning/params/{name} for each changed param        │
+│                                                                 │
+│  4. EVALUATE                                                    │
+│     └─ POST /tuning/eval                                        │
+│     └─ Get scores: memory_recall, context_retention, routing    │
+│     └─ Compute objective = weighted_sum(scores)                 │
+│                                                                 │
+│  5. RECORD                                                      │
+│     └─ Store (params, score) pair                               │
+│     └─ Update "best" if this beats previous best                │
+│                                                                 │
+│  6. DECIDE                                                      │
+│     └─ If converged or max_iterations: STOP                     │
+│     └─ Else: Go to step 2                                       │
+│                                                                 │
+│  7. APPLY BEST                                                  │
+│     └─ Restore params from best iteration                       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## The Missing Pieces
+
+### 1. **Objective Function**
+What are we optimizing for? The UI has "Balanced / Memory / Speed / Context" but those need weights:
+
+```python
+def compute_objective(eval_results, objective="balanced"):
+    weights = {
+        "balanced": {"memory": 0.35, "context": 0.25, "routing": 0.20, "latency": 0.20},
+        "memory":   {"memory": 0.60, "context": 0.20, "routing": 0.10, "latency": 0.10},
+        "speed":    {"memory": 0.15, "context": 0.15, "routing": 0.20, "latency": 0.50},
+        "context":  {"memory": 0.20, "context": 0.50, "routing": 0.15, "latency": 0.15},
+    }[objective]
+    
+    latency_score = max(0, 1 - (eval_results.avg_latency_ms / 2000))
+    
+    return (
+        weights["memory"] * eval_results.memory_recall_score +
+        weights["context"] * eval_results.context_retention_score +
+        weights["routing"] * eval_results.routing_score +
+        weights["latency"] * latency_score
+    )
+```
+
+### 2. **Search Strategy**
+How do we pick the next params to try?
+
+**Grid Search** — Exhaustive but slow:
+```python
+# Try every combination of:
+# top_k: [5, 10, 20]
+# min_similarity: [0.3, 0.5, 0.7]
+# etc.
+```
+
+**Bayesian** — Smart, uses a surrogate model:
+```python
+# Use previous (params, score) pairs to predict
+# which params are likely to improve score
+# Libraries: optuna, scikit-optimize
+```
+
+**Random** — Surprisingly effective baseline:
+```python
+# Pick random values within bounds
+# Run many trials, keep best
+```
+
+### 3. **Safety Bounds**
+Don't let the optimizer break Luna:
+
+```python
+SAFETY_BOUNDS = {
+    "retrieval.top_k": (3, 30),        # Don't retrieve 0 or 100 memories
+    "retrieval.min_similarity": (0.2, 0.8),  # Don't be too permissive or strict
+    "memory.lock_in.enabled": (1, 1),  # Don't disable the whole system
+    "context.token_budget": (4000, 12000),   # Stay within reasonable limits
+}
+```
+
+### 4. **Better Eval Tests**
+Your current eval suite tests:
+- Memory recall: "Who is Marzipan?" → expects ["cat"]
+- Context retention: multi-turn coherence
+- Routing: greeting → direct, complex → full
+
+**What's missing for auto-tuning:**
+- **Fragment relevance**: Did we retrieve the *right* memories?
+- **False positives**: Did we inject *irrelevant* memories?
+- **Coverage**: Did we miss anything important?
+
+---
+
+## Practical Example
+
+Say you run auto-tune with objective="memory" for 10 iterations:
+
+```
+Iteration 1 (baseline):
+  params: {top_k: 10, min_similarity: 0.5, recency_boost: 0.1}
+  score: 0.65
+
+Iteration 2 (try more memories):
+  params: {top_k: 20, min_similarity: 0.5, recency_boost: 0.1}
+  score: 0.71  ← better! more memories helped
+
+Iteration 3 (try even more):
+  params: {top_k: 30, min_similarity: 0.5, recency_boost: 0.1}
+  score: 0.68  ← worse, too much noise
+
+Iteration 4 (back to 20, lower similarity):
+  params: {top_k: 20, min_similarity: 0.4, recency_boost: 0.1}
+  score: 0.73  ← best so far!
+
+... etc ...
+
+Final: Apply params from iteration 4
+```
+
+---
+
+## What Do You Want?
+
+1. **Make the auto-tune loop real** — I can write the backend optimizer that actually searches param space
+
+2. **Improve the eval suite** — Add tests that better measure memory quality
+
+3. **Add new tunable params** — Expose the hardcoded stuff (search ordering, compound boost, etc.)
+
+4. **Just use profiles** — Skip auto-tune, manually curate presets for different Luna moods
+
+Which direction makes sense for what you're trying to do with Luna?
+
+--------------------------------------------------------------------------------

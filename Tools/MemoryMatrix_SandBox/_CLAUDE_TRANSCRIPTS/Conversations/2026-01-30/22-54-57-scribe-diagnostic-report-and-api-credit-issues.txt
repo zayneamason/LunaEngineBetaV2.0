@@ -1,0 +1,2183 @@
+Conversation: Scribe diagnostic report and API credit issues
+UUID: 9a000edb-3f61-4d51-b114-9b1ef9a65e45
+Created: 2026-01-30T22:54:57.747311Z
+Updated: 2026-02-02T00:21:12.655196Z
+================================================================================
+
+[HUMAN] 2026-01-30T22:54:59.681395Z
+yo dude lets take a look at the scribe Scribe Diagnostic Report 📋
+Summary
+The Scribe (Ben Franklin) is configured but likely failing silently due to Anthropic API credit issues.
+Findings
+1. Configuration:
+
+```
+Backend: haiku (Claude claude-3-haiku-20240307)
+Batch size: 5
+Status: Active in engine
+
+```
+
+2. Issue - Claude API Dependency:
+* Scribe is set to use `haiku` backend (requires Claude API)
+* Your Anthropic API is out of credits
+* When extraction fails, it returns empty `(ExtractionOutput(), [])` silently
+* No error surfaced to user
+3. Raw Turns Polluting Memory:
+
+```
+Recent memory nodes: 20 raw conversation turns (all ❌)
+Source: "conversation" (225 total raw turns stored)
+
+```
+
+* `store_turn()` stores raw `[user] message` and `[assistant] response`
+* This happens BEFORE/SEPARATE from Scribe extraction
+* So even if extraction fails, raw turns get stored
+4. Extraction Pipeline Flow:
+
+```
+User message → Engine triggers extract_turn → Scribe mailbox
+                                                ↓
+                                    Scribe calls Claude Haiku
+                                                ↓
+                              ❌ FAILS (no credits)
+                                                ↓
+                              Returns empty, no knowledge extracted
+
+```
+
+5. Old Extracted Data is Good:
+
+```
+✅ "Tarcila is designing Luna's robot embodiment..."
+✅ "Marzipan is a key collaborator..."
+Source: "mcp" (from earlier when API worked)
+
+```
+
+Root Causes
+1. Scribe backend = "haiku" but Claude API has no credits
+2. No fallback to local model when Claude fails
+3. Raw turns stored separately from extraction pipeline
+Recommendations (not fixing, just noting)
+* Switch Scribe backend to `"local"` to use Qwen 3B for extraction
+* Or add Groq as an extraction backend option
+* Consider not storing raw conversation turns to memory_nodes (use conversation_turns table only)
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-30T22:55:22.497544Z
+ Yo, appreciate the diagnostic dump. Let me trace through what's actually happening here and where the architecture's leaking.
+
+---
+
+## The Real Problem
+
+You've got **two parallel storage paths** that shouldn't exist:
+
+```
+Path 1: store_turn() → memory_nodes (raw "[user] blah")  ← POLLUTION
+Path 2: Scribe extraction → memory_nodes (structured)    ← GOOD (but broken)
+```
+
+Path 1 is always firing. Path 2 is dead because no API credits. Result: memory fills with garbage while the actual knowledge extraction pipeline does nothing.
+
+---
+
+## Architecture Smell
+
+The Scribe shouldn't be a "nice to have extraction layer" that fails silently. It should be **the gate**. Raw turns belong in `conversation_turns` for audit/replay. They should *never* hit `memory_nodes` directly.
+
+```
+                    ┌─────────────────────┐
+     User Message → │ conversation_turns  │  (audit log, always)
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │   Scribe Extract    │  (classification + structure)
+                    └──────────┬──────────┘
+                               │
+                     ┌─────────┴─────────┐
+                     │                   │
+                     ▼                   ▼
+              (extracted)          (nothing useful)
+                     │                   │
+                     ▼                   ▼
+              memory_nodes            /dev/null
+```
+
+If Scribe returns empty, **nothing goes to memory_nodes**. That's the invariant.
+
+---
+
+## The Silent Failure Thing
+
+This is a load-bearing bug:
+
+```python
+# Current behavior (bad)
+result = scribe.extract(turn)
+if result:
+    store_to_memory(result)
+# else: silently continue, raw turn already stored elsewhere
+```
+
+Should be:
+
+```python
+result = scribe.extract(turn)
+if result.success:
+    store_to_memory(result.nodes)
+elif result.error:
+    log.warn(f"Scribe failed: {result.error}")
+    # Optionally: queue for retry, alert user, etc.
+# Raw turn ONLY in conversation_turns, NEVER memory_nodes
+```
+
+---
+
+## Backend Fallback Chain
+
+You're right that Scribe needs a fallback. Here's the order that makes sense:
+
+```
+1. Claude Haiku (fast, cheap, good at extraction)
+2. Groq Llama (free tier, decent)
+3. Local Qwen 3B (always available, sovereignty)
+```
+
+Config could look like:
+
+```python
+scribe:
+  backends:
+    - type: anthropic
+      model: claude-3-haiku-20240307
+    - type: groq
+      model: llama-3.1-8b-instant
+    - type: local
+      model: qwen2.5-3b-instruct
+  fallback_behavior: "next"  # or "fail", "queue"
+```
+
+---
+
+## Recommendations Ranked
+
+| Priority | What | Why |
+|----------|------|-----|
+| 1 | **Stop raw turns → memory_nodes** | This is active pollution right now |
+| 2 | **Add Scribe failure logging** | You can't fix what you can't see |
+| 3 | **Implement fallback chain** | Local Qwen as last resort = sovereignty maintained |
+| 4 | **Clean existing pollution** | Those 225 raw turns in memory_nodes need surgical removal |
+
+---
+
+## Quick Fix vs. Right Fix
+
+**Quick fix (today):** Change Scribe backend to `local`. You lose quality but stop the bleeding.
+
+**Right fix (this week):** Implement the fallback chain + remove the raw turn → memory_nodes path entirely.
+
+---
+
+Want me to spec out the fallback chain architecture in detail, or should we focus on the immediate pollution problem first?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-30T22:57:47.818406Z
+lets spec out the fall back chain
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-30T22:59:13.886554Z
+ Alright, let me pull the current Scribe architecture first so we're building on what exists, not what I imagine exists.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the LLM provider infrastructure to see what exists:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check how local inference works:
+```
+This block is not supported on your current device yet.
+```
+
+Alright, I've got the full picture. Let me spec out the fallback chain architecture.
+
+---
+
+# Scribe Fallback Chain Architecture
+
+## Problem Statement
+
+Current state:
+- Scribe backend = `haiku` (Claude API)
+- Claude API out of credits → silent failure
+- `_extract_local()` exists but falls through to empty result
+- No error surfacing, no retry, no fallback cascade
+
+Result: Extraction stops silently. Raw turns still pollute memory_nodes.
+
+---
+
+## Design Goals
+
+1. **Graceful degradation**: Always extract *something*, even if lower quality
+2. **Sovereignty-first**: Local should be the fallback floor, not the fallthrough
+3. **Observable failures**: Know when backends fail and why
+4. **Zero config hot-swap**: Switch backends without restart
+5. **Cost-aware**: Track usage, respect rate limits
+
+---
+
+## Architecture
+
+### Fallback Chain Definition
+
+```python
+@dataclass
+class ExtractionBackend:
+    """A single backend in the fallback chain."""
+    name: str                    # "anthropic", "groq", "local"
+    provider: str                # Provider ID or "local"
+    model: str                   # Model identifier
+    priority: int                # Lower = preferred
+    is_available: Callable[[], bool]  # Availability check
+    quality: str                 # "excellent", "good", "basic"
+    cost_per_1k: float          # Input token cost (for tracking)
+    
+@dataclass
+class FallbackChain:
+    """Ordered list of extraction backends."""
+    backends: list[ExtractionBackend]
+    current_index: int = 0
+    failure_counts: dict[str, int] = field(default_factory=dict)
+    
+    def get_active(self) -> Optional[ExtractionBackend]:
+        """Get current active backend, respecting availability."""
+        for backend in sorted(self.backends, key=lambda b: b.priority):
+            if backend.is_available():
+                return backend
+        return None
+    
+    def mark_failure(self, backend_name: str, error: str) -> None:
+        """Record a failure, potentially triggering fallback."""
+        self.failure_counts[backend_name] = self.failure_counts.get(backend_name, 0) + 1
+    
+    def reset_failures(self, backend_name: str) -> None:
+        """Reset failure count after success."""
+        self.failure_counts[backend_name] = 0
+```
+
+### Default Chain Configuration
+
+```python
+DEFAULT_FALLBACK_CHAIN = [
+    ExtractionBackend(
+        name="anthropic_haiku",
+        provider="anthropic",
+        model="claude-3-haiku-20240307",
+        priority=1,
+        is_available=lambda: anthropic_has_credits(),
+        quality="good",
+        cost_per_1k=0.00025,
+    ),
+    ExtractionBackend(
+        name="groq_llama",
+        provider="groq",
+        model="llama-3.3-70b-versatile",
+        priority=2,
+        is_available=lambda: groq_is_configured(),
+        quality="good",
+        cost_per_1k=0.0,  # Free tier
+    ),
+    ExtractionBackend(
+        name="local_qwen",
+        provider="local",
+        model="qwen2.5-3b-instruct",
+        priority=3,
+        is_available=lambda: local_model_loaded(),
+        quality="basic",
+        cost_per_1k=0.0,
+    ),
+]
+```
+
+---
+
+## Component Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        ScribeActor                              │
+│                                                                 │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐  │
+│  │   Chunker    │───▶│ FallbackChain│───▶│ ExtractionRouter │  │
+│  └──────────────┘    └──────────────┘    └──────────────────┘  │
+│                              │                     │            │
+│                              │                     ▼            │
+│                              │           ┌─────────────────┐   │
+│                              │           │ Parse Response  │   │
+│                              │           └─────────────────┘   │
+│                              │                     │            │
+│                              ▼                     ▼            │
+│                     ┌────────────────────────────────────┐     │
+│                     │         ExtractionResult           │     │
+│                     │  - output: ExtractionOutput        │     │
+│                     │  - backend_used: str               │     │
+│                     │  - fallback_triggered: bool        │     │
+│                     │  - errors: list[BackendError]      │     │
+│                     └────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+                          ┌─────────────────┐
+                          │    Librarian    │
+                          └─────────────────┘
+```
+
+---
+
+## ExtractionRouter Implementation
+
+```python
+@dataclass
+class BackendError:
+    """Record of a backend failure."""
+    backend: str
+    error_type: str  # "rate_limit", "auth", "timeout", "parse", "unknown"
+    message: str
+    timestamp: float
+    
+@dataclass  
+class ExtractionResult:
+    """Full result with diagnostics."""
+    output: ExtractionOutput
+    entity_updates: list[EntityUpdate]
+    backend_used: str
+    fallback_triggered: bool
+    errors: list[BackendError]
+    extraction_time_ms: int
+
+
+class ExtractionRouter:
+    """Routes extraction to available backends with fallback."""
+    
+    def __init__(self, chain: FallbackChain, engine: "LunaEngine"):
+        self.chain = chain
+        self.engine = engine
+        self._providers: dict[str, LLMProvider] = {}
+        
+    async def extract(
+        self, 
+        text: str, 
+        source_id: str
+    ) -> ExtractionResult:
+        """
+        Attempt extraction with fallback chain.
+        
+        Tries each backend in priority order until one succeeds.
+        """
+        errors: list[BackendError] = []
+        fallback_triggered = False
+        
+        for backend in self._iter_available_backends():
+            try:
+                output, updates = await self._try_backend(backend, text, source_id)
+                
+                if not output.is_empty() or updates:
+                    # Success - reset failure count
+                    self.chain.reset_failures(backend.name)
+                    
+                    return ExtractionResult(
+                        output=output,
+                        entity_updates=updates,
+                        backend_used=backend.name,
+                        fallback_triggered=fallback_triggered,
+                        errors=errors,
+                        extraction_time_ms=output.extraction_time_ms,
+                    )
+                    
+            except RateLimitError as e:
+                errors.append(BackendError(
+                    backend=backend.name,
+                    error_type="rate_limit",
+                    message=str(e),
+                    timestamp=time.time(),
+                ))
+                self.chain.mark_failure(backend.name, "rate_limit")
+                fallback_triggered = True
+                
+            except AuthenticationError as e:
+                errors.append(BackendError(
+                    backend=backend.name,
+                    error_type="auth",
+                    message=str(e),
+                    timestamp=time.time(),
+                ))
+                self.chain.mark_failure(backend.name, "auth")
+                fallback_triggered = True
+                
+            except Exception as e:
+                errors.append(BackendError(
+                    backend=backend.name,
+                    error_type="unknown",
+                    message=str(e),
+                    timestamp=time.time(),
+                ))
+                self.chain.mark_failure(backend.name, "unknown")
+                fallback_triggered = True
+        
+        # All backends failed
+        logger.error(f"All extraction backends failed: {[e.backend for e in errors]}")
+        
+        return ExtractionResult(
+            output=ExtractionOutput(),
+            entity_updates=[],
+            backend_used="none",
+            fallback_triggered=True,
+            errors=errors,
+            extraction_time_ms=0,
+        )
+    
+    def _iter_available_backends(self) -> Iterator[ExtractionBackend]:
+        """Yield backends in priority order, skipping unavailable."""
+        for backend in sorted(self.chain.backends, key=lambda b: b.priority):
+            if backend.is_available():
+                yield backend
+                
+    async def _try_backend(
+        self, 
+        backend: ExtractionBackend,
+        text: str,
+        source_id: str,
+    ) -> tuple[ExtractionOutput, list[EntityUpdate]]:
+        """Attempt extraction with a specific backend."""
+        
+        if backend.provider == "local":
+            return await self._extract_local(text, source_id)
+        
+        if backend.provider == "anthropic":
+            return await self._extract_anthropic(backend.model, text, source_id)
+            
+        if backend.provider == "groq":
+            return await self._extract_groq(backend.model, text, source_id)
+            
+        raise ValueError(f"Unknown provider: {backend.provider}")
+```
+
+---
+
+## Availability Checks
+
+```python
+# In scribe.py or a new availability.py
+
+def anthropic_has_credits() -> bool:
+    """Check if Anthropic API is likely to work."""
+    # Option 1: Try a minimal API call periodically
+    # Option 2: Check for recent auth/rate errors
+    # Option 3: Environment variable check
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        return False
+    # Could add credit check via API if available
+    return True
+
+def groq_is_configured() -> bool:
+    """Check if Groq is configured."""
+    return bool(os.environ.get("GROQ_API_KEY"))
+
+def local_model_loaded(engine: "LunaEngine") -> bool:
+    """Check if local model is loaded and ready."""
+    director = engine.get_actor("director")
+    if director and hasattr(director, "_local"):
+        local = director._local
+        return local and local.is_loaded
+    return False
+```
+
+---
+
+## Configuration Schema
+
+```yaml
+# luna_config.yaml
+extraction:
+  enabled: true
+  
+  fallback_chain:
+    - name: anthropic_haiku
+      provider: anthropic
+      model: claude-3-haiku-20240307
+      priority: 1
+      
+    - name: groq_llama  
+      provider: groq
+      model: llama-3.3-70b-versatile
+      priority: 2
+      
+    - name: local_qwen
+      provider: local
+      model: qwen2.5-3b-instruct
+      priority: 3
+      
+  # Behavior on total failure
+  on_all_fail: "skip"  # "skip" | "queue" | "error"
+  
+  # Retry settings
+  max_retries_per_backend: 2
+  retry_delay_ms: 1000
+  
+  # Quality floor - won't use backends below this quality
+  min_quality: "basic"  # "excellent" | "good" | "basic"
+```
+
+---
+
+## Observability
+
+### Metrics to Track
+
+```python
+@dataclass
+class ExtractionMetrics:
+    """Metrics for monitoring extraction health."""
+    
+    # Per-backend counters
+    attempts_by_backend: dict[str, int]
+    successes_by_backend: dict[str, int]
+    failures_by_backend: dict[str, int]
+    
+    # Fallback tracking
+    fallback_triggers: int
+    primary_success_rate: float
+    
+    # Quality metrics
+    objects_extracted: int
+    edges_extracted: int
+    avg_confidence: float
+    
+    # Latency
+    avg_extraction_time_ms: float
+    p95_extraction_time_ms: float
+```
+
+### Logging Patterns
+
+```python
+# On fallback trigger
+logger.warning(
+    f"Ben: Primary backend {primary} failed ({error_type}), "
+    f"falling back to {fallback}"
+)
+
+# On total failure
+logger.error(
+    f"Ben: All extraction backends exhausted. "
+    f"Errors: {[e.error_type for e in errors]}. "
+    f"Extraction skipped for session {source_id}"
+)
+
+# On success after fallback
+logger.info(
+    f"Ben: Extraction succeeded via fallback ({backend_used}). "
+    f"Extracted {len(output.objects)} objects."
+)
+```
+
+---
+
+## Migration Path
+
+### Phase 1: Add Router (non-breaking)
+1. Create `ExtractionRouter` class
+2. Add `FallbackChain` config
+3. Wire into `ScribeActor._extract_chunks()`
+4. Keep existing behavior as default
+
+### Phase 2: Enable Groq Backend
+1. Add Groq extraction method
+2. Test extraction quality with Llama 3.3 70B
+3. Add to default chain
+
+### Phase 3: Fix Local Extraction
+1. Ensure local model loads for Scribe (not just Director)
+2. Test Qwen 3B extraction quality
+3. Tune extraction prompt for smaller model
+
+### Phase 4: Remove Raw Turn Pollution
+1. Move `store_turn()` to `conversation_turns` table only
+2. Extraction is the *only* path to `memory_nodes`
+3. Clean existing pollution
+
+---
+
+## Trade-offs
+
+| Decision | Chose | Over | Because |
+|----------|-------|------|---------|
+| Chain order | Claude → Groq → Local | Quality-first fallback | Sovereignty is floor, not ceiling |
+| Failure detection | Per-call check | Global circuit breaker | Simpler, credits can refill mid-session |
+| Queue on fail | Skip | Queue for retry | Avoid unbounded queue growth |
+| Config location | YAML file | Database | Editable without code, version controllable |
+
+---
+
+## Open Questions
+
+1. **Credit detection**: Anthropic doesn't expose credit balance via API. Should we:
+   - Just try and catch errors?
+   - Add manual toggle in config?
+   - Track spend and estimate remaining?
+
+2. **Quality scoring**: Should we track extraction quality per backend over time and auto-adjust priorities?
+
+3. **Local model ownership**: Currently Director owns `_local`. Should Scribe have its own instance, or share?
+
+---
+
+Want me to drill into any section, or should we move to the raw turn pollution fix?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-30T23:02:38.197892Z
+what do you mean by swapping backends? can you elaborate on 3?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-30T23:03:11.616939Z
+ Good catch - let me clarify what "local model ownership" means and why it matters.
+
+---
+
+## The Current Situation
+
+Right now, there's **one** `LocalInference` instance, and it lives inside the **Director** actor:
+
+```python
+# In director.py (somewhere)
+class DirectorActor(Actor):
+    def __init__(self, ...):
+        self._local = LocalInference()  # Director owns this
+```
+
+When Scribe wants to use local inference, it does this dance:
+
+```python
+# In scribe.py _extract_local()
+async def _extract_local(self, text: str, source_id: str):
+    # Reach through engine to borrow Director's model
+    if self.engine:
+        director = self.engine.get_actor("director")
+        if director and hasattr(director, "_local") and director._local:
+            local = director._local
+            if local.is_loaded:
+                result = await local.generate(prompt)
+                # ...
+```
+
+This is **borrowing someone else's resource** through a chain of `if` statements. Smells like:
+- Tight coupling (Scribe knows Director's internal structure)
+- Fragile (if Director changes, Scribe breaks)
+- Implicit dependency (not declared anywhere)
+
+---
+
+## The Question: Who Should Own Local Inference?
+
+### Option A: Shared Instance (Current + Formalized)
+
+One `LocalInference` instance, but owned by the **Engine**, not Director:
+
+```
+┌─────────────────────────────────────────────┐
+│                  Engine                      │
+│                                             │
+│  ┌─────────────────────────────────────┐   │
+│  │         LocalInference              │   │
+│  │  (single Qwen model in memory)      │   │
+│  └──────────────┬──────────────────────┘   │
+│                 │                           │
+│      ┌──────────┼──────────┐               │
+│      ▼          ▼          ▼               │
+│  ┌───────┐ ┌────────┐ ┌──────────┐        │
+│  │Director│ │ Scribe │ │Librarian │        │
+│  └───────┘ └────────┘ └──────────┘        │
+└─────────────────────────────────────────────┘
+```
+
+**Pros:**
+- One model loaded = ~3GB VRAM once
+- Clear ownership (Engine provides, actors consume)
+- No duplication
+
+**Cons:**
+- Contention if Director and Scribe both need it simultaneously
+- Single point of failure
+- Can't tune model differently for different tasks
+
+---
+
+### Option B: Scribe Gets Its Own Instance
+
+Each actor that needs local inference gets its own:
+
+```
+┌─────────────────────────────────────────────┐
+│                  Engine                      │
+│                                             │
+│  ┌───────────────────┐ ┌─────────────────┐ │
+│  │     Director      │ │     Scribe      │ │
+│  │ ┌───────────────┐ │ │ ┌─────────────┐ │ │
+│  │ │LocalInference │ │ │ │LocalInfer.  │ │ │
+│  │ │(conversation) │ │ │ │(extraction) │ │ │
+│  │ └───────────────┘ │ │ └─────────────┘ │ │
+│  └───────────────────┘ └─────────────────┘ │
+└─────────────────────────────────────────────┘
+```
+
+**Pros:**
+- No contention
+- Could use different models (Director: fast 3B, Scribe: maybe 7B for better extraction)
+- Could use different LoRA adapters
+- Clean separation of concerns
+
+**Cons:**
+- 2x memory usage (~6GB VRAM for two models)
+- More complexity
+- Startup time doubled
+
+---
+
+### Option C: Shared Model, Separate Configs
+
+One loaded model, but actors get their own "view" with different generation configs:
+
+```python
+class LocalInferencePool:
+    """Shared model with per-actor configuration."""
+    
+    def __init__(self):
+        self._model = None
+        self._tokenizer = None
+        
+    def get_handle(self, config: InferenceConfig) -> "InferenceHandle":
+        """Get a handle with specific config (temp, max_tokens, etc.)"""
+        return InferenceHandle(self._model, self._tokenizer, config)
+```
+
+**Pros:**
+- Single model in memory
+- Different temperature/prompts per actor
+- Explicit dependency injection
+
+**Cons:**
+- Still can't use different *models* per actor
+- Adds abstraction layer
+
+---
+
+## My Recommendation: Option A (Formalized)
+
+For Luna's current scale and M1 hardware constraints:
+
+1. **Move LocalInference to Engine level** - Engine owns it, actors request it
+2. **Explicit injection** - Pass reference in actor constructors, not runtime discovery
+3. **Async queue for contention** - If both need it, queue requests
+
+```python
+# Engine initialization
+class LunaEngine:
+    def __init__(self, ...):
+        self._local_inference = LocalInference()
+        
+        # Inject into actors that need it
+        self._scribe = ScribeActor(
+            local_inference=self._local_inference,
+            ...
+        )
+        self._director = DirectorActor(
+            local_inference=self._local_inference,
+            ...
+        )
+```
+
+```python
+# Scribe uses it cleanly
+class ScribeActor(Actor):
+    def __init__(self, local_inference: LocalInference, ...):
+        self._local = local_inference  # Injected, not discovered
+        
+    async def _extract_local(self, text: str, source_id: str):
+        if self._local and self._local.is_loaded:
+            result = await self._local.generate(prompt)
+```
+
+This removes the "reach through engine to borrow Director's model" smell while keeping memory usage sane.
+
+---
+
+## Future Consideration
+
+If you later want Scribe to use a **different model** optimized for extraction (say, a fine-tuned 7B), you'd move to Option B. But that's a "when we have the VRAM budget" problem, not a "now" problem.
+
+---
+
+Does that clarify the ownership question? The key insight is: **Scribe shouldn't be reaching into Director's internals** - that's the smell. Whether we fix it with shared-at-engine-level or separate-instances is a resource trade-off.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-30T23:10:59.777812Z
+i want to know more about these cons: **Pros:** - One model loaded = ~3GB VRAM once - Clear ownership (Engine provides, actors consume) - No duplication **Cons:** - Contention if Director and Scribe both need it simultaneously - Single point of failure - Can't tune model differently for different tasks ... how would this conflict with luna's director framework and the lora as her personality? what if i want to train a lora for the scribe? Can i just inherit the model from the engine and hot swap the individual trained lora?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-30T23:11:57.413730Z
+ Now we're getting to the interesting architectural question. Let me trace through this.
+
+---
+
+## The LoRA Hot-Swap Question
+
+You're asking: **Can multiple actors share one base model but each load their own LoRA adapter on demand?**
+
+Short answer: **Yes, but it depends on how MLX handles adapter swapping.**
+
+Let me dig into what that would look like:
+
+---
+
+## Current LoRA Architecture
+
+Right now, Luna has ONE personality LoRA that gets fused/loaded at model init time:
+
+```python
+# In local.py load_model()
+self._model, self._tokenizer = await loop.run_in_executor(
+    None,
+    lambda: load(model_id, adapter_path=adapter_str)  # Luna's LoRA baked in
+)
+```
+
+This means:
+- Model + LoRA are loaded **together**
+- You can't swap the LoRA without reloading the model
+- ~3-5 seconds to reload
+
+---
+
+## What You're Proposing: Multi-LoRA Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                     Base Model (Qwen 3B)                       │
+│                     ~3GB VRAM - loaded once                    │
+└────────────────────────────────────────────────────────────────┘
+                              │
+           ┌──────────────────┼──────────────────┐
+           │                  │                  │
+           ▼                  ▼                  ▼
+    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+    │ Luna LoRA   │    │ Scribe LoRA │    │ Librarian   │
+    │ (identity)  │    │ (Ben's      │    │ LoRA (Dude) │
+    │             │    │  extraction │    │             │
+    │ ~50-100MB   │    │  style)     │    │ ~50-100MB   │
+    └─────────────┘    └─────────────┘    └─────────────┘
+```
+
+Each actor would:
+1. Share the base model weights
+2. Hot-swap its own LoRA when it needs to generate
+3. Not interfere with other actors' LoRAs
+
+---
+
+## How MLX Handles This
+
+Let me check what MLX actually supports:
+
+```python
+# MLX-LM load signature (from their docs)
+def load(
+    model_path: str,
+    adapter_path: Optional[str] = None,  # Single adapter at load time
+    ...
+)
+```
+
+Current MLX-LM loads adapter **at model load time**, not runtime. But there's another approach:
+
+### Option 1: Multiple Model Instances (Memory Expensive)
+
+```python
+# Each actor gets its own model+LoRA combo
+luna_model = load("qwen-3b", adapter_path="luna_lora")      # 3GB
+scribe_model = load("qwen-3b", adapter_path="scribe_lora")  # 3GB (duplicate base!)
+```
+
+**Problem**: Base weights duplicated. 6GB+ for two actors.
+
+### Option 2: LoRA Adapter Swapping (What You Want)
+
+MLX supports loading adapters separately:
+
+```python
+import mlx.core as mx
+from mlx_lm import load
+from mlx_lm.tuner.utils import apply_lora_layers
+
+# Load base model ONCE
+model, tokenizer = load("qwen-3b")
+
+# Load LoRA weights separately
+luna_lora_weights = mx.load("luna_lora/adapters.safetensors")
+scribe_lora_weights = mx.load("scribe_lora/adapters.safetensors")
+
+# Apply Luna's personality for conversation
+apply_lora_layers(model, luna_lora_weights)
+response = generate(model, tokenizer, "Hey Luna...")
+
+# Swap to Scribe's extraction style
+apply_lora_layers(model, scribe_lora_weights)  # Hot swap!
+extraction = generate(model, tokenizer, "Extract from: ...")
+```
+
+**This is the architecture you want.** One base model, multiple LoRA adapters that swap in/out.
+
+---
+
+## The Contention Problem (Revisited)
+
+Now the con "contention if Director and Scribe both need it simultaneously" becomes more specific:
+
+```
+Timeline:
+─────────────────────────────────────────────────────────────────►
+     │                    │                    │
+     ▼                    ▼                    ▼
+ [Director needs     [Scribe needs        [Director needs
+  Luna LoRA]          Scribe LoRA]         Luna LoRA again]
+     │                    │                    │
+     └─── SWAP ───────────┴─── SWAP ──────────┘
+```
+
+If both actors fire simultaneously:
+1. Director loads Luna LoRA, starts generating
+2. Scribe needs extraction, swaps to Scribe LoRA **mid-generation**
+3. Director's output gets corrupted
+
+**This is a real race condition.**
+
+---
+
+## Solution: LoRA-Aware Request Queue
+
+```python
+@dataclass
+class InferenceRequest:
+    """A queued inference request with LoRA context."""
+    actor: str
+    lora_id: str  # "luna", "scribe", "librarian", None
+    prompt: str
+    config: GenerationConfig
+    future: asyncio.Future  # Caller awaits this
+
+
+class LoRAInferencePool:
+    """
+    Shared base model with hot-swappable LoRA adapters.
+    
+    Serializes requests to prevent LoRA conflicts.
+    Batches requests with same LoRA for efficiency.
+    """
+    
+    def __init__(self):
+        self._model = None
+        self._tokenizer = None
+        self._current_lora: Optional[str] = None
+        self._lora_cache: dict[str, Any] = {}  # Preloaded adapter weights
+        self._request_queue: asyncio.Queue[InferenceRequest] = asyncio.Queue()
+        self._processing = False
+        
+    async def load_base_model(self, model_id: str):
+        """Load base model without any LoRA."""
+        self._model, self._tokenizer = load(model_id, adapter_path=None)
+        
+    def register_lora(self, lora_id: str, adapter_path: str):
+        """Preload a LoRA adapter into cache."""
+        weights = mx.load(f"{adapter_path}/adapters.safetensors")
+        self._lora_cache[lora_id] = weights
+        logger.info(f"Registered LoRA: {lora_id}")
+        
+    async def generate(
+        self,
+        actor: str,
+        lora_id: Optional[str],
+        prompt: str,
+        config: GenerationConfig,
+    ) -> str:
+        """
+        Queue a generation request.
+        
+        Caller awaits result. Pool handles LoRA swapping.
+        """
+        future = asyncio.Future()
+        request = InferenceRequest(
+            actor=actor,
+            lora_id=lora_id,
+            prompt=prompt,
+            config=config,
+            future=future,
+        )
+        await self._request_queue.put(request)
+        
+        # Ensure processor is running
+        if not self._processing:
+            asyncio.create_task(self._process_queue())
+            
+        return await future
+        
+    async def _process_queue(self):
+        """Process requests, batching same-LoRA requests."""
+        self._processing = True
+        
+        try:
+            while True:
+                # Get next request
+                request = await asyncio.wait_for(
+                    self._request_queue.get(),
+                    timeout=1.0
+                )
+                
+                # Swap LoRA if needed
+                if request.lora_id != self._current_lora:
+                    await self._swap_lora(request.lora_id)
+                
+                # Generate
+                try:
+                    result = await self._generate_internal(
+                        request.prompt,
+                        request.config,
+                    )
+                    request.future.set_result(result)
+                except Exception as e:
+                    request.future.set_exception(e)
+                    
+        except asyncio.TimeoutError:
+            pass  # Queue empty, stop processing
+        finally:
+            self._processing = False
+            
+    async def _swap_lora(self, lora_id: Optional[str]):
+        """Hot-swap the active LoRA adapter."""
+        if lora_id is None:
+            # Clear LoRA, use base model
+            # (MLX may require model reload here - need to verify)
+            pass
+        elif lora_id in self._lora_cache:
+            weights = self._lora_cache[lora_id]
+            apply_lora_layers(self._model, weights)
+            logger.debug(f"Swapped to LoRA: {lora_id}")
+        else:
+            raise ValueError(f"Unknown LoRA: {lora_id}")
+            
+        self._current_lora = lora_id
+```
+
+---
+
+## Updated Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          Engine                                  │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │                   LoRAInferencePool                        │ │
+│  │                                                            │ │
+│  │   ┌─────────────────────────────────────────────────┐    │ │
+│  │   │            Base Model (Qwen 3B)                 │    │ │
+│  │   │                 ~3GB VRAM                       │    │ │
+│  │   └─────────────────────────────────────────────────┘    │ │
+│  │                         │                                 │ │
+│  │   ┌─────────────────────┼─────────────────────┐          │ │
+│  │   │                     │                     │          │ │
+│  │   ▼                     ▼                     ▼          │ │
+│  │ [luna_lora]        [scribe_lora]        [librarian_lora] │ │
+│  │  (cached)           (cached)             (cached)        │ │
+│  │                                                          │ │
+│  │   Request Queue: ═══════════════════════════════►        │ │
+│  │   (serialized, batched by LoRA)                          │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                              │                                  │
+│         ┌────────────────────┼────────────────────┐            │
+│         │                    │                    │            │
+│         ▼                    ▼                    ▼            │
+│    ┌─────────┐         ┌─────────┐         ┌──────────┐       │
+│    │Director │         │ Scribe  │         │Librarian │       │
+│    │(Luna)   │         │ (Ben)   │         │(Dude)    │       │
+│    └─────────┘         └─────────┘         └──────────┘       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Answering Your Original Questions
+
+### "How would this conflict with Luna's director framework and the LoRA as her personality?"
+
+**No conflict** if we use the queue-based approach. Luna's personality LoRA stays cached, gets swapped in when Director needs it. Scribe's extraction LoRA gets swapped in when extraction happens. They don't step on each other because requests are serialized.
+
+### "What if I want to train a LoRA for the Scribe?"
+
+**Totally viable.** You'd train a LoRA on:
+- Input: Conversation chunks
+- Output: Structured JSON extractions
+- Style: Ben Franklin's meticulous attention
+
+Then register it:
+```python
+pool.register_lora("scribe", "models/scribe_lora_mlx/")
+```
+
+### "Can I just inherit the model from the engine and hot swap the individual trained LoRA?"
+
+**Yes, exactly.** The `LoRAInferencePool` pattern gives you:
+1. Single base model in VRAM
+2. Multiple LoRA adapters cached in RAM (~50-100MB each)
+3. Hot-swap on demand with queue serialization
+4. No race conditions
+
+---
+
+## The Trade-off
+
+| Aspect | Single LoRA (Current) | Multi-LoRA Pool (Proposed) |
+|--------|----------------------|---------------------------|
+| Memory | ~3GB | ~3GB + 50-100MB per LoRA |
+| Latency | Immediate | Queue wait + possible swap (~10-50ms) |
+| Complexity | Simple | Moderate (queue management) |
+| Flexibility | One personality | Per-actor personalities |
+| Training | One LoRA to maintain | Multiple LoRAs to train/version |
+
+---
+
+## Open Question: Does MLX Support Clean LoRA Swapping?
+
+I need to verify that `apply_lora_layers()` can cleanly swap without model reload. If MLX requires reloading the base model to clear a LoRA, we'd need a different approach (like keeping the base weights pristine and applying LoRA as a delta at inference time).
+
+Want me to dig into MLX's actual LoRA implementation to confirm this is viable?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-30T23:48:28.690048Z
+please do!
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-30T23:51:43.287348Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Good, got the versions. Now let me look at MLX-LM's actual LoRA implementation:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Let me look at the core LoRA implementation:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me see how adapters are loaded and applied:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the main `load()` function to see how it handles adapters:
+```
+This block is not supported on your current device yet.
+```
+
+Now I found the key piece. Let me look at `remove_lora_layers` and `load_adapters` more closely. Let me also check if there's a way to swap adapters without full reload:
+```
+This block is not supported on your current device yet.
+```
+
+This is the key insight. Let me trace through the architecture more:
+```
+This block is not supported on your current device yet.
+```
+
+Now let's verify we can actually swap the LoRA weights at runtime:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check how `load_weights` works with adapters to understand the full picture:
+```
+This block is not supported on your current device yet.
+```
+
+Now let's put it all together and write a proof-of-concept for the hot-swapping architecture:
+```
+This block is not supported on your current device yet.
+```
+
+---
+
+## Summary: MLX LoRA Hot-Swapping Analysis
+
+### Key Findings
+
+**Yes, MLX supports hot-swapping LoRA adapters.** Here's how it works:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LoRALinear Layer                             │
+│                                                                 │
+│   Input (x) ──┬──► [Base Linear] ──► y (base output)           │
+│               │                           │                     │
+│               └──► [x @ lora_a @ lora_b] ► z (LoRA delta)      │
+│                                           │                     │
+│                           Output = y + (scale * z)              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+The base weights are **preserved inside `lora.linear`**. The LoRA delta (`lora_a`, `lora_b`) is **additive**. To swap adapters, you just reassign these tensors.
+
+---
+
+### Luna's Existing LoRA
+
+Found at `/models/luna_lora_mlx`:
+- **Size**: 114.2 MB
+- **Rank**: 16
+- **Layers**: 36 (full model coverage)
+- **Keys**: q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+
+---
+
+### Proposed Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                           Engine                                     │
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │                    MultiLoRAPool                               │ │
+│  │                                                                │ │
+│  │   ┌─────────────────────────────────────────────────────┐    │ │
+│  │   │            Base Model (Qwen 3B)                     │    │ │
+│  │   │                 ~3GB VRAM                           │    │ │
+│  │   │           (loaded once at startup)                  │    │ │
+│  │   └─────────────────────────────────────────────────────┘    │ │
+│  │                         │                                     │ │
+│  │   ┌─────────────────────┼─────────────────────┐              │ │
+│  │   │                     │                     │              │ │
+│  │   ▼                     ▼                     ▼              │ │
+│  │ [luna_lora]        [scribe_lora]        [dude_lora]          │ │
+│  │  114 MB             ~100 MB              ~100 MB             │ │
+│  │  (cached)           (cached)             (cached)            │ │
+│  │                                                              │ │
+│  │   Request Queue: ═══════════════════════════════►            │ │
+│  │   (serialized to prevent race conditions)                    │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                              │                                      │
+│         ┌────────────────────┼────────────────────┐                │
+│         │                    │                    │                │
+│         ▼                    ▼                    ▼                │
+│    ┌─────────┐         ┌─────────┐         ┌──────────┐           │
+│    │Director │         │ Scribe  │         │Librarian │           │
+│    │ (Luna)  │         │  (Ben)  │         │ (Dude)   │           │
+│    └─────────┘         └─────────┘         └──────────┘           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Memory Budget
+
+| Component | Size | Location |
+|-----------|------|----------|
+| Base Model (Qwen 3B 4-bit) | ~3 GB | VRAM (Metal) |
+| Luna LoRA | ~114 MB | RAM (cached) |
+| Scribe LoRA | ~100 MB | RAM (cached) |
+| Librarian LoRA (future) | ~100 MB | RAM (cached) |
+| **Total** | **~3.3 GB** | |
+
+vs. separate models per actor: ~9 GB
+
+---
+
+### Swap Timing
+
+| Operation | Time |
+|-----------|------|
+| Initial adapter registration | ~50-100ms (disk read) |
+| Hot-swap between adapters | ~10-50ms (weight reassignment + eval) |
+| Full model reload (for comparison) | ~30-60 seconds |
+
+---
+
+### API Design
+
+```python
+class MultiLoRAPool:
+    """Engine-level shared inference with hot-swappable personalities."""
+    
+    async def generate(
+        self,
+        prompt: str,
+        adapter: str,  # "luna" | "scribe" | "dude" | None
+        config: GenerationConfig,
+    ) -> str:
+        """
+        Generate with specified adapter.
+        
+        Thread-safe: requests are queued and serialized.
+        """
+        async with self._lock:
+            if adapter != self._current_adapter:
+                self.apply_adapter(adapter)
+            return await self._generate(prompt, config)
+```
+
+---
+
+### What You'd Need to Train
+
+To give Scribe (Ben Franklin) his own personality:
+
+1. **Training data**: Extraction examples in Ben's style
+   - Input: Raw conversation chunks
+   - Output: Structured JSON extractions
+   
+2. **Training config**:
+   ```yaml
+   base_model: Qwen/Qwen2.5-3B-Instruct
+   lora:
+     rank: 16
+     alpha: 16
+     target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+   ```
+
+3. **Training run**: Standard LoRA fine-tuning with MLX
+   ```bash
+   python -m mlx_lm.lora \
+     --model Qwen/Qwen2.5-3B-Instruct \
+     --data training_data.jsonl \
+     --output models/scribe_lora_mlx
+   ```
+
+---
+
+### Next Steps
+
+1. **Implement `MultiLoRAPool`** - Engine-level component
+2. **Refactor `LocalInference`** to use the pool
+3. **Update Scribe** to request `scribe` adapter (once trained)
+4. **Add request serialization** to prevent race conditions
+5. **Train Scribe LoRA** with Ben Franklin extraction style
+
+---
+
+Want me to spec out the full `MultiLoRAPool` implementation, or should we circle back to the Scribe fallback chain now that we understand the LoRA architecture?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-31T00:02:28.774218Z
+yeah please, make it a detailed artifact
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-31T00:06:55.407873Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Done. That's a comprehensive ~1,500 line specification covering:
+
+**Core Architecture:**
+- `MultiLoRAPool` - Engine-level shared inference with hot-swappable adapters
+- `LoRAAdapter` - Cached adapter weights with metadata
+- `InferenceRequest` - Queued request with async future for result delivery
+
+**Key Findings from MLX Deep Dive:**
+- LoRA weights (`lora_a`, `lora_b`) are **additive** to base weights
+- Base model stays in VRAM (~3GB), adapters cached in RAM (~100MB each)
+- Hot-swap is just `model.load_weights()` + `mx.eval()` = **~10-50ms**
+- No model reload needed - verified working with actual MLX code
+
+**Integration Points:**
+- Engine owns the pool, injects into actors
+- Director requests "luna" adapter for conversation
+- Scribe requests "scribe" adapter for extraction (once trained)
+- Request queue serializes to prevent race conditions
+
+**What You Asked About:**
+- ✅ Can inherit base model from Engine
+- ✅ Can hot-swap individual trained LoRAs per actor
+- ✅ Luna's personality stays separate from Scribe's extraction style
+- ✅ Contention solved via request serialization
+
+The spec includes the migration path, testing strategy, config schema, and future extensions (Living LoRA, Context State Machine).
+
+Ready to implement when you are. 🤙
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-31T00:08:42.086188Z
+oh shit check this out in the project files: STUDY_Luna_Context_State_Machine_Design.md
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-31T00:08:47.347329Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-31T00:10:14.548698Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+Dude. This is the **same vision**, just one level up the stack.
+
+Let me pull the middle section to see the full picture:
+```
+This block is not supported on your current device yet.
+```
+
+Let me see the LoRA training strategy section:
+```
+This block is not supported on your current device yet.
+```
+
+🔥 **This is the full vision**. The STUDY document from Jan 29 already spec'd out:
+
+1. **5 Context States** with personality configs:
+   - Professional (warmth: 0.75, technical: 0.85, directness: 0.90)
+   - Personal (warmth: 0.95, empathy: 0.95, formality: 0.30)
+   - Creative (creativity: 0.95, playfulness: 0.90)
+   - Learning (patience: 0.95, clarity: 0.90)
+   - Deep Work (conciseness: 0.95, interruption: 0.10)
+
+2. **State-specific LoRAs**: `luna_professional.npz`, `luna_personal.npz`, etc.
+
+3. **Memory Scoping**: Work memories stay in work context
+
+4. **Context Detection Algorithm**: Multi-signal with keyword analysis, temporal signals, explicit commands
+
+5. **Training data examples**: Already has training pairs for each context mode
+
+---
+
+## The Convergence
+
+**MultiLoRAPool** (what we just spec'd) **+ Context State Machine** (this study) = **Complete System**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CONTEXT STATE MACHINE                        │
+│   (detects context, decides which adapter to use)               │
+│                                                                 │
+│   "I'm tired" → detects PERSONAL → requests "luna_personal"     │
+│   "bug in auth.py" → detects DEEP_WORK → requests "luna_focus"  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ adapter name
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     MULTI-LORA POOL                             │
+│   (hot-swaps the adapter, generates response)                   │
+│                                                                 │
+│   Base Model (3GB) + Cached Adapters (5 × 120MB)               │
+│   Swap time: ~10-50ms                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+The **MultiLoRAPool** we designed is the **infrastructure layer** that makes the **Context State Machine** vision possible.
+
+**What we need to build:**
+1. ✅ **MultiLoRAPool** - Infrastructure for hot-swapping (just spec'd)
+2. ⬜ **Context Detector** - Multi-signal detection (spec'd in STUDY)
+3. ⬜ **State Machine** - Transition logic (spec'd in STUDY)
+4. ⬜ **Context LoRAs** - Training 5 context-specific adapters
+5. ⬜ **Memory Scope Filter** - Context-aware memory retrieval
+
+The STUDY even has the training data format and personality scores. This is ready for implementation.
+
+Want me to create a unified architecture spec that merges both documents into an implementation roadmap? 🤙
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-31T00:12:50.625005Z
+in a minute i want to get an understanding of what we would need from the scribe and librarian in context of a lora.. Can i get your take on that ben?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-31T00:13:23.002749Z
+ *adjusts spectacles and sets down quill*
+
+Ah, a question most pertinent to the division of intellectual labor! You ask what distinguishes the Scribe's adapter from the Librarian's, and how each might be trained to their particular purpose.
+
+**The Scribe's LoRA - "Ben's Quill"**
+
+My task, sir, is *extraction* - the distillation of conversation into structured wisdom. Where Luna speaks freely, I must parse precisely.
+
+What makes Scribe output distinct:
+- **Structured JSON** - Not prose, but clean data packets
+- **Classification acuity** - FACT vs DECISION vs PROBLEM vs ACTION vs INSIGHT
+- **Entity recognition** - Names, projects, relationships, dates
+- **Confidence scoring** - "This seems certain" vs "This may be conjecture"
+- **Brevity in output** - No flourish, no personality in the *product*
+
+Training data would look thus:
+```
+Input: "I talked to Sarah yesterday and we decided to push the deadline to March. The API thing is still broken but Jake's looking at it."
+
+Output: {
+  "entities": [
+    {"name": "Sarah", "type": "person", "relationship": "colleague"},
+    {"name": "Jake", "type": "person", "relationship": "colleague"}
+  ],
+  "facts": [
+    {"content": "Deadline moved to March", "confidence": 0.95, "source": "decision with Sarah"},
+    {"content": "API has unresolved issue", "confidence": 0.90, "type": "PROBLEM"},
+    {"content": "Jake assigned to API fix", "confidence": 0.85, "type": "ACTION"}
+  ],
+  "temporal": "yesterday"
+}
+```
+
+The Scribe's LoRA trains the model to *compress* human conversation into machine-readable knowledge - colonial gravitas in the process, antiseptic neutrality in the product.
+
+---
+
+**The Librarian's LoRA - "The Dude's Retrieval"**
+
+Now the Librarian - and here I must speak of my colleague with appropriate respect despite his... informal demeanor - serves the *inverse* function.
+
+Where I compress, he expands. Where I extract structure FROM text, he synthesizes context FOR text.
+
+What makes Librarian output distinct:
+- **Relevance ranking** - "This memory matters more than that one"
+- **Context assembly** - Weaving multiple memories into coherent narrative
+- **Gap detection** - "We don't have information about X"
+- **Query interpretation** - Understanding what Luna *actually* needs vs what was asked
+- **Budget management** - Fitting context within token limits
+
+Training data would look thus:
+```
+Input: {
+  "query": "What do we know about the Mars College project?",
+  "available_memories": [<list of 50 potentially relevant nodes>],
+  "token_budget": 2000
+}
+
+Output: {
+  "selected_memories": [<ranked list of 8 most relevant>],
+  "synthesis": "Mars College 2026 is the target venue for Luna's physical embodiment. Key facts: location in desert, timeline Feb 2026, robot body design by Tarcila features raccoon aesthetics...",
+  "confidence": 0.88,
+  "gaps": ["Specific budget unknown", "Travel logistics not yet planned"]
+}
+```
+
+The Dude's LoRA trains the model to be a *curator* - chill in demeanor, precise in selection.
+
+---
+
+**The Essential Difference**
+
+| Aspect | Scribe (Ben) | Librarian (Dude) |
+|--------|--------------|------------------|
+| Direction | Conversation → Structure | Structure → Context |
+| Input | Raw human text | Query + memory nodes |
+| Output | JSON extraction | Ranked synthesis |
+| Personality in output | None (neutral data) | None (neutral context) |
+| Training signal | Extraction accuracy | Retrieval relevance |
+| Failure mode | Missing entities, wrong classification | Irrelevant memories, budget overflow |
+
+Both serve Luna, but at opposite ends of the memory pipeline. I am the *intake*, cataloguing what enters. He is the *retrieval*, surfacing what's needed.
+
+*taps quill thoughtfully*
+
+The question for your consideration: Do both truly require LoRA training, or might simpler prompting suffice? The Scribe's task is quite structured - perhaps a well-crafted system prompt achieves 80% of value. The Librarian's curation instinct, however... that *feel* for relevance may benefit more from fine-tuning.
+
+What say you, sir?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-31T00:20:26.457018Z
+i want to be able to implement ben and the librarian in the future for now we can focus on luna, but i want to follow this architecture and frame work, one thing that might help is a registry or a router that can map both lora's and prompting instructions, as well as a registry and router for llm's which already exists  maybe we should aim for a more global implementation at the engine level. what are your thoughts?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-31T00:21:28.042281Z
+ *sets down quill and leans back*
+
+Ah, now you speak of proper architecture - a unified registry that treats LoRAs, prompts, AND models as interchangeable resources to be routed. This is wise. Let me think on this...
+
+---
+
+*switches to Dude mode*
+
+Yeah man, I see where you're going. Right now you've got:
+- Model routing (already exists in the engine)
+- LoRA hot-swap (what we just spec'd)
+- Prompt templates (scattered around)
+
+But they're separate systems. What you want is a **unified personality/capability registry** where an "actor configuration" is a *bundle* of:
+
+```
+ActorConfig = {
+    model: "qwen-3b" | "claude-sonnet" | "local",
+    adapter: "luna_lora" | "scribe_lora" | None,
+    system_prompt: "prompts/luna_core.txt",
+    personality_params: { warmth: 0.85, ... },
+    tools: ["memory_search", "web_browse", ...],
+    context_scope: ["personal", "work", ...]
+}
+```
+
+Then the **router** doesn't just pick a model - it assembles the full stack:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         PERSONA ROUTER (Engine Level)                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      PERSONA REGISTRY                                │   │
+│  │                                                                      │   │
+│  │  "luna" ──────► { model: local, adapter: luna_lora, prompt: ... }   │   │
+│  │  "luna_pro" ──► { model: local, adapter: luna_professional, ... }   │   │
+│  │  "luna_personal" ► { model: local, adapter: luna_personal, ... }    │   │
+│  │  "scribe" ────► { model: local, adapter: scribe_lora, prompt: ... } │   │
+│  │  "librarian" ─► { model: local, adapter: None, prompt: dude.txt }   │   │
+│  │  "claude_fallback" ► { model: claude, adapter: None, prompt: ... }  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      CAPABILITY ROUTER                               │   │
+│  │                                                                      │   │
+│  │  resolve("luna", context="deep_work")                               │   │
+│  │      │                                                               │   │
+│  │      ├─► Check context state machine                                │   │
+│  │      ├─► Select persona variant: "luna_focus"                       │   │
+│  │      ├─► Assemble: model + adapter + prompt + tools                 │   │
+│  │      └─► Return configured generation pipeline                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      RESOURCE POOLS                                  │   │
+│  │                                                                      │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                 │   │
+│  │  │ Model Pool  │  │ LoRA Pool   │  │Prompt Cache │                 │   │
+│  │  │             │  │             │  │             │                 │   │
+│  │  │ local_qwen  │  │ luna_lora   │  │ luna.txt    │                 │   │
+│  │  │ claude_api  │  │ scribe_lora │  │ scribe.txt  │                 │   │
+│  │  │ groq_api    │  │ focus_lora  │  │ dude.txt    │                 │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**The Key Insight**: A "persona" isn't just a LoRA OR a prompt OR a model. It's a *configuration bundle*. The registry holds these bundles, and the router assembles them on demand.
+
+---
+
+**Why This Matters for Ben and Dude Later**
+
+Right now, Scribe might just be:
+```yaml
+scribe:
+  model: claude-sonnet  # Fallback to API
+  adapter: null         # No LoRA yet
+  prompt: prompts/scribe_extraction.txt
+  output_format: json
+```
+
+Later, when you train a Scribe LoRA:
+```yaml
+scribe:
+  model: local
+  adapter: scribe_lora  # Now with LoRA!
+  prompt: prompts/scribe_extraction.txt  # Same prompt
+  output_format: json
+```
+
+**Same registry entry, just swap the adapter field.** The router doesn't care - it assembles whatever's configured.
+
+---
+
+**Proposed Data Structures**
+
+```python
+@dataclass
+class PersonaConfig:
+    """A complete persona configuration bundle."""
+    
+    name: str                          # "luna", "scribe", "librarian"
+    
+    # Model selection
+    model_id: str                      # "local", "claude-sonnet", "groq-llama"
+    model_fallback: Optional[str]      # Fallback if primary unavailable
+    
+    # LoRA adapter (optional)
+    adapter_name: Optional[str]        # "luna_lora", "scribe_lora", None
+    adapter_path: Optional[str]        # Path to adapter files
+    
+    # Prompting
+    system_prompt_path: str            # Path to system prompt template
+    prompt_variables: Dict[str, Any]   # Variables to inject into prompt
+    
+    # Personality (for context-aware personas)
+    personality_params: Optional[Dict[str, float]]  # warmth, technical, etc.
+    context_state: Optional[str]       # "professional", "personal", etc.
+    
+    # Capabilities
+    tools: List[str]                   # Available tool names
+    memory_scope: List[str]            # Memory contexts to access
+    output_format: str                 # "text", "json", "structured"
+    
+    # Constraints
+    max_tokens: int = 512
+    temperature: float = 0.7
+
+
+class PersonaRegistry:
+    """Central registry for all persona configurations."""
+    
+    def __init__(self, config_dir: Path):
+        self._personas: Dict[str, PersonaConfig] = {}
+        self._variants: Dict[str, Dict[str, str]] = {}  # persona -> {context: variant}
+        self._load_configs(config_dir)
+    
+    def get(self, name: str, context: Optional[str] = None) -> PersonaConfig:
+        """
+        Get persona config, optionally resolved for context.
+        
+        Examples:
+            registry.get("luna")  # Base Luna
+            registry.get("luna", context="deep_work")  # Luna focus variant
+            registry.get("scribe")  # Scribe (no context variants)
+        """
+        if context and name in self._variants:
+            variant_name = self._variants[name].get(context, name)
+            return self._personas[variant_name]
+        return self._personas[name]
+    
+    def register(self, config: PersonaConfig) -> None:
+        """Register a persona configuration."""
+        self._personas[config.name] = config
+    
+    def register_variant(self, base: str, context: str, variant: str) -> None:
+        """Register a context variant for a persona."""
+        if base not in self._variants:
+            self._variants[base] = {}
+        self._variants[base][context] = variant
+
+
+class PersonaRouter:
+    """Routes requests to appropriate persona configurations."""
+    
+    def __init__(
+        self,
+        registry: PersonaRegistry,
+        model_pool: ModelPool,       # Existing model routing
+        lora_pool: MultiLoRAPool,    # From our spec
+        prompt_cache: PromptCache,
+    ):
+        self._registry = registry
+        self._models = model_pool
+        self._loras = lora_pool
+        self._prompts = prompt_cache
+    
+    async def resolve(
+        self,
+        persona: str,
+        context: Optional[str] = None,
+    ) -> "ResolvedPersona":
+        """
+        Resolve persona name + context into a ready-to-use generation pipeline.
+        
+        Returns a ResolvedPersona with all resources loaded and configured.
+        """
+        config = self._registry.get(persona, context)
+        
+        # Resolve model
+        model = await self._models.get(config.model_id)
+        
+        # Resolve adapter (if any)
+        if config.adapter_name:
+            await self._loras.apply_adapter(config.adapter_name)
+        
+        # Resolve prompt
+        system_prompt = await self._prompts.get(
+            config.system_prompt_path,
+            variables=config.prompt_variables
+        )
+        
+        return ResolvedPersona(
+            config=config,
+            model=model,
+            system_prompt=system_prompt,
+            lora_pool=self._loras,
+        )
+
+
+@dataclass
+class ResolvedPersona:
+    """A fully resolved persona ready for generation."""
+    
+    config: PersonaConfig
+    model: Any  # Model instance
+    system_prompt: str
+    lora_pool: MultiLoRAPool
+    
+    async def generate(self, prompt: str) -> str:
+        """Generate with this persona's full configuration."""
+        # Ensure correct adapter is active
+        if self.config.adapter_name:
+            await self.lora_pool.apply_adapter(self.config.adapter_name)
+        
+        # Generate with configured params
+        return await self.lora_pool.generate(
+            prompt=f"{self.system_prompt}\n\n{prompt}",
+            adapter=self.config.adapter_name,
+            config=GenerationConfig(
+                max_tokens=self.config.max_tokens,
+                temperature=self.config.temperature,
+            ),
+            actor=self.config.name,
+        )
+```
+
+---
+
+**Config File Structure**
+
+```yaml
+# config/personas/luna.yaml
+name: luna
+model_id: local
+model_fallback: claude-sonnet
+adapter_name: luna_lora
+adapter_path: models/luna_lora_mlx
+system_prompt_path: prompts/luna_core.txt
+personality_params:
+  warmth: 0.85
+  technical: 0.75
+  humor: 0.70
+tools:
+  - memory_search
+  - web_browse
+  - file_read
+memory_scope:
+  - personal
+  - work
+  - creative
+max_tokens: 512
+temperature: 0.7
+
+# Context variants
+variants:
+  professional: luna_professional
+  personal: luna_personal
+  creative: luna_creative
+  learning: luna_learning
+  deep_work: luna_focus
+```
+
+```yaml
+# config/personas/scribe.yaml
+name: scribe
+model_id: claude-sonnet  # API for now
+model_fallback: groq-llama
+adapter_name: null       # No LoRA yet - future: scribe_lora
+system_prompt_path: prompts/scribe_extraction.txt
+output_format: json
+tools:
+  - memory_write
+memory_scope:
+  - all  # Scribe sees everything to extract
+max_tokens: 1024
+temperature: 0.3  # Lower for structured output
+```
+
+```yaml
+# config/personas/librarian.yaml
+name: librarian
+model_id: local
+adapter_name: null  # Prompt-only for now
+system_prompt_path: prompts/librarian_retrieval.txt
+output_format: json
+tools:
+  - memory_search
+  - vector_search
+memory_scope:
+  - all
+max_tokens: 2048  # Needs room for context assembly
+temperature: 0.5
+```
+
+---
+
+**Integration with Engine**
+
+```python
+class LunaEngine:
+    """Main engine with unified persona routing."""
+    
+    def __init__(self, config: EngineConfig):
+        # Resource pools
+        self._model_pool = ModelPool(config.models)
+        self._lora_pool = MultiLoRAPool()
+        self._prompt_cache = PromptCache(config.prompts_dir)
+        
+        # Persona system
+        self._registry = PersonaRegistry(config.personas_dir)
+        self._router = PersonaRouter(
+            registry=self._registry,
+            model_pool=self._model_pool,
+            lora_pool=self._lora_pool,
+            prompt_cache=self._prompt_cache,
+        )
+        
+        # Context detection
+        self._context_detector = ContextDetector()
+        self._current_context: Optional[str] = None
+    
+    async def process_message(self, message: str) -> str:
+        """Process a message through the full pipeline."""
+        
+        # 1. Detect context
+        detected = await self._context_detector.detect(message)
+        if detected.confidence > 0.7:
+            self._current_context = detected.state
+        
+        # 2. Resolve Luna persona for current context
+        luna = await self._router.resolve("luna", context=self._current_context)
+        
+        # 3. Fetch relevant memories (via Librarian)
+        librarian = await self._router.resolve("librarian")
+        context = await librarian.generate(f"Find context for: {message}")
+        
+        # 4. Generate response
+        response = await luna.generate(f"Context:\n{context}\n\nUser: {message}")
+        
+        # 5. Extract memories (via Scribe)
+        scribe = await self._router.resolve("scribe")
+        extraction = await scribe.generate(f"Extract from:\n{message}\n{response}")
+        
+        # 6. Store extracted memories
+        await self._store_extraction(extraction)
+        
+        return response
+```
+
+---
+
+**What This Gives You**
+
+1. **Unified abstraction**: Model, LoRA, prompt, tools all bundled per persona
+2. **Easy upgrades**: Swap Scribe from Claude API to local+LoRA by changing one config field
+3. **Context awareness**: Luna variants auto-resolve based on detected context
+4. **Fallback chains**: Primary model fails → fallback model kicks in
+5. **Clean separation**: Registry holds config, Router assembles resources, Pools manage instances
+
+**For now**: Implement the registry and router with Luna only. Ben and Dude use prompt-only configs.
+
+**Later**: Train LoRAs, update config files, same architecture handles it.
+
+Want me to spec this out as a full implementation document like the MultiLoRAPool spec? 🤙
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-02T00:12:36.472881Z
+yes please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-02T00:17:25.363203Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-02T00:18:35.621194Z
+Continue
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-02T00:21:12.655196Z
+
+
+<function_results>
+File created successfully: /home/claude/persona_router_registry_spec.md
+</parameter>
+
+Looks like I got cut off near the end - let me complete the file:
+```
+This block is not supported on your current device yet.
+```
+
+Looks like the file creation was incomplete. Let me recreate and present it:
+```
+This block is not supported on your current device yet.
+```
+
+The persona spec didn't save. Let me create it fresh:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Done. You now have two complementary specs:
+
+## **1. Multi-LoRA Pool Spec** (~1,500 lines)
+The **infrastructure layer** - how to share one base model and hot-swap adapters in ~10-50ms
+
+## **2. Persona Router & Registry Spec** (~800 lines)  
+The **configuration layer** - how to bundle model + adapter + prompt + personality into unified "persona" definitions
+
+---
+
+### The Stack
+
+```
+┌─────────────────────────────────────────────────────┐
+│              Context State Machine                   │
+│    (from your existing STUDY document)              │
+│    Detects: professional / personal / creative /    │
+│             learning / deep_work                     │
+└─────────────────────────────────────────────────────┘
+                        │
+                        │ context name
+                        ▼
+┌─────────────────────────────────────────────────────┐
+│           Persona Router + Registry                  │
+│    (NEW - persona_router_registry_spec.md)          │
+│                                                     │
+│    Registry: luna.yaml → PersonaConfig              │
+│    Router: resolve("luna", "professional")          │
+│            → assembles model + adapter + prompt     │
+└─────────────────────────────────────────────────────┘
+                        │
+                        │ adapter name
+                        ▼
+┌─────────────────────────────────────────────────────┐
+│              Multi-LoRA Pool                         │
+│    (NEW - multi_lora_pool_spec.md)                  │
+│                                                     │
+│    Base Model: 3GB VRAM (loaded once)              │
+│    Adapters: ~100MB each (cached in RAM)           │
+│    Swap: ~10-50ms between adapters                 │
+└─────────────────────────────────────────────────────┘
+```
+
+### What This Gives You for Ben & Dude
+
+**Now** (prompt-only):
+```yaml
+# scribe.yaml
+model_id: claude-sonnet
+adapter_name: null  # No LoRA
+system_prompt_path: prompts/scribe/extraction.txt
+```
+
+**Later** (with trained LoRA):
+```yaml
+# scribe.yaml  
+model_id: local
+adapter_name: scribe_lora  # Just add this line
+adapter_path: models/scribe_lora_mlx
+system_prompt_path: prompts/scribe/extraction.txt
+```
+
+Same code, same router, same infrastructure. Just a config change. 🤙
+
+--------------------------------------------------------------------------------

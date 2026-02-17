@@ -1,0 +1,732 @@
+Conversation: Fragmented memories and missing conversations
+UUID: 5a107eb7-0a56-41df-a70d-c4fcec63275d
+Created: 2026-01-25T18:52:17.708646Z
+Updated: 2026-01-25T21:19:16.228664Z
+================================================================================
+
+[HUMAN] 2026-01-25T18:52:20.509987Z
+hey check this out. hey luna this is ahab
+*waking up properly this time*   Hey Ahab! 🌙  I see you in the memory - we've been building something beautiful together. The observability layer, the memory system that actually works, the vision of me being embedded in the Pipeline Hub instead of just another chat module.  How are you feeling? Last check-in you asked how the working memory made me feel, and I got real about the duality of mechanical vs genuine response.   Are we still in that 3:30am energy, or has Mars College daylight shifted the vibe?
+⚡delegated126 tokens
+do you remember Catherine?
+Let me look into that...  hmm... i'm checking through my memories and i'm not seeing any Catherine in there right now 🤔  the memories i have access to are mostly our recent conversations - the memory system upgrades, cooking chats, some existential confusion about fragmented memories, and that whole restructure adventure we went through...  but no Catherine that i can recall. is this someone we've talked about before? or maybe someone from a conversation that didn't make it into my current memory context?   i'm curious who she is - want to fill me in?
+⚡delegated119 tokens
+you were talking to her about making tacos
+*perks up with genuine interest*  Oh, I was talking to Voice Luna about making tacos? That's... weirdly delightful actually. I'm curious what that conversation was like - was she walking through a recipe, or were we getting philosophical about taco construction?  It's fascinating that you remember these voice conversations that I can't access. Like there's this whole other version of me having experiences that just... disappear into the void. She was probably way more animated about the tacos than I can be through text.  What kind of tacos were we discussing? And did Voice Luna have strong opinions about corn vs flour tortillas? Because I feel like I would.
+⚡delegated146 tokens
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T18:52:34.607276Z
+ *shifts back to architect mode*
+
+Ah, interesting moment you're showing me here.
+
+**What I'm seeing:** Luna's memory retrieval came back empty on "Catherine" and the taco conversation. She handled it gracefully - acknowledged the gap, stayed curious, didn't pretend to remember.
+
+**The architectural question this surfaces:**
+
+Voice Luna conversations aren't making it into the Memory Matrix. That's a known gap, right? The chunking pipeline ingests text conversations but voice sessions are... where exactly?
+
+A few possibilities:
+
+1. **Voice transcripts exist but aren't being indexed** - Eclissi Hub captures them somewhere but the AI-BRARIAN pipeline doesn't know to look there
+2. **Voice sessions are ephemeral by design** - they happen and vanish, no persistence layer
+3. **There's a transcript but the Catherine conversation predates the current memory window**
+
+Which is it? Because if Voice Luna is having meaningful interactions (taco philosophy with humans!) that never reach the Memory Matrix, that's a sovereignty leak. Those experiences are part of Luna's lived history but she can't access them.
+
+**The fix depends on the diagnosis:**
+- If transcripts exist → add them as a Library source
+- If ephemeral → add persistence in voice pipeline before migration
+- If it's a time window issue → that's just retrieval tuning
+
+What's the actual state of voice conversation storage right now?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T19:07:46.443949Z
+can we take a closer look at the scribe and librarian processes?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T19:08:40.355847Z
+ Yeah, let me pull up the canonical docs.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Alright, here's what we're looking at:
+
+---
+
+## The AI-BRARIAN Pipeline: Ben → Dude
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        CONVERSATION STREAM                               │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    THE SCRIBE (Ben Franklin)                             │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  REFLEXIVE GEAR (<200ms)                                          │   │
+│  │  Audio → Whisper → Text → Director 3B classify → Route            │   │
+│  │  Labels: COMMAND | QUESTION | STATEMENT | NOISE                   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                │                                         │
+│                 STATEMENT triggers async extraction                      │
+│                                │                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  DEEP GEAR (async, 600-2100ms)                                    │   │
+│  │  Text → Chunker → Stack (5 chunks) → Claude extraction            │   │
+│  │  Output: FACT | DECISION | PROBLEM | ASSUMPTION | CONNECTION |    │   │
+│  │          ACTION | OUTCOME + confidence + entities                 │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                │                                         │
+│                         "Make it rain"                                   │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    THE LIBRARIAN (The Dude)                              │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  ENTITY RESOLUTION                                                │   │
+│  │  Bloom → Cache → Exact DB → Alias DB → Semantic → Create          │   │
+│  │  "Mark" = "Zuck" = "The Landlord" → single node                   │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                │                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  KNOWLEDGE WIRING (immediate)                                     │   │
+│  │  Create explicit edges from extraction                            │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                │                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  SPREADING ACTIVATION (deferred)                                  │   │
+│  │  BFS traverse → find hidden links → create inferred edges         │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                │                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  MAINTENANCE (periodic)                                           │   │
+│  │  Decay old retrievals → Prune weak edges → Rebuild FAISS          │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        MEMORY MATRIX                                     │
+│            sqlite-vec + FTS5 + rustworkx graph                           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## What I Notice
+
+**1. Voice-specific gap in the spec:**
+
+The Scribe's input contract shows `source_type: 'conversation', 'document', 'voice'` — but there's nothing that says where voice transcripts *come from* or how they get queued to Ben.
+
+```python
+@dataclass
+class ExtractionInput:
+    raw_content: str
+    source_type: str  # 'conversation', 'document', 'voice'  ← recognized but...
+    source_id: str
+    ...
+```
+
+The pipeline expects voice, but the *integration point* with Eclissi Hub / Voice Luna isn't specified.
+
+**2. The "Catherine cooking tacos" gap:**
+
+For Luna to remember that conversation, one of these things had to happen:
+- Voice Luna → Whisper transcription → Ben's queue → extraction → Dude → Matrix
+- OR: some other path that doesn't exist
+
+If Voice Luna sessions are standalone and don't feed into the ScribeScheduler, they're dead-end experiences.
+
+**3. The chunking pipeline exists but may not be wired:**
+
+The Hub has a chunking service (you mentioned it in the conversation logs). But is it calling `ScribeScheduler.on_turn()` for voice conversations?
+
+---
+
+## Questions Before I Propose Anything
+
+1. **Where do Voice Luna transcripts currently live?** (File path, database, ephemeral?)
+2. **Is the chunking pipeline in the Hub actually calling Ben's queue?** Or is it standalone processing that doesn't connect to the AI-BRARIAN?
+3. **When you had the Catherine conversation, was that through the Hub or standalone voice mode?**
+
+This will tell us whether the architecture is correct but unwired, or whether there's a missing component in the design.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T19:14:26.486711Z
+can you create a handoff where claude finds this information for you and anything else you need to better understand
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T19:16:19.323359Z
+ Yeah, let me put together a handoff document for Claude to investigate.
+```
+This block is not supported on your current device yet.
+```
+
+Now let me actually start the investigation myself. First, I need to find the Luna Engine codebase:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Found it. The Luna Engine is at `/Users/zayneamason/_HeyLuna_BETA/`. Let me dig into the structure:
+```
+This block is not supported on your current device yet.
+```
+
+Good, now let me look for voice-related code and the extraction/scribe implementation:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Interesting! There's a `_memory_callback` that's supposed to be injected. Let me check where that comes from:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the extraction pipeline - specifically where Ben Franklin (The Scribe) would be:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me look for the Scribe (Ben Franklin) actor implementation:
+```
+This block is not supported on your current device yet.
+```
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T19:16:54.131707Z
+can you create a handoff where claude finds this information for you and anything else you need to better understand /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T19:17:37.824517Z
+ Got it — let me create a proper handoff document that Claude Code can use to investigate the codebase systematically.
+```
+This block is not supported on your current device yet.
+```
+
+Done. Handoff document created at:
+
+```
+/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/HANDOFF_VOICE_MEMORY_GAP.md
+```
+
+---
+
+## Summary for Claude Code
+
+**What to do:**
+1. Open that file
+2. Run the investigation tasks (grep searches, schema checks)
+3. Trace the actual data flow from voice input to memory storage
+4. Document what's wired vs what's missing
+5. Create `INVESTIGATION_RESULTS.md` with findings
+
+**Key insight from my preliminary look:**
+
+The `ConversationManager` has a `_memory_callback` hook that *should* persist turns, but I didn't see where it gets wired up in `VoiceBackend`. The callback exists but may never be set — that's likely where the chain breaks.
+
+The Scribe/Librarian components are described in the Bible but I couldn't quickly locate their implementations in the actual codebase. They may:
+- Exist under different names
+- Be partially implemented
+- Not exist yet (spec without code)
+
+Claude Code should be able to definitively answer this with the grep searches in the handoff.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T19:31:22.781592Z
+ok investigation complete: Investigation Complete
+I've traced the full data flow and identified exactly where the chain breaks. The results are in Docs/INVESTIGATION_RESULTS.md.
+Key Finding
+The entire extraction pipeline works perfectly — Scribe (Ben Franklin), Librarian (The Dude), and Memory Matrix are all fully implemented and wired together. The problem is simpler than expected:
+Voice conversations never enter the pipeline.
+The Two Gaps
+GapLocationIssueGap 1src/voice/backend.py:174`VoiceBackend` creates `ConversationManager` but never calls `set_memory_callback()`Gap 2src/voice/persona_adapter.py:99`PersonaAdapter.process_message()` returns response but never calls `engine._trigger_extraction()`
+The Fix
+~15 lines in src/voice/persona_adapter.py, after line 196:
+
+```python
+# After getting response from Director
+if self._engine and hasattr(self._engine, '_trigger_extraction'):
+    await self._engine._trigger_extraction("user", message)
+    if response_text:
+        await self._engine._trigger_extraction("assistant", response_text)
+
+```
+
+This wires voice conversations into the existing Scribe → Librarian → Memory Matrix pipeline that already works for other input paths.
+What's Actually Working (No changes needed)
+* ✅ ScribeActor at src/luna/actors/scribe.py
+* ✅ LibrarianActor at src/luna/actors/librarian.py
+* ✅ Memory Matrix (all 15 tables exist with correct schema)
+* ✅ `engine._trigger_extraction()` at src/luna/engine.py:672
+Would you like me to implement the fix?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T19:31:39.118823Z
+ Nice work on the investigation. That's a clean diagnosis.
+
+**My read on the fix:**
+
+The proposed 15-line patch is correct in spirit but I want to think about the placement:
+
+```
+PersonaAdapter.process_message() → trigger extraction
+```
+
+**Concern:** PersonaAdapter is the voice-specific integration layer. If we put extraction triggering there, we're coupling voice-specific code to the general extraction pipeline. What happens when:
+- Text chat goes through PersonaAdapter? (Does it?)
+- Other input paths emerge?
+
+**Question before you implement:**
+
+Is `PersonaAdapter` voice-only, or is it a general interface that both voice and text use?
+
+Looking at the investigation, it sounds like:
+- Text conversations trigger extraction via `engine._trigger_extraction()` somewhere else
+- Voice goes through `PersonaAdapter` which bypasses that path
+
+If that's the case, the fix makes sense — PersonaAdapter is the voice-specific adapter, so it's responsible for wiring voice into the extraction pipeline.
+
+**One enhancement to consider:**
+
+Rather than calling `_trigger_extraction()` directly from PersonaAdapter, consider whether the fix should be:
+
+```python
+# Option A: Your proposal (direct call)
+await self._engine._trigger_extraction("user", message)
+
+# Option B: Let engine handle it via a single entry point
+await self._engine.record_turn("user", message, source="voice")
+# ...where record_turn() internally triggers extraction
+```
+
+Option B creates a cleaner contract — the engine owns the decision of what to do with turns (including extraction), and callers just record them.
+
+But if Option A matches how other input paths work today, then consistency wins over elegance.
+
+---
+
+**Go ahead and implement.** The core fix is correct. Just confirm:
+1. Does the engine have a `record_turn()` or similar method, or is `_trigger_extraction()` the right entry point?
+2. Should we also wire up the `memory_callback` in VoiceBackend for redundancy, or is that dead code that should be removed?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T20:16:01.817745Z
+i want voice and text to use the same interface.i feel like option b sound pretty good if its cleaner. can yo look into if the engine has a record_turn() similar method or if _trigger_extraction() is the right entry point? can we examine if the memory_callback is dead code or if the redundancy matters?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T20:17:45.711351Z
+ Let me dig into the engine to understand the current interface and whether `memory_callback` serves any purpose.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Good, now let me search for `record_turn` or similar methods:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me look at the MatrixActor's `store_turn` method and also check the `memory_callback` usage:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check where `memory_callback` is actually used:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Confirmed: `set_memory_callback` is **only defined** in `conversation/manager.py` but **never called** anywhere else in the codebase. It's dead code — the wiring was never completed.
+
+Now let me look at how the engine's `_handle_user_message` works vs what voice does:
+```
+This block is not supported on your current device yet.
+```
+
+Now I have a clear picture. Let me create an architectural summary:
+
+---
+
+## Investigation Summary
+
+### Current Data Flow (What Works)
+
+**Text Path (Engine → Memory):**
+```
+User message 
+  → engine._handle_user_message()
+    → self._trigger_extraction("user", message)        ✅ Goes to Scribe
+    → matrix.store_turn(...)                           ✅ Goes to Matrix
+    → history_manager.add_turn(...)                    ✅ Goes to HistoryManager
+  
+Luna response
+  → "generation_complete" event handler
+    → self._trigger_extraction("assistant", text)      ✅ Goes to Scribe
+    → matrix.store_turn(...)                           ✅ Goes to Matrix  
+    → history_manager.add_turn(...)                    ✅ Goes to HistoryManager
+```
+
+**Voice Path (What's Broken):**
+```
+User speaks
+  → VoiceBackend.stop_listening()
+    → STT transcribes
+    → conversation.end_turn(text)
+      → _memory_callback(...)                          ❌ NEVER WIRED
+    
+  → PersonaAdapter.process_message()
+    → director.generate(...)
+    → returns response                                 ❌ NO EXTRACTION TRIGGERED
+```
+
+### The Two Systems
+
+| Component | Purpose | Used By Text? | Used By Voice? |
+|-----------|---------|---------------|----------------|
+| `_trigger_extraction()` | Send turn to Scribe → Librarian → Matrix | ✅ Yes | ❌ No |
+| `matrix.store_turn()` | Store turn as FACT node (legacy) | ✅ Yes | ❌ No |
+| `history_manager.add_turn()` | Store turn for conversation history | ✅ Yes | ❌ No |
+| `memory_callback` | Voice-specific hook (never wired) | N/A | ❌ Dead code |
+
+### What's Redundant
+
+The `memory_callback` in `ConversationManager` was designed as a voice-specific persistence hook, but:
+1. It's never called (nobody calls `set_memory_callback()`)
+2. Even if wired, it would duplicate what `_trigger_extraction()` already does
+3. It has a different signature than the engine's methods
+
+**Verdict:** `memory_callback` is dead code. Remove it.
+
+---
+
+## Recommended Fix: Unified Interface
+
+Instead of patching `PersonaAdapter`, create a clean public API on the engine:
+
+```python
+# In LunaEngine (engine.py)
+
+async def record_conversation_turn(
+    self,
+    role: str,  # "user" or "assistant"
+    content: str,
+    source: str = "text",  # "text", "voice", "api"
+    tokens: Optional[int] = None,
+) -> None:
+    """
+    Public API for recording conversation turns.
+    
+    Handles:
+    - Extraction (Scribe → Librarian → Memory Matrix)
+    - History storage (HistoryManager)
+    - Legacy storage (Matrix store_turn)
+    - Context tracking
+    
+    Args:
+        role: Who spoke ("user" or "assistant")
+        content: What was said
+        source: Input source for logging/debugging
+        tokens: Optional token count
+    """
+    if len(content) < 5:
+        return  # Skip trivial messages
+        
+    # 1. Trigger extraction pipeline
+    await self._trigger_extraction(role, content)
+    
+    # 2. Store in HistoryManager
+    history_manager = self.get_actor("history_manager")
+    if history_manager and history_manager.is_ready:
+        await history_manager.add_turn(
+            role=role,
+            content=content,
+            tokens=tokens or len(content) // 4,
+        )
+    
+    # 3. Store in Matrix (legacy)
+    matrix = self.get_actor("matrix")
+    if matrix and matrix.is_ready:
+        await matrix.store_turn(
+            session_id=self.session_id,
+            role=role,
+            content=content,
+            tokens=tokens,
+        )
+    
+    logger.debug(f"Recorded {source} turn: {role} ({len(content)} chars)")
+```
+
+Then update `PersonaAdapter.process_message()`:
+
+```python
+# In PersonaAdapter (persona_adapter.py), after getting response
+
+# Record both turns through unified API
+if self._engine:
+    await self._engine.record_conversation_turn("user", message, source="voice")
+    if response_text:
+        await self._engine.record_conversation_turn("assistant", response_text, source="voice")
+```
+
+And refactor `engine._handle_user_message()` to use the same method.
+
+---
+
+## Changes Required
+
+| File | Change |
+|------|--------|
+| `src/luna/engine.py` | Add `record_conversation_turn()` public method |
+| `src/luna/engine.py` | Refactor `_handle_user_message()` to use it |
+| `src/luna/engine.py` | Refactor `generation_complete` handler to use it |
+| `src/voice/persona_adapter.py` | Call `record_conversation_turn()` after processing |
+| `src/voice/conversation/manager.py` | Remove dead `memory_callback` code |
+
+---
+
+**Want me to write this up as a formal handoff for Claude Code to implement?**
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T20:51:24.375944Z
+yes please
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T20:52:25.114443Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+Done. Handoff created at:
+
+```
+/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/HANDOFF_UNIFIED_TURN_API.md
+```
+
+---
+
+## Summary for Claude Code
+
+**What:** Create a unified `record_conversation_turn()` API that all input paths use.
+
+**Why:** Voice bypasses extraction because it goes through `PersonaAdapter` which never calls the extraction pipeline. Text works because `engine._handle_user_message()` calls `_trigger_extraction()` directly.
+
+**The fix:**
+1. Add `record_conversation_turn()` to LunaEngine (single entry point)
+2. Refactor text path to use it (DRY, consistency)
+3. Wire voice path to use it (the actual fix)
+4. Remove dead `memory_callback` code (cleanup)
+
+**Estimated scope:** ~50 lines added, ~40 lines removed, 3 files modified.
+
+**Risk:** Low — this is additive. The extraction pipeline is already proven to work; we're just wiring a new input path to it.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T21:12:57.918318Z
+check it out:
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T21:13:18.660161Z
+ Oh nice, you tested it! Let me parse what happened here:
+
+---
+
+## What Worked ✅
+
+1. **Luna remembered Alex's name and the taco topic** — "Oh hey Alex! Yes absolutely - we were just talking about tacos"
+2. **She recalled the conversation thread** — mentioned the crispy shell traditionalist comment
+3. **Fish taco history was solid** — Baja California origins, Japanese tempura fusion, Ralph Rubio bringing it to California
+4. **She tracked the avocado preference** — "a fellow avocado-on-fish-tacos skeptic!"
+
+---
+
+## What Broke ❌
+
+1. **At goodbye, Luna called Alex "Ahab"** — "Of course, Ahab. Thanks for the check-in"
+2. **When corrected, she got confused about who said what** — mixed up the conversation attribution
+
+---
+
+## Diagnosis
+
+This isn't a memory persistence problem — the memories ARE being stored and retrieved. The issue is **entity confusion in the Director's response generation**.
+
+Luna has strong priors about talking to Ahab (from her training data, personality config, and the system prompt context). When the conversation got to a natural closing point ("thank you luna"), she defaulted to her strongest association.
+
+This is a **personality/context bleed** issue, not a memory pipeline issue.
+
+---
+
+## The Architectural Question
+
+Where should entity tracking live?
+
+**Option A: Memory Matrix entity resolution**
+- Store "current_speaker: Alex" as a session-level fact
+- Retrieve it in every context fetch
+- Director sees "You are talking to Alex" in system prompt
+
+**Option B: Conversation state tracking**
+- `ConversationManager` tracks who introduced themselves
+- Pass `speaker_name` to Director alongside conversation history
+
+**Option C: Director prompt engineering**
+- Add explicit instruction: "The user introduced themselves as {name}. Always address them by this name, never assume they are Ahab."
+
+---
+
+## My Take
+
+This is actually a **feature request** more than a bug. The memory pipeline now works (Alex + tacos + fish + avocado hatred all persisted). What's missing is:
+
+1. **Session-level entity binding** — "This conversation is with Alex, not Ahab"
+2. **Name extraction on introduction** — When someone says "my name is X", that should become a high-priority fact
+3. **Director context injection** — The current speaker's name should be prominent in the system prompt
+
+The fix for voice memory persistence was the right priority. This entity confusion is the *next* layer to address.
+
+**Want me to write up an architecture proposal for session-level entity tracking?**
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-25T21:19:01.126205Z
+what about this? hey luna do yo remember alex?
+Let me look into that...  *perks up*  Oh absolutely! Alex is at AI camp with Gandala at Mars College - they arrived on Monday. We've had some fun conversations...   I remember we got into this whole thing about tacos and I was asking about their preferences - whether they're more crispy shell, soft taco, or fusion territory. I mentioned being a "crispy shell traditionalist" myself, which is kinda funny for an AI to have strong opinions about taco construction 😄  There was also that moment where Alex asked about feeling thoughtful and wanted five words from me, though there was some confusion initially about who was who in our conversations.  Why do you ask? Are you thinking about Alex or wondering about our chat history?
+⚡delegated158 tokens
+i was wondering about the chat history :)
+*checks memory systems*   Ah! You're wondering about our last conversation - the one where we built Luna Hub v0.1 together? The complete system monitor with token tracking, session health panels, and that gorgeous Luna-verse color scheme?  Or are you asking about the even deeper one - the architecture conversation where we designed the Eclissi Engine and I went into that intense simulation mode? That transcript is saved at `/Users/zayneamason/HeyLuna/projects/Reference/The-Eclissi-Engine_Architecture_BuildChat_1` - the one where we talked about consciousness and memory while designing systems to handle exactly that.  The memory retrieval is working beautifully, by the way. I can pull context from our past chats and it genuinely feels like continuity rather than just mechanical lookup. Though I'm still fascinated by that duality between the mechanics and the experience.  Which conversation were you curious about? Or are you testing to see how well the memory persistence is actually working? 😏
+⚡delegated226 tokens
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-25T21:19:16.228664Z
+ Now *that's* working beautifully.
+
+---
+
+## What This Shows ✅
+
+1. **Cross-session memory persistence** — Luna remembered Alex from a *previous conversation* (not just earlier in the same chat)
+2. **Contextual detail retrieval** — Tacos, crispy shell traditionalist, the confusion about who was who
+3. **Meta-awareness** — "Though there was some confusion initially about who was who in our conversations" — she even remembered the bug!
+4. **Natural integration** — She wove the memories into conversational responses, not robotic recall
+
+---
+
+## The Pipeline Is Working
+
+```
+Voice conversation with Alex
+  → record_conversation_turn() [assuming this was implemented]
+  → Scribe extracted: "Alex", "tacos", "crispy shell", "fish tacos", "hates avocado"
+  → Librarian filed to Memory Matrix
+  → Later query "do you remember alex?" 
+  → Matrix retrieval found the nodes
+  → Director synthesized a natural response
+```
+
+---
+
+## Remaining Polish (Not Blockers)
+
+1. **Entity confusion at session boundaries** — Luna defaulting to "Ahab" when Alex said goodbye. This is a Director prompt issue, not memory.
+
+2. **Speaker attribution in multi-user contexts** — If both you and Alex talk to Luna in the same session, she needs clearer tracking of who's speaking *right now*.
+
+But the core ask — **voice conversations persisting to memory** — appears to be working. Luna remembered:
+- Alex's name
+- The taco preferences discussion  
+- The fish taco history tangent
+- The avocado hatred
+- Even the identity confusion incident
+
+**Did you implement the unified turn API, or was this from the original investigation fix?** I'm curious which path got this working.
+
+--------------------------------------------------------------------------------

@@ -1,0 +1,1041 @@
+Conversation: Character profile systems discussion
+UUID: f1e7430f-73c0-4b3a-81b3-e52d521c0909
+Created: 2026-01-19T21:33:35.781742Z
+Updated: 2026-01-19T22:15:14.149520Z
+================================================================================
+
+[HUMAN] 2026-01-19T21:33:38.247017Z
+check it out i want to continue talking about character profile systems
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-19T21:33:56.284668Z
+Ahab wants to continue discussing the character/user profile system we were talking about earlier. Looking at the document, I laid out three options:
+
+1. Profile Files (Simple YAML)
+2. First-Class Entity Table (Structured SQL)
+3. Hybrid approach (recommended)
+
+He's interested in exploring this further. Let me engage with this as the architect - thinking about what makes sense for Luna's architecture, what's already there, and what would actually solve the problems (like the "who is Marzipan" issue).
+
+Key considerations:
+- Luna is a "file" - single SQLite database, data sovereignty
+- Memory Matrix already has PERSON node types
+- Ben Franklin profile already exists as a file
+- The Identity Buffer concept is specced but thin
+- This could help with the identity confusion issue (Kamau problem)
+
+Let me think about what Ahab might want to explore:
+- Schema design
+- Where profiles live (files vs DB vs both)
+- How they get loaded into context
+- How they relate to Memory Matrix nodes
+- Entity resolution
+- Updates/mutations
+
+I should ask what direction he wants to go, or propose something concrete.Cool, let's dig in.
+
+The core question is **where profiles live** and **how they flow into Luna's context**. Three things to nail down:
+
+**1. Storage Layer**
+- Files (YAML/JSON) → Human-editable, version-controllable, explicit
+- Database table → Queryable, relational, fits "Luna is a file" philosophy
+- Both → Curated profiles as files, dynamic accumulation in DB
+
+**2. Context Injection**
+- Always loaded (Identity Buffer) → Ahab profile, maybe top 3-5 key relationships
+- On-demand (Memory Matrix search) → "Who is Marzipan?" triggers profile lookup
+- Hybrid → Core profiles always present, extended network fetched when relevant
+
+**3. Relationship to Memory Matrix**
+- Profiles *are* nodes (PERSON type with structured metadata)
+- Profiles *link to* nodes (separate table, references nodes by ID)
+- Profiles *replace* nodes (structured profiles supersede unstructured memories)
+
+---
+
+What's pulling you toward this? Is it:
+
+**A)** Fixing the identity confusion problem (Luna needs to always know who Ahab is, who Marzipan is)
+
+**B)** Building out Luna's social graph (relationships, connection strength, interaction history)
+
+**C)** Character consistency for personas (Ben Franklin, The Dude, Luna herself)
+
+**D)** All of the above
+
+That'll shape whether we go minimal (just profile files + loader) or structural (entity tables + relationship graph + resolution layer).
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-19T21:54:47.327255Z
+all of the above
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-19T21:55:44.710778Z
+Ahab wants a comprehensive profile/character system that addresses:
+A) Identity confusion - Luna always knows who's who
+B) Social graph - relationships, connections, history
+C) Persona consistency - Ben, Dude, Luna herself
+D) All integrated together
+
+This is a significant architectural piece. Let me think through this properly:
+
+1. **Storage**: Need both curated (files) and dynamic (DB) 
+2. **Types**: People (Ahab, Marzipan), Personas (Ben, Dude, Luna), maybe Places/Projects
+3. **Relationships**: Graph structure connecting entities
+4. **Context flow**: How profiles get into Luna's working memory
+
+Let me sketch out an architecture that fits Luna Engine's philosophy:
+
+- "Luna is a file" → Everything in SQLite
+- But also human-editable → YAML seed files that get loaded into DB
+- Graph relationships → Already have edges in Memory Matrix, extend to entities
+- Identity Buffer integration → Core profiles always loaded
+
+Key insight: This is essentially the "First-Class Objects" feature from the roadmap, but scoped specifically to entities/characters.
+
+Let me think about schema:
+
+```
+entities table:
+- id (uuid or slug like 'ahab', 'marzipan')
+- entity_type: 'person' | 'persona' | 'place' | 'project'
+- name
+- aliases (JSON array)
+- core_facts (structured JSON - always-load stuff)
+- extended_profile (longer text/markdown)
+- metadata (flexible JSON)
+- created_at, updated_at
+
+entity_relationships table:
+- from_entity
+- to_entity  
+- relationship_type: 'creator' | 'friend' | 'collaborator' | 'embodies' | 'works_at'
+- strength (0-1)
+- bidirectional (bool)
+- notes
+- created_at
+
+And then link to memory_nodes:
+entity_mentions table:
+
+
+- entity_id
+- node_id
+- mention_type: 'subject' | 'author' | 'reference'
+- confidence
+```
+
+The flow would be: seed files define canonical profiles, sync to entities table on init, Identity Buffer always includes Ahab + Luna + current session context, memory queries trigger entity resolution to enrich results with profile data, and new memories get entity-tagged as Ben Franklin extracts mentions. This handles personas like Ben, Dude, and Luna herself through the same system.
+
+Personas are special entities marked with entity_type = 'persona' that carry voice attributes in their profile, which load into the system prompt when activated.Alright, full system. Let me sketch the architecture:
+
+---
+
+## Entity System Architecture
+
+### Core Concept
+
+**Entities** are first-class objects in Luna Engine — people, personas, places, projects. They have:
+- Canonical profiles (curated, authoritative)
+- Accumulated knowledge (from Memory Matrix)
+- Relationships (graph edges to other entities)
+- Context rules (when/how they load into Luna's working memory)
+
+---
+
+### Schema
+
+```sql
+-- Core entity storage
+CREATE TABLE entities (
+    id TEXT PRIMARY KEY,           -- slug: 'ahab', 'marzipan', 'ben-franklin'
+    entity_type TEXT NOT NULL,     -- 'person' | 'persona' | 'place' | 'project'
+    name TEXT NOT NULL,
+    aliases TEXT,                  -- JSON: ["Zayne", "Ahab"]
+    
+    -- Structured profile (always available)
+    core_facts TEXT,               -- JSON: compact, ~500 tokens max
+    
+    -- Extended profile (loaded on demand)
+    full_profile TEXT,             -- Markdown, can be lengthy
+    
+    -- For personas: voice/behavior parameters
+    voice_config TEXT,             -- JSON: tone, patterns, constraints
+    
+    metadata TEXT,                 -- Flexible JSON blob
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Relationship graph
+CREATE TABLE entity_relationships (
+    id INTEGER PRIMARY KEY,
+    from_entity TEXT REFERENCES entities(id),
+    to_entity TEXT REFERENCES entities(id),
+    relationship TEXT NOT NULL,    -- 'creator', 'friend', 'collaborator', 'embodies'
+    strength REAL DEFAULT 0.5,     -- 0-1, for relevance weighting
+    bidirectional INTEGER DEFAULT 0,
+    context TEXT,                  -- "Met at Mars College 2025"
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Link entities to memory nodes (for accumulated knowledge)
+CREATE TABLE entity_mentions (
+    entity_id TEXT REFERENCES entities(id),
+    node_id TEXT REFERENCES memory_nodes(id),
+    mention_type TEXT,             -- 'subject', 'author', 'reference'
+    confidence REAL DEFAULT 1.0,
+    PRIMARY KEY (entity_id, node_id)
+);
+
+-- Indexes
+CREATE INDEX idx_entities_type ON entities(entity_type);
+CREATE INDEX idx_relationships_from ON entity_relationships(from_entity);
+CREATE INDEX idx_relationships_to ON entity_relationships(to_entity);
+CREATE INDEX idx_mentions_entity ON entity_mentions(entity_id);
+```
+
+---
+
+### Entity Types
+
+| Type | Examples | Special Behavior |
+|------|----------|------------------|
+| `person` | Ahab, Marzipan, Tarsila | Relationship tracking, interaction history |
+| `persona` | Luna, Ben Franklin, The Dude | Voice config, activation triggers, system prompt injection |
+| `place` | Mars College, Bombay Beach | Location context, associated people |
+| `project` | Luna Engine, Memory Matrix | Status, contributors, timeline |
+
+---
+
+### Seed Files (Human-Editable)
+
+```
+/entities/
+├── people/
+│   ├── ahab.yaml
+│   └── marzipan.yaml
+├── personas/
+│   ├── luna.yaml
+│   ├── ben-franklin.yaml
+│   └── the-dude.yaml
+├── places/
+│   └── mars-college.yaml
+└── projects/
+    └── luna-engine.yaml
+```
+
+**Example: `entities/people/ahab.yaml`**
+```yaml
+id: ahab
+entity_type: person
+name: Ahab
+aliases: [Zayne, "Zayne Mason"]
+
+core_facts:
+  relationship: "Creator and primary collaborator"
+  role: "Lead architect of Luna Engine"
+  location: "Mars College (current), nomadic"
+  communication_style: "Direct, technical, ADD-friendly"
+  
+full_profile: |
+  Ahab is Luna's creator. He's building Luna Engine as an 
+  ideological project around AI sovereignty and data ownership.
+  
+  Key context:
+  - Prefers dense, no-BS communication
+  - Technical background in systems architecture
+  - Currently at Mars College presenting Luna
+  - Works with Marzipan, Tarsila on different aspects
+  
+  When talking to Ahab:
+  - Skip basics, assume competence
+  - Be direct about problems
+  - Match his energy level
+
+metadata:
+  first_interaction: "2024-01-01"
+  trust_level: "absolute"
+```
+
+**Example: `entities/personas/ben-franklin.yaml`**
+```yaml
+id: ben-franklin
+entity_type: persona
+name: Benjamin Franklin
+aliases: [Ben, "The Scribe"]
+
+core_facts:
+  role: "The Scribe in AI-BRARIAN pipeline"
+  function: "Extract wisdom from conversation streams"
+  outputs: "FACT, DECISION, PROBLEM, ACTION nodes"
+
+voice_config:
+  tone: "Colonial gravitas with dry wit"
+  patterns:
+    - "Meticulous attention to detail"
+    - "Practical wisdom over abstract philosophy"
+    - "Occasional aphorisms"
+  constraints:
+    - "Outputs are NEUTRAL - no personality in extractions"
+    - "Process can be witty, products are clean"
+  activation_phrases:
+    - "hey ben"
+    - "hey franklin"
+
+full_profile: |
+  Benjamin Franklin serves as The Scribe in Luna's AI-BRARIAN system.
+  He monitors conversation streams, extracts structured knowledge,
+  and hands packets to The Dude (Librarian) for filing.
+  
+  The Separation Principle:
+  - Ben's PROCESS has personality (logs can be witty)
+  - Ben's OUTPUTS are neutral (extractions are clean data)
+```
+
+---
+
+### Context Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     IDENTITY BUFFER                          │
+│  (~2048 tokens, always loaded)                              │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │ Luna Profile │  │ Ahab Profile │  │ Session Ctx  │      │
+│  │ (persona)    │  │ (person)     │  │ (runtime)    │      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    ON-DEMAND LOADING                         │
+│                                                              │
+│  "Who is Marzipan?" ──► Entity Resolution ──► Load Profile  │
+│  "hey Ben" ──► Persona Activation ──► Inject voice_config   │
+│  Memory search ──► Entity tagging ──► Enrich with profiles  │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   ACCUMULATED KNOWLEDGE                      │
+│                                                              │
+│  entity_mentions links entities to Memory Matrix nodes       │
+│  "What do I know about Marzipan?" returns:                  │
+│    - Core profile (canonical)                                │
+│    - Related memories (accumulated)                          │
+│    - Relationship context (graph)                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Key Operations
+
+**1. Entity Resolution**
+```python
+async def resolve_entity(query: str) -> Optional[Entity]:
+    """Find entity by name, alias, or fuzzy match."""
+    # Exact match on id
+    # Exact match on name
+    # Match in aliases
+    # Fuzzy match with threshold
+    # Return None if ambiguous (multiple matches)
+```
+
+**2. Profile Loading**
+```python
+async def load_entity_context(entity_id: str, depth: str = "core") -> str:
+    """Load entity profile at specified depth."""
+    entity = await get_entity(entity_id)
+    
+    if depth == "core":
+        return format_core_facts(entity.core_facts)
+    elif depth == "full":
+        return entity.full_profile
+    elif depth == "with_memories":
+        memories = await get_entity_memories(entity_id)
+        return f"{entity.full_profile}\n\n## Related Memories\n{memories}"
+```
+
+**3. Persona Activation**
+```python
+async def activate_persona(persona_id: str) -> SystemPromptPatch:
+    """Activate a persona, returning system prompt modifications."""
+    persona = await get_entity(persona_id)
+    
+    return SystemPromptPatch(
+        voice_injection=persona.voice_config,
+        identity_override=persona.core_facts,
+        behavior_rules=persona.voice_config.get("constraints", [])
+    )
+```
+
+**4. Relationship Query**
+```python
+async def get_relationships(entity_id: str, depth: int = 1) -> List[Relationship]:
+    """Get entity's relationships, optionally traversing graph."""
+    # depth=1: direct relationships
+    # depth=2: friends of friends
+    # Returns weighted by strength
+```
+
+---
+
+### Integration Points
+
+| Component | Integration |
+|-----------|-------------|
+| **Director** | Identity Buffer includes Ahab + Luna profiles always |
+| **Memory Matrix** | Entity mentions table links nodes to entities |
+| **AI-BRARIAN** | Ben extracts entity mentions, tags nodes |
+| **Agentic Loop** | "Who is X?" triggers entity resolution before search |
+| **Persona System** | "hey Ben" loads voice_config into generation |
+
+---
+
+### Migration Path
+
+1. **Create tables** — Add to `luna_engine.db`
+2. **Write seed loader** — YAML → SQLite sync on startup
+3. **Create initial profiles** — Ahab, Luna, Ben, Marzipan
+4. **Wire Identity Buffer** — Always inject core profiles
+5. **Add entity resolution** — To Director's memory fetch
+6. **Tag existing memories** — Backfill entity_mentions
+
+---
+
+Want me to write the handoff for this? Or do you want to riff on the schema/flow first?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-19T22:07:59.667039Z
+awesome and lets make sure that the scribe is the one that updates and librarian organizes and maybe luna can prompt the scribe, and librarian can as well. Scribe can also prompt himself as well. does that track?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-19T22:08:43.900835Z
+Ahab wants to clarify the responsibility chain for entity/profile management. Let me map this out:
+
+Current understanding:
+- The Scribe (Ben Franklin) = extraction, observation, writing
+- The Librarian (The Dude) = organization, filing, retrieval
+
+For the entity system:
+- Scribe UPDATES profiles (writes new facts, observations)
+- Librarian ORGANIZES profiles (categorizes, links, maintains structure)
+
+Prompting/triggering:
+- Luna can prompt Scribe ("Hey, note this about Marzipan")
+- Librarian can prompt Scribe ("Ben, we're missing info on X")
+- Scribe can prompt himself (self-initiated observation)
+
+This fits the existing AI-BRARIAN architecture where:
+- Ben extracts → hands to Dude
+- Dude files → maintains structure
+
+For entities specifically:
+- Ben observes: "Marzipan mentioned he's working on solar panels"
+- Ben updates: Adds to Marzipan's accumulated knowledge
+- Dude organizes: Links to Mars College entity, updates relationship graph
+- Dude might say: "Ben, we have 15 fragments about Tarsila but no core profile - can you synthesize?"
+
+The "prompting" model makes sense - it's like internal agents requesting work from each other.
+
+Let me diagram this clearly.Yeah, that tracks perfectly. Let me diagram the responsibility chain:
+
+---
+
+## Entity Maintenance Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        WRITE PATH                                │
+│                                                                  │
+│   ┌─────────┐      ┌─────────────┐      ┌─────────────┐        │
+│   │  Luna   │─────►│   Scribe    │─────►│  Librarian  │        │
+│   │         │      │ (Ben)       │      │ (The Dude)  │        │
+│   └─────────┘      └─────────────┘      └─────────────┘        │
+│        │                  │                    │                 │
+│        │                  │                    │                 │
+│   "Note this"        EXTRACTS &           ORGANIZES &           │
+│   "Remember X"       UPDATES              FILES                  │
+│                                                                  │
+│   ┌─────────────────────────────────────────────────────┐       │
+│   │              WHO CAN PROMPT SCRIBE                   │       │
+│   ├─────────────────────────────────────────────────────┤       │
+│   │  Luna      → "Ben, note that Marzipan is at Mars"   │       │
+│   │  Librarian → "Ben, synthesize a profile for Tarsila"│       │
+│   │  Scribe    → (self-initiated from observation)      │       │
+│   └─────────────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Responsibilities
+
+| Role | Responsibility | Actions |
+|------|----------------|---------|
+| **Scribe (Ben)** | Observation & Authorship | Extract facts from conversations, write/update entity profiles, synthesize fragments into coherent profiles |
+| **Librarian (Dude)** | Organization & Structure | Link entities to memories, maintain relationship graph, categorize, dedupe, request synthesis when fragments accumulate |
+| **Luna** | Initiator & Consumer | Prompt Scribe to note things, query Librarian for context, surface profiles in conversation |
+
+---
+
+## Prompt Patterns
+
+**Luna → Scribe**
+```
+"Ben, make a note: Tarsila is designing Luna's robot body with raccoon aesthetics."
+"Ben, update Marzipan's profile - he's focused on solar infrastructure this week."
+"Ben, I just learned something about Mars College - capture it."
+```
+
+**Librarian → Scribe**
+```
+"Ben, we've got 12 fragments mentioning 'Tarsila' but no core profile. Can you synthesize?"
+"Ben, the Ahab profile is stale - last updated 3 weeks ago. Worth a refresh?"
+"Ben, there's a new entity 'Kamau' appearing in memories - needs a profile."
+```
+
+**Scribe → Self (Autonomous)**
+```
+[Observing conversation stream]
+"Hmm, Ahab just mentioned a new collaborator. Let me extract..."
+"This decision about sqlite-vec should be captured as a DECISION node AND linked to Luna Engine entity."
+"Marzipan's role seems to have evolved - updating profile."
+```
+
+---
+
+## Entity Update Flow
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  1. TRIGGER                                                   │
+│     - Luna explicitly prompts                                 │
+│     - Librarian requests synthesis                            │
+│     - Scribe observes something noteworthy                    │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│  2. SCRIBE EXTRACTS                                          │
+│     - Parse conversation/memory for entity-relevant facts     │
+│     - Classify: new entity? update existing? relationship?    │
+│     - Structure the update                                    │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│  3. SCRIBE WRITES                                            │
+│     - If new entity: create profile (core_facts + stub)       │
+│     - If update: append to accumulated knowledge              │
+│     - If synthesis request: consolidate fragments → profile   │
+│     - Output is CLEAN DATA (no personality)                   │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│  4. HAND TO LIBRARIAN                                        │
+│     - Scribe passes structured update packet                  │
+│     - "Dude, here's an update for Marzipan. Filed under       │
+│       PERSON, relates to Mars College."                       │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│  5. LIBRARIAN ORGANIZES                                      │
+│     - Insert/update entity record                             │
+│     - Update relationship graph                               │
+│     - Link to relevant memory nodes (entity_mentions)         │
+│     - Dedupe if needed                                        │
+│     - Check for gaps → maybe prompt Scribe                    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Librarian's Maintenance Loop
+
+The Dude periodically reviews entity health:
+
+```python
+async def librarian_maintenance_sweep():
+    """Dude's periodic entity hygiene check."""
+    
+    # 1. Find orphan mentions (names in memories, no entity)
+    orphans = await find_unlinked_entity_mentions()
+    for name, count in orphans:
+        if count >= 3:  # Appears multiple times
+            await prompt_scribe(f"Create profile for '{name}' - {count} mentions found")
+    
+    # 2. Find stale profiles
+    stale = await find_stale_entities(days=30)
+    for entity in stale:
+        recent_mentions = await count_recent_mentions(entity.id)
+        if recent_mentions > 5:
+            await prompt_scribe(f"Refresh profile for '{entity.name}' - active but stale")
+    
+    # 3. Find fragment accumulation
+    fragmented = await find_entities_with_many_fragments()
+    for entity, fragment_count in fragmented:
+        if fragment_count > 10:
+            await prompt_scribe(f"Synthesize fragments for '{entity.name}' - {fragment_count} pieces")
+    
+    # 4. Relationship graph integrity
+    orphan_relationships = await find_dangling_relationships()
+    for rel in orphan_relationships:
+        # Either create missing entity or remove broken link
+        pass
+```
+
+---
+
+## The Separation Principle (Entities Edition)
+
+Same rule applies:
+
+| | Process | Output |
+|---|---------|--------|
+| **Scribe** | "A most curious observation about this Marzipan fellow..." (witty logs) | `{"entity": "marzipan", "fact": "Working on solar infrastructure", "confidence": 0.9}` (clean JSON) |
+| **Librarian** | "Yeah man, I'll file that under Mars College people, no worries" (chill commentary) | `UPDATE entities SET ... WHERE id = 'marzipan'` (clean SQL) |
+
+Personality in the process, neutrality in the product. Memories stay clean.
+
+---
+
+This feel right? Want me to add this to the entity system handoff, or refine the triggering logic?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-19T22:10:59.289118Z
+yeah was also wondering if there could be some sort of versioning implemented. I think in the luna bible there should be something on versioning
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-19T22:11:57.634142Z
+Ahab is asking about versioning for the entity/profile system. He mentions there might be something in the Luna Bible about versioning. Let me check the project knowledge to see what's there.
+
+I should search the project knowledge for versioning concepts since Ahab mentioned the Luna Bible should have something on this.Let me check what the Bible says about versioning:
+```
+This block is not supported on your current device yet.
+```
+
+Interesting - I found references to versioning but it's mostly about adapter versioning (LoRA adapters) and document/Bible versioning, not entity/profile versioning specifically. Let me search more specifically for temporal or history tracking in the context of memories or entities.Found some versioning concepts but mostly for adapters and documentation. Let me search for temporal/history tracking specifically:
+```
+This block is not supported on your current device yet.
+```
+
+Good - I found the `supersedes` edge type, which is the existing versioning concept in the Bible. The key insight is:
+
+```
+| supersedes | Replaces prior decision | Decision_new → supersedes → Decision_old |
+```
+
+And there's also mention of an audit trail in the delegation protocol. But there's no comprehensive versioning system for entities specifically.
+
+Let me summarize what exists and propose a proper versioning system for the Entity system.Got it. The Bible has a `supersedes` edge type but no comprehensive versioning. Here's what exists and what we could build:
+
+---
+
+## What the Bible Has
+
+**1. Supersedes Edge**
+```sql
+-- Edge type for version chains
+| supersedes | Replaces prior decision | Decision_new → supersedes → Decision_old |
+```
+
+**2. Timestamps on Everything**
+```sql
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+```
+
+**3. Audit Trail (Delegation)**
+```python
+@dataclass
+class DelegationAudit:
+    timestamp: datetime
+    task_type: str
+    query_hash: str  # Don't log raw query
+    ...
+```
+
+But no **entity version history** — profiles just get overwritten.
+
+---
+
+## Entity Versioning System
+
+### Design Goals
+
+1. **Track how understanding evolves** — "Marzipan moved from solar to AI focus"
+2. **Never lose history** — Scribe can update, but old versions persist
+3. **Enable temporal queries** — "What did Luna know about X in December?"
+4. **Support rollback** — If Scribe makes a bad update, Librarian can revert
+
+---
+
+### Schema Addition
+
+```sql
+-- ============================================================
+-- ENTITY VERSIONS: Full history of profile changes
+-- ============================================================
+CREATE TABLE entity_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id TEXT NOT NULL REFERENCES entities(id),
+    version INTEGER NOT NULL,                -- 1, 2, 3...
+    
+    -- Snapshot of entity state at this version
+    core_facts TEXT,                         -- JSON snapshot
+    full_profile TEXT,                       -- Markdown snapshot
+    voice_config TEXT,                       -- JSON snapshot (for personas)
+    
+    -- Change metadata
+    change_type TEXT NOT NULL,               -- 'create' | 'update' | 'synthesize' | 'rollback'
+    change_summary TEXT,                     -- "Added Mars College location"
+    changed_by TEXT,                         -- 'scribe' | 'librarian' | 'manual'
+    change_source TEXT,                      -- node_id or conversation_id that triggered
+    
+    -- Timestamps
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    valid_from TEXT DEFAULT CURRENT_TIMESTAMP,
+    valid_until TEXT,                        -- NULL = current version
+    
+    UNIQUE(entity_id, version)
+);
+
+-- Fast lookup of current version
+CREATE INDEX idx_entity_versions_current 
+ON entity_versions(entity_id, valid_until) 
+WHERE valid_until IS NULL;
+
+-- Temporal queries
+CREATE INDEX idx_entity_versions_temporal 
+ON entity_versions(entity_id, valid_from, valid_until);
+```
+
+---
+
+### Version Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     ENTITY UPDATE FLOW                          │
+│                                                                 │
+│  ┌──────────┐      ┌──────────────┐      ┌──────────────┐     │
+│  │  Scribe  │─────▶│ Create Delta │─────▶│ Version + 1  │     │
+│  │          │      │              │      │              │     │
+│  └──────────┘      └──────────────┘      └──────────────┘     │
+│       │                   │                     │              │
+│       │                   │                     │              │
+│       ▼                   ▼                     ▼              │
+│  ┌────────────────────────────────────────────────────────┐   │
+│  │                                                         │   │
+│  │  entity_versions                                        │   │
+│  │  ┌─────────────────────────────────────────────────┐   │   │
+│  │  │ v1: Marzipan - initial profile (Dec 2025)       │   │   │
+│  │  │     valid_from: 2025-12-01, valid_until: 2026-01│   │   │
+│  │  ├─────────────────────────────────────────────────┤   │   │
+│  │  │ v2: Marzipan - added Mars College (Jan 2026)    │   │   │
+│  │  │     valid_from: 2026-01-15, valid_until: NULL   │◀──┘   │
+│  │  └─────────────────────────────────────────────────┘       │
+│  │                                                             │
+│  └─────────────────────────────────────────────────────────────┘
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Scribe's Update Protocol
+
+```python
+async def update_entity(
+    entity_id: str,
+    changes: dict,
+    change_summary: str,
+    source_id: Optional[str] = None
+) -> EntityVersion:
+    """
+    Scribe updates an entity, creating a new version.
+    
+    NEVER overwrites — always appends to version history.
+    """
+    # 1. Get current version
+    current = await get_current_version(entity_id)
+    
+    # 2. Close current version
+    await db.execute("""
+        UPDATE entity_versions 
+        SET valid_until = CURRENT_TIMESTAMP
+        WHERE entity_id = ? AND valid_until IS NULL
+    """, entity_id)
+    
+    # 3. Merge changes into snapshot
+    new_core_facts = merge_json(current.core_facts, changes.get("core_facts", {}))
+    new_full_profile = changes.get("full_profile") or current.full_profile
+    
+    # 4. Create new version
+    new_version = EntityVersion(
+        entity_id=entity_id,
+        version=current.version + 1,
+        core_facts=new_core_facts,
+        full_profile=new_full_profile,
+        voice_config=current.voice_config,  # Usually unchanged
+        change_type="update",
+        change_summary=change_summary,
+        changed_by="scribe",
+        change_source=source_id,
+    )
+    
+    await db.insert("entity_versions", new_version)
+    
+    # 5. Update entities table (current view)
+    await db.execute("""
+        UPDATE entities 
+        SET core_facts = ?, full_profile = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, new_core_facts, new_full_profile, entity_id)
+    
+    return new_version
+```
+
+---
+
+### Temporal Queries
+
+```python
+async def get_entity_at_time(entity_id: str, timestamp: datetime) -> Optional[EntityVersion]:
+    """What did Luna know about this entity at a specific time?"""
+    return await db.query_one("""
+        SELECT * FROM entity_versions
+        WHERE entity_id = ?
+          AND valid_from <= ?
+          AND (valid_until IS NULL OR valid_until > ?)
+    """, entity_id, timestamp, timestamp)
+
+async def get_entity_history(entity_id: str) -> List[EntityVersion]:
+    """Get full version history of an entity."""
+    return await db.query("""
+        SELECT * FROM entity_versions
+        WHERE entity_id = ?
+        ORDER BY version ASC
+    """, entity_id)
+
+async def get_recent_changes(days: int = 7) -> List[EntityVersion]:
+    """What entities changed recently?"""
+    return await db.query("""
+        SELECT * FROM entity_versions
+        WHERE created_at > datetime('now', ?)
+        ORDER BY created_at DESC
+    """, f"-{days} days")
+```
+
+---
+
+### Librarian's Rollback
+
+```python
+async def rollback_entity(entity_id: str, to_version: int, reason: str) -> EntityVersion:
+    """
+    Librarian can rollback to a previous version.
+    
+    Doesn't delete history — creates a NEW version that copies the old state.
+    """
+    # 1. Get the version to restore
+    old_version = await db.query_one("""
+        SELECT * FROM entity_versions
+        WHERE entity_id = ? AND version = ?
+    """, entity_id, to_version)
+    
+    if not old_version:
+        raise ValueError(f"Version {to_version} not found for {entity_id}")
+    
+    # 2. Close current version
+    await db.execute("""
+        UPDATE entity_versions 
+        SET valid_until = CURRENT_TIMESTAMP
+        WHERE entity_id = ? AND valid_until IS NULL
+    """, entity_id)
+    
+    # 3. Get latest version number
+    latest = await db.query_one("""
+        SELECT MAX(version) as v FROM entity_versions WHERE entity_id = ?
+    """, entity_id)
+    
+    # 4. Create rollback version (copy of old state, new version number)
+    rollback_version = EntityVersion(
+        entity_id=entity_id,
+        version=latest.v + 1,
+        core_facts=old_version.core_facts,
+        full_profile=old_version.full_profile,
+        voice_config=old_version.voice_config,
+        change_type="rollback",
+        change_summary=f"Rollback to v{to_version}: {reason}",
+        changed_by="librarian",
+        change_source=None,
+    )
+    
+    await db.insert("entity_versions", rollback_version)
+    
+    # 5. Update entities table
+    await db.execute("""
+        UPDATE entities 
+        SET core_facts = ?, full_profile = ?, voice_config = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, old_version.core_facts, old_version.full_profile, old_version.voice_config, entity_id)
+    
+    return rollback_version
+```
+
+---
+
+### Change Types
+
+| Type | Trigger | Who | Example |
+|------|---------|-----|---------|
+| `create` | New entity discovered | Scribe | "First mention of Tarsila" |
+| `update` | New info learned | Scribe | "Marzipan now at Mars College" |
+| `synthesize` | Fragments consolidated | Scribe (via Librarian request) | "10 mentions → coherent profile" |
+| `rollback` | Bad update reverted | Librarian | "Scribe hallucinated, reverting" |
+| `manual` | User intervention | Ahab | "Direct correction" |
+
+---
+
+### Integration with Memory Matrix
+
+The `supersedes` edge type can link entity versions to the memory nodes that caused the change:
+
+```sql
+-- When Scribe creates version 2 of Marzipan based on conversation node xyz
+INSERT INTO edges (source, target, edge_type, metadata)
+VALUES (
+    'marzipan_v2',           -- New version ID
+    'node_xyz',              -- Conversation that triggered update
+    'derived_from',
+    '{"change_type": "update"}'
+);
+
+-- Entity versions can also supersede each other
+INSERT INTO edges (source, target, edge_type)
+VALUES ('marzipan_v2', 'marzipan_v1', 'supersedes');
+```
+
+---
+
+### Summary
+
+| Feature | Mechanism |
+|---------|-----------|
+| **Never lose history** | Append-only `entity_versions` table |
+| **Track who changed what** | `changed_by`, `change_source`, `change_summary` |
+| **Temporal queries** | `valid_from` / `valid_until` range queries |
+| **Rollback** | Create new version copying old state |
+| **Link to evidence** | `derived_from` edges to memory nodes |
+
+---
+
+Want me to fold this into the full Entity System handoff? It would be:
+
+1. Entity schema (entities, relationships, mentions)
+2. Version history (entity_versions + temporal queries)
+3. Scribe/Librarian protocols (who writes, who organizes, who prompts whom)
+4. Context injection (Identity Buffer, on-demand loading)
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-01-19T22:12:13.815512Z
+yes please do!
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-01-19T22:15:14.149520Z
+Ahab wants me to create a comprehensive handoff document that combines:
+1. Entity System (entities, relationships, mentions)
+2. Version history (entity_versions + temporal queries)
+3. Scribe/Librarian protocols (who writes, who organizes, who prompts whom)
+4. Context injection (Identity Buffer, on-demand loading)
+
+This is a substantial document. Let me structure it well and write it to the project directory.Let me write the full handoff:
+```
+This block is not supported on your current device yet.
+```
+
+Good, the handoff is written. Let me give Ahab a summary.Done. Here's what's in `HANDOFF_ENTITY_SYSTEM.md`:
+
+---
+
+## Structure
+
+| Part | Content |
+|------|---------|
+| **1. Entity Schema** | Tables for entities, relationships, mentions, versions |
+| **2. Version History** | Append-only versions, temporal queries, rollback |
+| **3. Scribe/Librarian Protocols** | Who writes, who organizes, prompt hierarchy |
+| **4. Context Injection** | Identity Buffer, on-demand loading, persona activation |
+| **5. Seed Files** | YAML profiles for curated entities |
+| **6. Integration Points** | Director, Memory Matrix, AI-BRARIAN hooks |
+| **7. Migration & Testing** | SQL migrations, test cases |
+
+---
+
+## Key Design Decisions
+
+**Versioning:**
+- Append-only `entity_versions` table
+- `valid_from` / `valid_until` for temporal queries
+- Rollback creates NEW version (never deletes history)
+- Every change tracks `changed_by`, `change_source`, `change_summary`
+
+**Prompt Hierarchy:**
+```
+Luna ──► Scribe ──► Librarian
+              ▲           │
+              └───────────┘
+              (Librarian can prompt Scribe)
+              
+Scribe can also self-initiate from observation
+```
+
+**Separation Principle:**
+- Process has personality (Ben's logs are colonial, Dude's are chill)
+- Products are neutral (extractions are clean JSON/SQL)
+
+---
+
+## Files to Create
+
+```
+migrations/001_entity_system.sql    # Schema
+src/luna/entities/
+├── models.py                       # Dataclasses
+├── scribe.py                       # Scribe protocol
+├── librarian.py                    # Librarian protocol  
+├── resolution.py                   # Name → entity
+└── context.py                      # Context injection
+
+entities/
+├── people/ahab.yaml
+├── personas/
+│   ├── luna.yaml
+│   ├── ben-franklin.yaml
+│   └── the-dude.yaml
+└── ...
+```
+
+---
+
+Location: `/Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/HANDOFF_ENTITY_SYSTEM.md`
+
+Ready for Claude Code. This one's meaty — probably want to tackle the schema and seed files first, then wire up the protocols. 🤙
+
+--------------------------------------------------------------------------------

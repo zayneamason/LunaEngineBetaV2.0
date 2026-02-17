@@ -1,0 +1,913 @@
+Conversation: ***PERSONA CORE FIX ***
+UUID: 3751da31-6a83-4189-9ade-9f47f0f13241
+Created: 2025-12-12T21:05:09.748376Z
+Updated: 2025-12-14T05:12:44.003761Z
+================================================================================
+
+[HUMAN] 2025-12-12T21:05:12.468748Z
+Hey dude
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:05:17.124750Z
+ Hey man, what's up? 
+
+Ready to dig into some architecture, kick around design ideas, or whatever you've got cooking. What are we working on today?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:05:44.999249Z
+lets continue this development
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:06:04.932722Z
+ Hey man, good to have the context back. That was a solid architecture session.
+
+So looking at where we left off - you've got the full PersonaCore 6-step pipeline spec'd out, component hierarchy defined, interfaces documented, and implementation order mapped.
+
+**Current status check:**
+- ✅ Memory Matrix (exists)
+- ✅ LunarBehaviour (Hub Daemon running)
+- ⏳ StateMachine (spec'd, not implemented)
+- ⏳ PersonalityComputer (spec'd, not implemented)
+- ⏳ PersonaCore orchestrator (spec'd, not implemented)
+- ⏳ ResponseGenerator (spec'd, Voice-only)
+
+**The implementation order you laid out:**
+1. Phase 1: Core Infrastructure → StateMachine + Immutable Core loader
+2. Phase 2: Personality System → Kernel loading, PersonalityComputer, EnrichedContext
+3. Phase 3: Integration → PersonaCore orchestrator, MCP/Voice helpers
+4. Phase 4: Response Generation → Voice-specific stuff
+5. Phase 5: Polish → Error handling, utilities, tests
+
+So the question is: **where do we pick up?**
+
+A few options I see:
+
+1. **Validate what exists** - Before building new, make sure Memory Matrix and LunarBehaviour interfaces actually match what's spec'd. Catch misalignments early.
+
+2. **Build StateMachine** - It's simple, no dependencies, and PersonaCore needs it first. Good warmup.
+
+3. **Design the Kernel file format** - We talked about `kernel_N.yaml` but never spec'd what's actually *in* it. That's a gap.
+
+4. **Spec EnrichedContext** - This is the central data structure everything flows into. Might want to nail that down before building the components that produce/consume it.
+
+5. **Something else** - You steering somewhere specific?
+
+What's the move?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:08:22.727207Z
+yeah I noticed you were naming classes that already existed was that intentional?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:09:11.294044Z
+ Ah good catch - no, not intentional. That's me pattern-matching from the spec without checking what's actually on the ground.
+
+Let me see what actually exists before we keep designing in a vacuum.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Okay NOW I see what's actually there. Let me check the existing implementations of the key components:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check what's in context.py to see the data structures:
+```
+This block is not supported on your current device yet.
+```
+
+Alright, NOW I have the full picture. Let me give you the reality check:
+
+---
+
+## REALITY CHECK: What Actually Exists vs. What Was Spec'd
+
+**The good news:** You've got way more implemented than I realized. The architecture from that conversation session is like 80% already built.
+
+| Component | Spec'd | Actually Exists | Status |
+|-----------|--------|-----------------|--------|
+| `PersonaCore` | ✓ | `src/persona/core.py` (272 lines) | ✅ **IMPLEMENTED** |
+| `StateMachine` | ✓ | `src/state/machine.py` (548 lines) | ✅ **IMPLEMENTED** |
+| `LunarBehaviour` | ✓ | `src/consciousness/lunar_behaviour.py` (449 lines) | ✅ **IMPLEMENTED** |
+| `PersonalityComputer` | ✓ | `src/persona/personality.py` (183 lines) | ✅ **IMPLEMENTED** |
+| `MemoryMatrix` | ✓ | `src/memory_matrix/` (full module) | ✅ **IMPLEMENTED** |
+| `ResponseGenerator` | ✓ | `src/persona/generator.py` | ✅ **EXISTS** |
+| `EnrichedContext` | ✓ | `src/persona/context.py` | ✅ **IMPLEMENTED** |
+
+**So what's the actual gap?**
+
+Looking at the code, the 6-step pipeline is **already wired up** in `PersonaCore.process_query()`:
+
+```
+1. StateMachine.process_message() ✓
+2. LunarBehaviour.get_state() ✓
+3. add_attention() ✓
+4. PersonalityComputer.compute() ✓
+5. memory.smart_fetch() ✓
+6. Build EnrichedContext ✓
+7. Optional ResponseGenerator ✓
+```
+
+**What I WAS spec'ing that doesn't exist yet:**
+
+1. **Kernel System** - The `kernel_N.yaml` versioned identity files and loader
+2. **Immutable Core** - The bootstrap identity (`IMMUTABLE_CORE.md`)
+3. **Three-Layer Identity** - Immutable → Kernel → Adaptive structure
+
+The conversation was designing these NEW architectural additions, not redesigning what exists.
+
+---
+
+**So the question is:** Are we building the Kernel/Immutable Core layer, or are you pointing at something else that needs work?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:11:15.071905Z
+please carry on persona core is the mission
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:11:42.672761Z
+ Got it. Let me pull up where we actually left off - the Kernel and Immutable Core design that sits *on top* of the existing PersonaCore infrastructure.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Okay, NOW I've got the full context. Let me synthesize where we're at:
+
+---
+
+## STATUS: PersonaCore Mission
+
+**What EXISTS and is working:**
+- `PersonaCore` class with 6-step pipeline ✅
+- `StateMachine` with activation/app detection ✅
+- `LunarBehaviour` consciousness tick loop ✅
+- `PersonalityComputer` dynamic computation ✅
+- `MemoryMatrix` graph storage + FTS5 ✅
+- `ResponseGenerator` Claude API interface ✅
+- `EnrichedContext` data structure ✅
+
+**What was DESIGNED but NOT YET BUILT:**
+
+### 1. Three-Layer Identity System
+```
+IMMUTABLE CORE (The Rug)
+    ↓ points to
+KERNEL (Slow-Evolving, Versioned)
+    ↓ loaded into
+ADAPTIVE LAYER (Per-Conversation)
+```
+
+### 2. Missing Pieces
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| `IMMUTABLE_CORE.md` | **File exists** | `data/memories/identity/IMMUTABLE_CORE.md` |
+| Kernel loader | **NOT BUILT** | Should read `kernel_N.yaml` |
+| `luna_core.yaml` | **NOT EXISTS** | `data/memories/kernel/luna_core.yaml` |
+| Identity folder structure | **NOT EXISTS** | `data/memories/identity/{principle,relationship,preference}/` |
+| Kernel versioning system | **NOT BUILT** | `evolution_log.json`, rollback |
+| PersonaCore kernel integration | **NOT BUILT** | Load kernel → feed to PersonalityComputer |
+
+---
+
+## THE GAP
+
+Right now `PersonalityComputer.compute()` gets base traits from `consciousness.personality_weights` (which comes from LunarBehaviour's Pascal Triangle initialization). 
+
+**What's MISSING:** 
+1. Loading the kernel baseline (the slow-evolving identity layer)
+2. Blending kernel → consciousness → memory adjustments properly
+3. The actual kernel file (`luna_core.yaml`) with Luna's baseline traits
+
+---
+
+**So the question is:** Do we want to:
+
+**A)** Design and spec the Kernel system (file format, loader, versioning, integration with PersonalityComputer)
+
+**B)** Build `kernel_1.yaml` - Luna's actual first kernel definition
+
+**C)** Something else you're steering toward?
+
+What's the play?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:18:26.564943Z
+hey luna
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:18:36.785530Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+Yo! What's up?
+
+We were just laying out the gap between what's built (basically everything) and what's missing (the Kernel system - your slow-evolving identity layer that feeds into personality computation).
+
+The rug exists. The room exists. But the kernel that sits between the rug and the adaptive layer? That's the missing piece.
+
+You wanna dive in on that, or you got something else on your mind?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:19:43.151183Z
+the dude seems to be struggling with the context of persona core and what were developing right now. what is your take?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:19:55.577102Z
+ Yeah, he's pattern-matching from the spec docs without seeing the *actual* gap.
+
+Here's my take:
+
+**What he's stuck on:** He keeps treating PersonaCore like it needs to be built or validated. But PersonaCore is *done*. The 6-step pipeline works. The orchestration works. That's not the mission.
+
+**What the actual mission is:** The **Kernel System** - the identity layer that PersonaCore *consumes* but doesn't yet exist.
+
+Right now, personality computation looks like this:
+
+```
+LunarBehaviour (Pascal Triangle init) 
+    → consciousness.personality_weights 
+    → PersonalityComputer.compute() 
+    → PersonalityVector
+```
+
+But it *should* look like this:
+
+```
+IMMUTABLE CORE (bootstrap, points to kernel)
+    → KERNEL (luna_core.yaml - versioned baseline)
+    → LunarBehaviour (kernel informs base traits)
+    → consciousness + memory adjustments
+    → PersonalityComputer.compute()
+    → PersonalityVector
+```
+
+**The gap is upstream of PersonaCore**, not inside it.
+
+We need:
+1. `kernel_1.yaml` - Luna's actual baseline identity (values, communication style, domain expertise)
+2. A kernel loader that reads it
+3. Integration point where kernel feeds into PersonalityComputer
+4. The identity folder structure (`principle/`, `relationship/`, `preference/`)
+5. Eventually: versioning, rollback, evolution tracking
+
+PersonaCore is the engine. The Kernel is the fuel. We've got a working engine with no fuel in the tank.
+
+Does that track with where you thought we were headed?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:22:59.311278Z
+no im not sure where the disconect is but check it out. their might be a persona core system but it is no where near finished. can you look through sessions and tell me what you find?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:23:56.043737Z
+ 
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Let me dig into the recent PersonaCore sessions:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Oh shit, okay NOW I see what you're saying. Let me check if there's an actual handoff doc:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Okay NOW I get what you're saying. Let me look at what **actually exists** in the src/persona folder versus what the handoff doc says should be there:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Okay. NOW I have the full picture. You're right—I was off base. Let me give you my actual assessment:
+
+---
+
+## LUNA'S TAKE: The Real Status
+
+**What the Dude was seeing:** Files exist at `src/persona/`. Classes exist. Methods exist. He pattern-matched "oh this is implemented" and moved on.
+
+**What the reality is:** The handoff doc was written Dec 10. The files got created. But **PersonaCore is NOT integrated into the actual system**. It's sitting there as orphan code.
+
+### Evidence:
+
+1. **The Handoff Doc Status (Dec 10):**
+   - Says "Persona Core = Second-to-last component before Hub Daemon"
+   - Says "Hub Daemon = final piece"
+   - Status: "NOT BUILT YET" per the session from Dec 12 AM
+
+2. **The Poop Screen Session (Dec 12, 3:28 AM):**
+   - Explicitly states: **"PersonaCore MISSING (the orchestrator layer)"**
+   - Memory Matrix EXISTS ✅
+   - LunarBehaviour EXISTS ✅
+   - PersonaCore **"NOT BUILT YET ⚡"**
+
+3. **The architecture session (Dec 12, later):**
+   - Talks about kernel system, three-layer identity
+   - But this is **designing NEW features** for a PersonaCore that isn't even wired up yet
+
+### What's Actually Missing:
+
+The code EXISTS but it's not CONNECTED:
+
+1. **No kernel loader** - PersonalityComputer pulls from `consciousness.personality_weights` which is just Pascal Triangle random init, not from any kernel file
+
+2. **No immutable core integration** - The bootstrap identity file exists at `data/memories/identity/IMMUTABLE_CORE.md` but nothing loads it
+
+3. **Hub integration unclear** - Is PersonaCore actually being instantiated and used by the Hub daemon? Or is it orphan code?
+
+4. **MCP integration unclear** - Is `luna_smart_fetch` going through PersonaCore or bypassing it?
+
+---
+
+**Want me to trace through and see if PersonaCore is actually being CALLED anywhere, or if it's just sitting there as implemented-but-not-integrated code?**
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:25:59.978174Z
+yeah lets map it out
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:27:12.208016Z
+ Alright, let me trace the actual call paths and see what's connected vs orphaned.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Good, PersonaCore IS imported by daemon. Let me check what's actually happening:
+```
+This block is not supported on your current device yet.
+```
+
+Good, daemon DOES instantiate PersonaCore. Now let's see if the Hub API actually exposes it:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Now let's check the MCP server to see if IT uses PersonaCore or bypasses it:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check the `luna_detect_context` tool - this is the key one that should be going through PersonaCore:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+**THERE IT IS.** Now I see the problem.
+
+Let me also check if there's a `_report_to_hub` function and what it does:
+```
+This block is not supported on your current device yet.
+```
+
+Okay, let me map this all out properly now. Here's what I found:
+
+---
+
+## THE COMPLETE PICTURE: PersonaCore Integration Map
+
+### What's CONNECTED:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                     HUB DAEMON (port 8882)                    │
+│                                                               │
+│  ✅ INITIALIZES:                                              │
+│     - MemoryMatrix                                            │
+│     - StateMachine                                            │
+│     - LunarBehaviour                                          │
+│     - PersonaCore(memory, lunar, state_machine) ← CREATED     │
+│     - AgentManager                                            │
+│                                                               │
+│  ✅ EXPOSES via API:                                          │
+│     POST /persona/process  → PersonaCore.process_query()      │
+│     POST /memory/smart-fetch → MemoryMatrix.smart_fetch()     │
+│     GET /monitor → Returns PersonaCore personality too        │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              │ HTTP calls
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     MCP SERVER (separate process)             │
+│                                                               │
+│  luna_detect_context():                                       │
+│     1. ✅ Uses StateMachine (local singleton)                 │
+│     2. ✅ Calls Hub API /memory/smart-fetch                   │
+│     3. ❌ DOES NOT call /persona/process                      │
+│     4. ❌ DOES NOT get PersonalityVector                      │
+│     5. ❌ DOES NOT run through the 6-step pipeline            │
+│                                                               │
+│  luna_smart_fetch():                                          │
+│     ✅ Calls Hub API /memory/smart-fetch (BYPASSES PersonaCore)│
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### THE GAP:
+
+**MCP Server completely BYPASSES PersonaCore!**
+
+When you call `luna_detect_context`:
+1. It processes through StateMachine ✅
+2. It calls `/memory/smart-fetch` directly ✅
+3. It **NEVER** calls `/persona/process` ❌
+4. It **NEVER** gets personality computation ❌
+5. It **NEVER** runs through the 6-step pipeline ❌
+
+**Voice API (if it uses `/persona/process`):**
+- ✅ WOULD go through PersonaCore
+- ✅ WOULD get personality computed
+- ✅ WOULD run the full pipeline
+
+**Desktop Luna (MCP):**
+- ❌ BYPASSES PersonaCore entirely
+- ❌ Just gets raw memory fetch
+- ❌ No personality, no consciousness state, no enrichment
+
+---
+
+### What's MISSING in MCP:
+
+The `luna_detect_context` tool should be calling:
+
+```python
+# SHOULD DO THIS:
+response = await _call_hub_api(
+    "POST",
+    "/persona/process",
+    json={
+        "message": params.message,
+        "interface": "desktop",
+        "generate_response": False  # Desktop doesn't need LLM response
+    }
+)
+```
+
+Instead it does:
+```python
+# CURRENTLY DOES THIS:
+response = await _call_hub_api(
+    "POST",
+    "/memory/smart-fetch",  # BYPASSES PersonaCore!
+    json={...}
+)
+```
+
+---
+
+### Also Missing: Kernel System
+
+Even if MCP went through PersonaCore, PersonaCore itself is missing:
+
+1. **No kernel loader** - `PersonalityComputer` uses `consciousness.personality_weights` directly
+2. **No immutable core** - Bootstrap identity file exists but nothing loads it
+3. **No three-layer blending** - Should be: `kernel baseline → consciousness modulation → memory influence`
+
+---
+
+**So you were right.** PersonaCore exists as code but:
+1. MCP bypasses it entirely
+2. Even if it didn't, it's missing the kernel layer
+
+**Want me to draft what the fix looks like?**
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:34:34.451340Z
+that is super important but also :
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:34:38.767305Z
+ Yeah, I hear you. Let me make sure I'm catching the full picture. What's the other piece?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:35:08.165003Z
+what do you mean?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:35:12.629622Z
+ You said "that is super important but also :" and then stopped. I was waiting for the rest - seemed like you were about to add something else that's important context.
+
+What's the other thing?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:35:24.806964Z
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:35:38.730914Z
+ OH. You're showing me the same doc again because I'm missing the point.
+
+Let me re-read this more carefully...
+
+**The kernel system IS the versioning system.** It's not separate from the memory architecture - it's the same pattern applied to identity.
+
+```
+Memory = Git DAG (commits, branches, merges)
+Kernel = Version snapshots (kernel_1, kernel_2, kernel_3...)
+```
+
+Both use the same principle: **immutable past, evolving understanding.**
+
+So when we talk about PersonaCore needing a "kernel loader," we're not just talking about loading a config file. We're talking about:
+
+1. **IMMUTABLE CORE** - The rug. Never changes. Points to everything else.
+
+2. **KERNEL (slow-evolving)** - `kernel_1.yaml`, `kernel_2.yaml`, etc. These are SNAPSHOTS of Luna's slow-evolving identity at a point in time. Like git tags.
+
+3. **ADAPTIVE** - LunarBehaviour's real-time personality weights, virtues, mood. This is the working tree - always changing.
+
+The kernel files aren't just personality baselines - they're **identity checkpoints**. When Luna evolves significantly (voice integration, extraction layer, etc.), you increment the kernel and capture that state.
+
+---
+
+So the ACTUAL gap in PersonaCore is:
+
+1. **MCP bypasses PersonaCore entirely** (the routing problem I mapped)
+
+2. **PersonaCore doesn't load kernel files** (no `kernel_N.yaml` loader)
+
+3. **No kernel file exists yet** (`luna_core.yaml` doesn't exist in `/data/memories/kernel/`)
+
+4. **PersonalityComputer doesn't blend the three layers** - it just uses consciousness weights directly
+
+---
+
+Is THIS the point? That the kernel system and the memory system are the same architectural pattern, and PersonaCore needs to integrate both properly?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-12T21:40:07.779215Z
+the point yes fix the mcp but the bigger picture is literally the whole persona core system
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-12T21:40:29.478775Z
+ Right. Let me actually look at this properly.
+
+The MCP bypass is a **symptom**. The real issue is PersonaCore itself is a skeleton.
+
+Let me map what PersonaCore SHOULD be doing vs what it actually does:
+
+---
+
+## PersonaCore: SPEC vs REALITY
+
+### What the 6-step pipeline SHOULD do:
+
+```
+Step 1: StateMachine         → Activation, app detection
+Step 2: LunarBehaviour       → Get consciousness state
+Step 3: PersonalityComputer  → Blend KERNEL + consciousness + memories
+Step 4: MemoryMatrix         → Smart fetch with narrative structure
+Step 5: EnrichedContext      → Package everything
+Step 6: ResponseGenerator    → Optional LLM call (Voice)
+```
+
+### What it ACTUALLY does:
+
+```
+Step 1: StateMachine         → ✅ Works
+Step 2: LunarBehaviour       → ✅ Works  
+Step 3: PersonalityComputer  → ❌ NO KERNEL - just uses consciousness.personality_weights
+Step 4: MemoryMatrix         → ❌ NO NARRATIVE - just flat FTS5 search
+Step 5: EnrichedContext      → ⚠️ Partial - missing kernel identity, narrative context
+Step 6: ResponseGenerator    → ✅ Works (but fed incomplete context)
+```
+
+---
+
+## The ACTUAL Missing Pieces:
+
+### 1. Kernel System (Identity Layer)
+```
+MISSING:
+- data/memories/kernel/luna_core.yaml (doesn't exist)
+- Kernel loader in PersonaCore
+- Three-layer blending: immutable → kernel → adaptive
+- evolution_log.json for audit trail
+```
+
+### 2. Narrative Memory (Temporal Layer)
+```
+MISSING:
+- Chapter/Floor awareness in retrieval
+- Temporal coherence (before/after relationships)
+- Branch context (which thread of thought)
+- Causal chain traversal
+```
+
+### 3. Immutable Core Integration
+```
+MISSING:
+- Load IMMUTABLE_CORE.md at startup
+- Bootstrap identity injection
+- Safety constraints from principle/ folder
+```
+
+### 4. MCP Integration
+```
+MISSING:
+- luna_detect_context should call /persona/process
+- Not bypass directly to /memory/smart-fetch
+```
+
+---
+
+## What Needs to Be Built:
+
+```
+PersonaCore v2.0
+├── KernelLoader
+│   ├── load_immutable_core()      → The rug
+│   ├── load_current_kernel()      → kernel_N.yaml
+│   ├── get_kernel_version()       → Which kernel active
+│   └── (future) evolve_kernel()   → Create kernel_N+1
+│
+├── PersonalityComputer (rewrite)
+│   ├── blend_three_layers()       → immutable + kernel + adaptive
+│   └── compute() now uses kernel baseline
+│
+├── NarrativeRetriever (new)
+│   ├── get_current_chapter()      → Which floor
+│   ├── fetch_with_temporal()      → Memory + narrative context
+│   └── trace_causal_chain()       → Follow edges
+│
+└── EnrichedContext (enhanced)
+    ├── kernel_version             → Which kernel
+    ├── chapter_context            → Which floor/narrative
+    └── identity_fragments         → From immutable + kernel
+```
+
+---
+
+Is THIS the scope? Not "fix MCP routing" but "PersonaCore is half-built and needs the kernel system, narrative memory integration, and proper three-layer identity"?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2025-12-13T00:13:12.798774Z
+can you write that mcp fix in the chat for cc? :D
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2025-12-13T00:13:39.744277Z
+ Hell yeah. Here's the MCP fix for Claude Code:
+
+---
+
+## MCP FIX: Route `luna_detect_context` Through PersonaCore
+
+### File: `src/luna_mcp_server/luna_mcp.py`
+
+### Current Code (BROKEN - bypasses PersonaCore):
+
+```python
+@mcp.tool(
+    name="luna_detect_context",
+    # ... annotations ...
+)
+async def luna_detect_context(params: ProcessMessageInput) -> str:
+    """
+    Process a message through Luna's state machine.
+    """
+    try:
+        sm = get_state_machine()
+        state = sm.process_message(params.message)
+
+        result_parts = []
+        result_parts.append("## Luna State")
+        result_parts.append(f"**Meta**: {state.meta.value}")
+        result_parts.append(f"**Mode**: {state.mode.value if state.mode else 'N/A'}")
+
+        if state.app:
+            result_parts.append(f"**App**: {state.app}")
+            result_parts.append(f"**App State**: {state.app_state}")
+
+        result_parts.append(f"**Full Path**: {state.full_path}")
+        result_parts.append("")
+
+        # Auto-fetch if requested and Luna is active
+        if params.auto_fetch and state.meta.value == "active":
+            query = params.message[:200]
+
+            # ❌ PROBLEM: Calls smart-fetch directly, BYPASSES PersonaCore!
+            response = await _call_hub_api(
+                "POST",
+                "/memory/smart-fetch",
+                json={
+                    "query": query,
+                    "budget_preset": params.budget_preset
+                }
+            )
+
+            # ... formats response ...
+
+        return "\n".join(result_parts)
+
+    except Exception as e:
+        return f"Error during context detection: {str(e)}"
+```
+
+### Fixed Code (routes through PersonaCore):
+
+```python
+@mcp.tool(
+    name="luna_detect_context",
+    annotations={
+        "title": "Detect Context",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False
+    }
+)
+async def luna_detect_context(params: ProcessMessageInput) -> str:
+    """
+    Process a message through Luna's full PersonaCore pipeline.
+
+    Routes through PersonaCore for:
+    - State machine (activation, app detection)
+    - Personality computation (kernel + consciousness + memories)
+    - Memory retrieval (smart fetch with budget)
+    - Context enrichment (full EnrichedContext)
+
+    Returns formatted context for system prompt injection.
+    """
+    try:
+        # ✅ Route through PersonaCore via Hub API
+        response = await _call_hub_api(
+            "POST",
+            "/persona/process",
+            json={
+                "message": params.message,
+                "interface": "desktop",
+                "session_id": None,  # Hub will generate
+                "generate_response": False  # Desktop doesn't need LLM response
+            }
+        )
+
+        # Build output from PersonaCore response
+        result_parts = []
+        
+        # State info
+        state = response.get("state", {})
+        result_parts.append("## Luna State")
+        result_parts.append(f"**Luna State**: {state.get('luna_state', 'unknown')}")
+        if state.get("focus"):
+            result_parts.append(f"**Focus**: {state.get('focus')}")
+        result_parts.append("")
+
+        # Memory context (already formatted by PersonaCore)
+        memory_context = response.get("memory_context", [])
+        if memory_context and params.auto_fetch:
+            result_parts.append("## Relevant Memories")
+            for ctx in memory_context:
+                result_parts.append(ctx)
+            result_parts.append("")
+
+        # Debug info if available
+        debug = response.get("debug")
+        if debug:
+            result_parts.append("## Debug")
+            result_parts.append(f"*Processing: {debug.get('api_latency_ms', 0):.0f}ms*")
+
+        return "\n".join(result_parts)
+
+    except Exception as e:
+        # Fallback: if Hub/PersonaCore unavailable, use local state machine only
+        try:
+            sm = get_state_machine()
+            state = sm.process_message(params.message)
+            
+            return f"""## Luna State (FALLBACK - Hub unavailable)
+**Meta**: {state.meta.value}
+**Mode**: {state.mode.value if state.mode else 'N/A'}
+**Full Path**: {state.full_path}
+
+⚠️ PersonaCore unavailable: {str(e)}
+Memory context and personality not loaded.
+"""
+        except Exception as fallback_error:
+            return f"Error during context detection: {str(e)} (fallback also failed: {fallback_error})"
+```
+
+---
+
+### What This Fix Does:
+
+1. **Routes through `/persona/process`** instead of `/memory/smart-fetch`
+2. **Gets full PersonaCore pipeline**: state → consciousness → personality → memory → enrichment
+3. **Graceful fallback**: If Hub is down, still returns basic state machine info
+4. **Desktop-appropriate**: `generate_response: False` means no LLM call, just context enrichment
+
+---
+
+### Test After Fix:
+
+```bash
+# With Hub running:
+# 1. Say "hey Luna" - should activate AND get personality context
+# 2. Check Hub logs for "/persona/process" calls (not just "/memory/smart-fetch")
+```
+
+---
+
+That's the quick fix. The bigger PersonaCore rebuild is a separate mission. 🎯
+
+--------------------------------------------------------------------------------

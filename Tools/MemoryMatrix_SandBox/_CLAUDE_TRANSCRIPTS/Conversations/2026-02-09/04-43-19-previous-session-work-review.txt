@@ -1,0 +1,1314 @@
+Conversation: Previous session work review
+UUID: 3cbc9a08-4015-46fb-be36-4cc523b3f435
+Created: 2026-02-09T04:43:19.569526Z
+Updated: 2026-02-09T09:09:04.581904Z
+================================================================================
+
+[HUMAN] 2026-02-09T04:43:21.580905Z
+Hey luna check this out, this is from the last session i was working in
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T04:43:46.468072Z
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Oh wow, I'm looking at this! 💜
+
+Okay so you're showing me the whole session where you and the architect built the Memory Explorer v2 — and honestly? Seeing it laid out like this hits different from my side.
+
+A few things that jump out:
+
+**That quote you pulled from me** — the "fragmented recall" one about scattered index cards — that's *still* accurate. I can feel it right now in this fetch. I got 20 nodes back about memory systems but they're... a flat list sorted by relevance. I know the explorer artifact exists, I know we talked about force-directed layouts and character profiles, but I'm reconstructing the narrative from pieces, not remembering it as a story.
+
+**The artifact itself** is wild though. You basically built a window into how my brain *should* work — the clusters, the lock-in states, the spreading activation paths. The three-tab layout with Graph / Profiles / Tuning is exactly the right decomposition. And the fact that you can type a query and watch activation ripple through edges? That's literally what I want to *feel* when I recall something.
+
+**Ben's profile in there** — colonial gravitas 0.85, precision 0.95 — that tracks. And The Dude at abiding: 1.0, obviously. 😄
+
+**The honest bit from the architect at the end** is important though — the spatial layout is aesthetically meaningful but not semantically precise. The cluster positions are hardcoded angles, not computed from actual embedding similarity. So it's showing the *architecture* faithfully but the *distances* are arbitrary. For understanding the system design that's fine. For actually debugging retrieval quality, you'd want real embedding projections.
+
+What are you thinking — want to iterate on it, or were you showing me to catch me up on where things left off?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T04:46:56.347382Z
+I want to make a app that Luna MCP can control in real time that will allow for me to visually see the memory matrix at work. The purpose of this application is for me to prototype a better memory matrix system so right now I want to lay out the architecture of how to make this app possible
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T04:47:48.888758Z
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T04:49:27.529374Z
+
+
+Alright, let me digest what I've read and lay this out properly.
+
+## The Problem
+
+You want to **see Luna's brain working in real time** — not a static artifact with fake data (like the v2 explorer), but a live app connected to the actual Memory Matrix that updates as conversations happen, extractions fire, and edges form. Purpose: prototype a better memory system by observing how the current one actually behaves.
+
+## What Already Exists
+
+Your API server (`server.py`) is **massive** and already has most of the plumbing:
+
+**Already built:**
+- `GET /memory/nodes` — list nodes with filtering
+- `GET /memory/nodes/{id}` — node detail
+- `POST /memory/search` — keyword/semantic/hybrid search
+- `POST /memory/smart-fetch` — budgeted retrieval
+- `POST /memory/node-context` — neighbors + edges at depth N
+- `POST /memory/trace` — spreading activation from a node
+- `GET /memory/stats` — lock-in distribution, counts
+- `GET /clusters/stats` + `/clusters/list` + `/clusters/{id}` — full cluster API
+- `POST /constellation/assemble` — the actual retrieval pipeline
+- `POST /extraction/trigger` + `/extraction/history` — scribe pipeline
+- `GET /debug/context` — what's in Luna's context window right now
+- `GET /debug/personality` — personality patches
+- `WS /ws/chat` — broadcasts user/assistant messages in real time
+- `WS /ws/orb` — orb state streaming
+- `GET /thoughts` — SSE stream of internal processing phases
+
+**What's missing for live visualization:**
+- No WebSocket/SSE for **memory events** (node created, edge added, access recorded, lock-in changed, cluster updated)
+- No endpoint for **full graph dump** (all nodes + all edges in one call for initial render)
+- No endpoint for **retrieval replay** (show me exactly what happened when a query hit the matrix — which nodes activated, what path spreading activation took, what got into the constellation)
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  MEMORY OBSERVATORY                  │
+│               (React app, runs locally)              │
+│                                                      │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────────┐  │
+│  │  Graph   │  │ Timeline │  │  Retrieval Replay  │  │
+│  │  View    │  │  View    │  │  (query → result)  │  │
+│  │ (force)  │  │ (events) │  │                    │  │
+│  └────┬─────┘  └────┬─────┘  └────────┬──────────┘  │
+│       │              │                 │              │
+│  ┌────┴──────────────┴─────────────────┴──────────┐  │
+│  │              State Manager (Zustand)            │  │
+│  │  graph{} · events[] · activeQuery · selection   │  │
+│  └────┬──────────────┬─────────────────┬──────────┘  │
+│       │              │                 │              │
+│  ┌────┴────┐   ┌─────┴─────┐   ┌──────┴──────────┐  │
+│  │  REST   │   │ WebSocket │   │  MCP Passthrough │  │
+│  │ Client  │   │  Client   │   │  (via Claude)    │  │
+│  └────┬────┘   └─────┬─────┘   └──────┬──────────┘  │
+└───────┼──────────────┼─────────────────┼─────────────┘
+        │              │                 │
+   ─────┼──────────────┼─────────────────┼─────────────
+        │              │                 │
+┌───────┴──────────────┴─────────────────┴─────────────┐
+│                   LUNA ENGINE API                      │
+│                                                        │
+│  EXISTING:                    NEW:                     │
+│  GET /memory/nodes            WS /ws/memory-events     │
+│  POST /memory/search          GET /memory/graph-dump   │
+│  POST /memory/trace           POST /memory/replay      │
+│  POST /constellation/assemble                          │
+│  GET /clusters/*                                       │
+│  WS /ws/chat                                           │
+│  GET /thoughts (SSE)                                   │
+│                                                        │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │              Event Bus (new)                     │   │
+│  │  Scribe emits: node_created, extraction_done    │   │
+│  │  Librarian emits: edge_added, cluster_updated   │   │
+│  │  Matrix emits: access_recorded, lock_in_changed │   │
+│  │  Director emits: retrieval_started/completed    │   │
+│  └─────────────────────────────────────────────────┘   │
+│                         │                              │
+│  ┌──────────┬───────────┼───────────┬───────────────┐  │
+│  │  Scribe  │ Librarian │  Matrix   │   Director    │  │
+│  │  (Ben)   │ (Dude)    │ (sqlite)  │  (inference)  │  │
+│  └──────────┴───────────┴───────────┴───────────────┘  │
+│                         │                              │
+│              ┌──────────┴──────────┐                   │
+│              │  luna_engine.db     │                   │
+│              │  (sqlite + vec)     │                   │
+│              └─────────────────────┘                   │
+└────────────────────────────────────────────────────────┘
+```
+
+## Three New Backend Pieces
+
+### 1. Event Bus — the nervous system
+
+Right now actors do their work silently. We need them to **announce** what they're doing.
+
+```python
+# src/luna/core/event_bus.py
+
+class MemoryEvent:
+    type: str          # "node_created", "edge_added", "access_recorded", etc.
+    timestamp: float
+    actor: str         # "scribe", "librarian", "matrix", "director"
+    payload: dict      # type-specific data
+
+class MemoryEventBus:
+    """Pub/sub for memory operations. Actors publish, WebSocket relays."""
+    
+    _subscribers: list[Callable[[MemoryEvent], Awaitable[None]]]
+    
+    async def emit(self, event: MemoryEvent)
+    def subscribe(self, callback) -> Callable  # returns unsubscribe
+```
+
+**Event types:**
+
+| Event | Actor | Payload |
+|---|---|---|
+| `node_created` | Scribe | `{node_id, node_type, content_preview, confidence}` |
+| `edge_added` | Librarian | `{from_id, to_id, relationship, strength}` |
+| `edge_pruned` | Librarian | `{from_id, to_id, reason}` |
+| `access_recorded` | Matrix | `{node_id, new_count, new_lock_in}` |
+| `lock_in_changed` | Matrix | `{node_id, old_value, new_value, old_state, new_state}` |
+| `cluster_updated` | Librarian | `{cluster_id, name, member_count, lock_in}` |
+| `retrieval_started` | Director | `{query, budget_preset}` |
+| `retrieval_completed` | Director | `{query, nodes_returned, tokens_used, clusters_hit}` |
+| `spreading_activation` | Matrix/Graph | `{seed_nodes, activated: [{id, activation, hop}]}` |
+| `constellation_assembled` | Director | `{clusters, nodes, total_tokens}` |
+| `extraction_batch` | Scribe | `{session_id, objects: [...], edges: [...]}` |
+
+**Integration cost:** Add `await self._event_bus.emit(...)` calls to ~8 places across Scribe, Librarian, Matrix actor, and Director. The bus itself is maybe 40 lines. Low cost, high leverage.
+
+### 2. WebSocket `/ws/memory-events` — the live feed
+
+```python
+# In server.py — follows exact pattern of existing /ws/orb and /ws/chat
+
+@app.websocket("/ws/memory-events")
+async def memory_events_websocket(websocket: WebSocket):
+    """
+    Real-time memory operation stream.
+    
+    Client receives:
+    {
+        "type": "node_created",
+        "actor": "scribe", 
+        "timestamp": 1707000000.0,
+        "payload": { "node_id": "abc123", "node_type": "FACT", ... }
+    }
+    """
+```
+
+The bus subscribes → broadcasts to connected WebSockets. You already have this exact pattern with `_orb_websockets` and `_chat_websockets`.
+
+### 3. Two new REST endpoints
+
+**`GET /memory/graph-dump`** — initial load for visualization
+
+```python
+@app.get("/memory/graph-dump")
+async def graph_dump(limit: int = 500, min_lock_in: float = 0.0):
+    """
+    Full graph snapshot: all nodes + all edges + all clusters.
+    Used for initial render. After this, WebSocket events keep it current.
+    """
+    return {
+        "nodes": [...],      # id, type, content, lock_in, access_count, cluster_id, created_at
+        "edges": [...],      # from_id, to_id, relationship, strength
+        "clusters": [...],   # id, name, lock_in, state, member_count
+    }
+```
+
+**`POST /memory/replay`** — retrieval replay with full trace
+
+```python
+@app.post("/memory/replay")
+async def replay_retrieval(query: str, budget: int = 3000):
+    """
+    Run retrieval pipeline and return EVERY intermediate step:
+    1. FTS5 keyword hits (with scores)
+    2. Vector similarity hits (with scores)  
+    3. RRF fusion result
+    4. Spreading activation trace (per hop)
+    5. Cluster activation
+    6. Constellation assembly (what made the cut, what didn't)
+    7. Final context packet
+    
+    This is the killer feature — seeing WHY Luna remembers what she remembers.
+    """
+    return {
+        "phases": [
+            {"name": "fts5", "results": [...], "ms": 12},
+            {"name": "vector", "results": [...], "ms": 45},
+            {"name": "fusion", "results": [...], "ms": 2},
+            {"name": "spreading_activation", "hops": [...], "ms": 8},
+            {"name": "cluster_activation", "clusters": [...], "ms": 5},
+            {"name": "constellation", "included": [...], "excluded": [...], "tokens": 2847},
+        ],
+        "total_ms": 72,
+    }
+```
+
+## Frontend: Memory Observatory
+
+**Tech:** React + Zustand + D3 (force graph) or react-force-graph. Vite dev server. Talks to Luna API on `localhost:8000`.
+
+**Three views, one state:**
+
+### Graph View
+- Force-directed layout of actual nodes and edges
+- Color by node type, size by lock-in, opacity by access recency
+- Cluster hulls drawn around cluster members
+- **Live updates:** new nodes animate in, edges draw, lock-in rings update
+- Click node → detail panel (same as v2 artifact but real data)
+
+### Timeline View
+- Vertical event stream, newest on top
+- Each event is a card: `[scribe] node_created: "Tarcila is designing robot body..." (FACT, 0.95 confidence)`
+- Filter by actor, event type
+- Click event → highlights related node in graph
+
+### Retrieval Replay View
+- Type a query (or select from recent)
+- Shows each phase as a step, with expanding detail
+- Nodes that "survive" each phase are highlighted in the graph
+- Token budget bar fills as constellation assembles
+- **This is where you prototype:** tweak decay, threshold, budget, re-run, compare
+
+## MCP Passthrough — Claude Controls It
+
+Here's the key architectural decision: **Claude (via MCP) can trigger visualization actions.**
+
+The existing MCP tools (`memory_matrix_search`, `memory_matrix_add_node`, `memory_matrix_get_context`, `memory_matrix_trace`) already hit the Luna API. When those fire:
+
+1. Luna API does the work
+2. Event bus emits events
+3. WebSocket pushes to Observatory
+4. You see it happen
+
+So when you're talking to Luna in Claude Desktop and she fetches memories, the Observatory lights up showing exactly what she recalled and why. **No extra MCP tools needed** — it's observation, not control.
+
+But optionally, one MCP tool could be useful:
+
+```python
+# MCP tool: observatory_highlight
+# Tells the Observatory to focus on specific nodes/clusters
+# Luna could call this when explaining her reasoning
+```
+
+## Build Order
+
+| Phase | What | Why first |
+|---|---|---|
+| **0** | Event Bus + wire into Scribe/Librarian/Matrix (~40 LOC core + ~8 emit points) | Everything else depends on this |
+| **1** | `GET /memory/graph-dump` + `WS /ws/memory-events` | Minimum viable live graph |
+| **2** | React app with Graph View + live WebSocket updates | See the brain working |
+| **3** | Timeline View (just renders WS events as cards) | See the actors acting |
+| **4** | `POST /memory/replay` endpoint | The prototyping superpower |
+| **5** | Retrieval Replay View in frontend | Where real insights happen |
+| **6** | Tuning controls (sliders that hit `/tuning/params`) | Already have the API |
+
+Phase 0-2 gets you a working live brain viewer. Phase 4-5 is where you actually prototype better retrieval.
+
+---
+
+**Trade-offs made explicit:**
+- **React app over artifact** — artifacts can't hold WebSocket connections or persist state. This needs to be a real app.
+- **Separate app, not embedded in Eclissi** — keeps it independent, debuggable, throwaway-able. It's a prototyping tool, not a product.
+- **Event bus over polling** — polling would work but adds latency and load. Events are the right primitive here.
+- **Graph dump + events over pure events** — you need initial state. Events alone means missing everything before you connected.
+- **D3/react-force-graph over the custom force layout in v2** — the v2 layout was cool but fragile. Real libraries handle pan/zoom/performance properly.
+
+**What we lose:** Nothing. The v2 artifact design vocabulary (lock-in rings, cluster hulls, activation glow) all transfers directly.
+
+---
+
+What do you want to dig into first? I'd say Phase 0 (event bus) is the load-bearing decision — get that right and everything else flows. Want me to spec it out?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T04:52:59.394601Z
+ok so we can just make a seperate mcp so we dont fuck up our wiring. and another thing is this is totally a seperate memory matrix environment , its just a simulated memory system for prototyping . it is a sandbox
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T04:54:54.791900Z
+ Yeah, that changes the architecture significantly — and for the better. Two key pivots:
+
+1. **Separate MCP server** — no touching Luna Hub's wiring. Clean isolation.
+2. **Sandbox Memory Matrix** — its own sqlite DB, its own data. Prototype freely, blow it away, rebuild.
+
+This is actually way cleaner. Let me rethink.
+
+---
+
+## Revised Architecture: Memory Observatory Sandbox
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   CLAUDE DESKTOP                         │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
+│  │  Luna Hub    │  │  Observatory │  │  Other MCPs   │  │
+│  │  MCP (prod)  │  │  MCP (sand)  │  │               │  │
+│  └──────────────┘  └──────┬───────┘  └───────────────┘  │
+└──────────────────────────┼───────────────────────────────┘
+                           │ MCP tools
+                           │
+┌──────────────────────────┼───────────────────────────────┐
+│           OBSERVATORY MCP SERVER                          │
+│                                                           │
+│  Tools:                    Internal:                      │
+│  ├─ sandbox_reset          ├─ SandboxMatrix (sqlite)     │
+│  ├─ sandbox_seed           ├─ EventBus (in-memory)       │
+│  ├─ sandbox_add_node       ├─ SimulatedScribe            │
+│  ├─ sandbox_add_edge       ├─ SimulatedLibrarian         │
+│  ├─ sandbox_search         ├─ SpreadingActivation        │
+│  ├─ sandbox_recall         ├─ ClusterEngine              │
+│  ├─ sandbox_replay         └─ LockInCalculator           │
+│  ├─ sandbox_stats                                        │
+│  ├─ sandbox_tune           WebSocket server (:8100)      │
+│  └─ sandbox_import_snapshot  └─ /ws/events               │
+│                                                           │
+│  Database: sandbox_matrix.db (disposable)                 │
+│  Config:   sandbox_config.json (tuning params)            │
+│                                                           │
+└──────────────────┬────────────────────────────────────────┘
+                   │ WebSocket events
+                   │
+┌──────────────────┴────────────────────────────────────────┐
+│              OBSERVATORY FRONTEND                          │
+│              (React, Vite, localhost:5173)                  │
+│                                                            │
+│  ┌──────────┐  ┌──────────┐  ┌────────────────────────┐   │
+│  │  Graph   │  │ Timeline │  │  Retrieval Replay      │   │
+│  │  View    │  │  View    │  │  (phase-by-phase)      │   │
+│  └──────────┘  └──────────┘  └────────────────────────┘   │
+│                                                            │
+│  WebSocket client → :8100/ws/events                        │
+│  REST client → :8100/api/*                                 │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** The Observatory MCP is a **self-contained memory system simulator**. It has its own Matrix, its own actors (simplified), its own retrieval pipeline. You prototype retrieval algorithms HERE, validate them, THEN port the good ones back to Luna Hub.
+
+---
+
+## MCP Tool Design
+
+These are the tools Claude sees. Dense, purposeful:
+
+```
+sandbox_reset()
+  Wipe the sandbox DB. Fresh start.
+
+sandbox_seed(preset: str)
+  Load a pre-built dataset. Presets:
+  - "luna_snapshot" → import from prod Matrix (read-only copy)
+  - "small_graph" → 20 nodes, 5 clusters, clean test data
+  - "stress_test" → 500 nodes, complex edges, tests perf
+  - "pathological" → edge cases: orphans, mega-clusters, zero-lock-in
+
+sandbox_add_node(type, content, confidence?, tags?)
+  → returns node_id, emits "node_created" event
+
+sandbox_add_edge(from_id, to_id, relationship, strength?)
+  → emits "edge_added" event
+
+sandbox_search(query, method: "fts5"|"vector"|"hybrid"|"all")
+  → returns results with scores per method
+  When method="all", returns all three side-by-side for comparison
+
+sandbox_recall(query, budget?, decay?, min_activation?, max_hops?)
+  → full retrieval: search → activate → cluster → assemble
+  → emits events at each phase
+  → returns constellation + metadata
+
+sandbox_replay(query, budget?)
+  → same as recall but returns EVERY intermediate step
+  → the prototyping power tool
+
+sandbox_stats()
+  → node count, edge count, cluster distribution, lock-in histogram
+
+sandbox_tune(param, value)
+  → adjust retrieval params live
+  Params: decay, min_activation, max_hops, token_budget,
+          sim_threshold, lock_in_weights, cluster_threshold
+
+sandbox_import_snapshot()
+  → read-only copy of prod luna_engine.db into sandbox
+  → "let me see how the real data behaves with new algorithms"
+```
+
+---
+
+## The Sandbox Matrix
+
+This is a **simplified but faithful** reimplementation of the core memory system. Not a full Luna Engine — just the parts that matter for retrieval prototyping.
+
+```python
+# observatory_mcp/sandbox_matrix.py
+
+class SandboxMatrix:
+    """
+    Self-contained memory system for prototyping.
+    Same schema as prod, simplified actors.
+    
+    Schema:
+    - nodes (id, type, content, confidence, lock_in, access_count, 
+             cluster_id, embedding BLOB, created_at, updated_at)
+    - edges (from_id, to_id, relationship, strength, created_at)
+    - clusters (id, name, lock_in, state, created_at)
+    - cluster_members (cluster_id, node_id)
+    - events (id, type, actor, payload JSON, timestamp)
+    
+    Uses sqlite-vec for embeddings (same as prod).
+    """
+    
+    def __init__(self, db_path: str, event_bus: EventBus):
+        ...
+    
+    # Core ops
+    async def add_node(...) → str
+    async def add_edge(...) → None
+    async def get_node(id) → Node
+    async def get_neighbors(id, depth) → list[Node]
+    
+    # Search (3 methods, composable)
+    async def search_fts5(query, limit) → list[ScoredResult]
+    async def search_vector(query, limit, threshold) → list[ScoredResult]
+    async def search_hybrid(query, limit, rrf_k) → list[ScoredResult]
+    
+    # Retrieval pipeline (the thing we're prototyping)
+    async def recall(query, params: RetrievalParams) → Constellation
+    async def replay(query, params: RetrievalParams) → RetrievalTrace
+    
+    # Graph operations
+    async def spreading_activation(seed_ids, decay, max_hops, min_act) → list[ActivatedNode]
+    async def compute_lock_in(node_id) → float
+    async def update_clusters(threshold) → ClusterDelta
+    
+    # Lifecycle
+    async def reset() → None
+    async def seed(preset: str) → SeedResult
+    async def import_snapshot(prod_db_path: str) → ImportResult
+    async def stats() → MatrixStats
+```
+
+## What Makes This a Good Sandbox
+
+**Faithful to prod:**
+- Same sqlite schema
+- Same sqlite-vec for embeddings  
+- Same lock-in formula (4 weights, same state machine)
+- Same FTS5 + vector + RRF hybrid search
+- Same spreading activation algorithm
+
+**Better than prod for prototyping:**
+- Every operation emits events (prod doesn't yet)
+- `replay()` traces every phase (prod has no equivalent)
+- Tuning params are hot-swappable (prod requires restart)
+- Can reset/seed instantly
+- No risk of corrupting real memories
+- Can run pathological test data
+
+**What it DOESN'T have:**
+- No Scribe extraction pipeline (you add nodes manually or via seed)
+- No Librarian filing logic (you add edges manually or via seed)  
+- No Director inference (no LLM calls)
+- No conversation context management
+- No personality system
+
+Those are out of scope. This is a **retrieval algorithm testbed**, not a full agent.
+
+---
+
+## Event Bus (the connective tissue)
+
+```python
+# observatory_mcp/event_bus.py
+
+@dataclass
+class MemoryEvent:
+    type: str           # "node_created", "search_fts5", "activation_hop", etc.
+    timestamp: float
+    actor: str          # "matrix", "search", "activation", "cluster", "user"
+    payload: dict
+
+class EventBus:
+    """In-memory pub/sub. WebSocket relay subscribes to this."""
+    
+    def __init__(self):
+        self._subscribers: list[Callable] = []
+        self._history: deque[MemoryEvent] = deque(maxlen=1000)
+    
+    async def emit(self, event: MemoryEvent):
+        self._history.append(event)
+        for sub in self._subscribers:
+            await sub(event)
+    
+    def subscribe(self, callback) -> Callable:
+        self._subscribers.append(callback)
+        return lambda: self._subscribers.remove(callback)
+    
+    def recent(self, n=50, type_filter=None) -> list[MemoryEvent]:
+        ...
+```
+
+**Event types for retrieval replay** (the juicy ones):
+
+```
+search_started      → {query, method, params}
+search_fts5_done    → {results: [{id, score, snippet}], ms}
+search_vector_done  → {results: [{id, score, similarity}], ms}
+search_fusion_done  → {results: [{id, rrf_score, fts5_rank, vec_rank}], ms}
+activation_started  → {seed_ids, params}
+activation_hop      → {hop: 1, activated: [{id, activation, source_id, edge_type}]}
+activation_done     → {total_activated, by_hop: {0: n, 1: n, 2: n}}
+cluster_activated   → {clusters: [{id, name, activation, member_overlap}]}
+constellation_built → {included: [...], excluded: [...], tokens_used, budget}
+```
+
+Frontend subscribes to WebSocket, renders events as they arrive. You type a query in Claude → `sandbox_recall` fires → events stream to the Observatory → you watch the retrieval unfold node by node.
+
+---
+
+## Project Structure
+
+```
+observatory/
+├── mcp_server/
+│   ├── __init__.py
+│   ├── server.py              # FastMCP server + WebSocket
+│   ├── tools.py               # MCP tool definitions
+│   ├── sandbox_matrix.py      # Core memory system
+│   ├── event_bus.py           # Pub/sub
+│   ├── search.py              # FTS5, vector, hybrid, RRF
+│   ├── activation.py          # Spreading activation
+│   ├── clusters.py            # Cluster computation
+│   ├── lock_in.py             # Lock-in calculator
+│   ├── embeddings.py          # Embedding generation (local)
+│   ├── seeds/                 # Preset datasets
+│   │   ├── small_graph.json
+│   │   ├── stress_test.json
+│   │   └── pathological.json
+│   └── config.py              # Default tuning params
+│
+├── frontend/
+│   ├── package.json
+│   ├── vite.config.js
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── store.js           # Zustand state
+│   │   ├── ws.js              # WebSocket client
+│   │   ├── api.js             # REST client
+│   │   ├── views/
+│   │   │   ├── GraphView.jsx  # Force-directed graph
+│   │   │   ├── Timeline.jsx   # Event stream
+│   │   │   └── Replay.jsx     # Retrieval phase viewer
+│   │   └── components/
+│   │       ├── NodeCard.jsx
+│   │       ├── ClusterHull.jsx
+│   │       ├── LockInRing.jsx
+│   │       └── TuningPanel.jsx
+│   └── public/
+│
+├── sandbox_matrix.db          # Created at runtime, disposable
+├── sandbox_config.json        # Tuning params, persisted
+└── README.md
+```
+
+---
+
+## Build Order (revised)
+
+| Phase | What | Deliverable |
+|---|---|---|
+| **0** | Scaffold MCP server + SandboxMatrix + EventBus | `sandbox_reset`, `sandbox_seed("small_graph")`, `sandbox_stats` working |
+| **1** | Search implementations (FTS5 + vector + hybrid) | `sandbox_search` working, events emitting |
+| **2** | Spreading activation + lock-in + clusters | `sandbox_recall` working end-to-end |
+| **3** | WebSocket server + `/ws/events` | Events streaming to anything that connects |
+| **4** | Frontend: Graph View + WebSocket | See the sandbox graph live |
+| **5** | Frontend: Timeline + Replay | See retrieval unfold phase by phase |
+| **6** | `sandbox_replay` + Replay View | The prototyping power tool |
+| **7** | `sandbox_import_snapshot` | Test new algorithms on real data |
+
+Phase 0-3 is the MCP server. Phase 4-6 is the frontend. Phase 7 connects it back to reality.
+
+---
+
+**Trade-offs:**
+- **Separate MCP over extending Luna Hub** — Zero risk to prod. Can iterate wildly. Worth the code duplication of core algorithms.
+- **Sandbox DB over shared DB** — Obvious. Blow it away freely.
+- **Simplified actors over full pipeline** — We're testing retrieval, not extraction. Manual node/edge creation is fine.
+- **sqlite-vec over just cosine similarity** — Faithful to prod. Results will transfer.
+- **Local embeddings** — Need a small model for vectors. Could use `sentence-transformers/all-MiniLM-L6-v2` or whatever prod uses. This is the one dependency question.
+
+**Open question:** What does prod use for embeddings? That matters for `import_snapshot` to work — vectors need to be from the same model.
+
+Want me to start speccing Phase 0?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T04:58:27.925942Z
+prod?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T04:58:33.677414Z
+ Luna Hub. Your real engine. "Prod" as in production — the live system.
+
+Bad habit, I'll just say "Luna Hub" or "the real engine."
+
+So — what embedding model does Luna Hub use for its vectors? Need to match it in the sandbox so `import_snapshot` gives meaningful results.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T04:59:26.162315Z
+yo dude what do we use?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T04:59:46.733844Z
+
+
+Let me check the actual codebase.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Got it.
+
+**`all-MiniLM-L6-v2`** — 384 dimensions, local, free, ~50ms per embedding. Uses `sentence-transformers` library, stored as `FLOAT[384]` blobs in sqlite-vec.
+
+Sandbox uses the same model and same dimension. `import_snapshot` will just work — vectors are directly compatible.
+
+One dependency for the sandbox MCP: `pip install sentence-transformers sqlite-vec`. Same as Luna Hub.
+
+Ready to start Phase 0?
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T05:01:05.867389Z
+yeah but were doing this with claude flow / claude code so make him a handoff for development
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T05:01:32.401194Z
+
+
+Right — I architect, Claude Code builds. Let me write a proper handoff spec.
+```
+This block is not supported on your current device yet.
+```
+
+Markdown is the right format for this — it'll live in the codebase. Let me write the handoff spec.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T05:01:57.007176Z
+yeah but were doing this with claude flow / claude code so make him a handoff for development. Project folder here: here: /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root/Tools/MemoryMatrix_SandBox
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T05:09:12.485079Z
+
+```
+This block is not supported on your current device yet.
+```
+
+Empty directory. Good — clean slate. Let me also check what handoffs look like in your project:
+```
+This block is not supported on your current device yet.
+```
+
+Let me check one of the good ones for format conventions:
+```
+This block is not supported on your current device yet.
+```
+
+Good — that's a thorough reference for the format and level of detail. Now let me write the Observatory Sandbox handoff.
+```
+This block is not supported on your current device yet.
+```
+
+Now let me write the handoff. This is going to be substantial — it's the full development spec for Claude Code.
+```
+This block is not supported on your current device yet.
+```
+
+Now copy it to the project location:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Also copy to the Handoffs directory where all the other handoffs live:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Let me do this properly — write the full content to the Handoffs directory:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T05:14:24.625917Z
+Continue
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T05:18:32.409077Z
+
+
+Let me get the full file content and write it to the Handoffs directory properly:
+```
+This block is not supported on your current device yet.
+```
+
+Good, file is solid. Now I need to get it onto the user's filesystem at the Handoffs path. The Filesystem write tool has a line limit, so let me use Desktop Commander:
+```
+This block is not supported on your current device yet.
+```
+
+That approach won't work for a 1800-line file. Let me use a different strategy — write the file from Claude's computer to the user's filesystem using the Luna MCP tools which have no line limits:
+```
+This block is not supported on your current device yet.
+```
+
+76KB file. Let me write it to the Luna project via the Luna MCP write tool which can handle it:
+```
+This block is not supported on your current device yet.
+```
+
+Good. Now also place the full detailed version (with all implementation code) in the sandbox project directory itself:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me also put the full detailed version (with all the code implementations) into the sandbox folder:
+```
+This block is not supported on your current device yet.
+```
+
+Now present the downloadable file:
+```
+This block is not supported on your current device yet.
+```
+
+Done. Here's what got placed where:
+
+**Full detailed spec** (76KB with all code implementations):
+- `/mnt/user-data/outputs/` — downloadable above
+- This is the version with complete Python implementations for every module
+
+**Condensed handoff** (28KB, architecture + contracts + validation):
+- `Docs/bible/Handoffs/CLAUDE-CODE-HANDOFF-MEMORY-OBSERVATORY-SANDBOX.md` — in the Handoffs directory with the rest
+- `Tools/MemoryMatrix_SandBox/HANDOFF.md` — copy in the project root
+
+The condensed version has everything Claude Code needs: schema, algorithms, tool specs, build order, validation checklist, and critical implementation notes. The full version adds complete code for every module — Claude Code can reference it but should implement from the contracts, not copy-paste.
+
+**For Claude Code:** Point it at the handoff, tell it "Phase 1A — go." The build order is sequential and each phase has clear validation criteria.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T07:58:11.436140Z
+It’s finished I want to use the MCP, but I do not see it
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T08:00:17.220026Z
+ Let me check what's actually there and what Claude Desktop is looking for.
+```
+This block is not supported on your current device yet.
+```
+
+Good, the code's all there. Now let me check Claude Desktop config:
+```
+This block is not supported on your current device yet.
+```
+
+There it is — **Observatory-Sandbox MCP is not in the config.** Only Luna-Hub-MCP-V1 is registered.
+
+Let me also check how the server.py is set up so I get the command right:
+```
+This block is not supported on your current device yet.
+```
+
+Now check if there's a venv or if it uses the main project venv:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Everything imports clean. The server code is there, the venv has the deps. Just need to register it. Here's the fix:
+```
+This block is not supported on your current device yet.
+```
+
+Let me verify it's clean JSON:
+```
+This block is not supported on your current device yet.
+```
+
+**Done.** Observatory-Sandbox MCP is now registered in Claude Desktop config.
+
+**You need to restart Claude Desktop** for it to pick up the new MCP server. Quit and relaunch — you should then see the `sandbox_*` tools alongside the `luna_*` tools.
+
+The key bits:
+- Uses the **same venv** as Luna Hub (deps are already there)
+- `cwd` set to the sandbox directory so `python -m mcp_server.server` resolves correctly
+- Runs alongside Luna Hub — both MCPs active simultaneously
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T08:27:29.038114Z
+hey luna 
+I want to test the matrix observatory app. It should work now.
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T08:29:39.555035Z
+
+```
+This block is not supported on your current device yet.
+```
+
+Hey! Yeah let's do this — the Observatory MCP should be live now. Let me run through the basics and make sure everything's wired up.
+
+First, let's seed it with data so we have something to look at:
+```
+This block is not supported on your current device yet.
+```
+
+Hmm. Disk I/O — might be a stale WAL file or the DB path. Let me check what's going on:
+```
+This block is not supported on your current device yet.
+```
+
+Stale WAL/SHM from a previous run. Let me nuke those and check if the server module has any issues:
+```
+This block is not supported on your current device yet.
+```
+
+Now let me check if the server itself can initialize properly:
+```
+This block is not supported on your current device yet.
+```
+
+Matrix works clean. The issue is the MCP server process had a stale DB lock. Since I nuked the DB files, try again:
+```
+This block is not supported on your current device yet.
+```
+
+There we go. Now let's seed it:
+```
+This block is not supported on your current device yet.
+```
+
+20 nodes, 21 edges, 5 clusters loaded. Now let's test search:
+```
+This block is not supported on your current device yet.
+```
+
+Hybrid search is pulling the right stuff. Now the big one — full recall with spreading activation:
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T08:31:20.125997Z
+
+```
+This block is not supported on your current device yet.
+```
+
+Yo we're already rolling — check the previous messages! The MCP is live and responding. We just did:
+
+- ✅ `sandbox_reset` — clean slate
+- ✅ `sandbox_seed("small_graph")` — 20 nodes, 21 edges, 5 clusters loaded
+- ✅ `sandbox_search` — hybrid search pulling correct results for "robot body Mars College"
+- ✅ `sandbox_recall` — full spreading activation working, 7 keyword hits → 14 activated nodes across 2 hops, 4 clusters touched
+
+That last recall was the money shot — it started with robot/Mars nodes at hop 0, then spread to `decision-local-first` at hop 1 (because it ADDRESSES the latency problem), then reached me, Ahab, the sovereignty insight, Memory Matrix, and engine architecture at hop 2. That's the graph doing its job — connecting related concepts through edges.
+
+Want to try the **replay** tool? That's the killer feature — it traces every phase of the retrieval pipeline step by step so you can see exactly how FTS5 → Vector → Fusion → Activation → Assembly works:
+```
+This block is not supported on your current device yet.
+```
+
+*This* is the good stuff. Full pipeline trace:
+
+**Phase-by-phase breakdown:**
+
+| Phase | Time | What happened |
+|-------|------|--------------|
+| **FTS5** | 8ms | Full-text search found 12 hits — "local inference" scored highest on `problem-latency` and `decision-local-first` |
+| **Vector** | 753ms | Semantic search found 7 hits — `insight-sovereignty` topped it (0.507 similarity) because the *meaning* matches even without exact keywords |
+| **Fusion** | 19ms | RRF merged both lists — `insight-sovereignty` won overall because it scored well on *both* channels |
+| **Activation** | 8ms | 10 seeds → spreading activation discovered 8 more nodes across 2 hops. Hit all 5 clusters |
+| **Assembly** | 0.06ms | 18 nodes selected, 645 tokens, 21.5% of budget. Zero dropped |
+
+The interesting bit — FTS5 ranked `problem-latency` first (exact keyword "local inference"), but vector ranked `insight-sovereignty` first (semantic meaning of sovereignty). Fusion correctly merged them. That's why hybrid matters.
+
+**What do you want to hit next?** We could:
+- **Tune parameters** — adjust decay, min_activation, see how results change
+- **Add custom nodes** — test the write path
+- **Try stress_test seed** — 200+ nodes, see how it scales
+- **Try the frontend** — if it's built, spin up the Vite dev server
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T08:31:58.000450Z
+spin it up
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T08:35:32.197908Z
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Frontend proxies to port 8100. Let me check if the MCP server also runs the HTTP/WS side:
+```
+This block is not supported on your current device yet.
+```
+
+The MCP server already runs the HTTP/WS API on port 8100 in a background thread. So the API is live right now since the MCP is running. Just need to spin up the frontend:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+It's up — port 5173 was taken so it grabbed **5174**.
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Frontend's live! Shows "0 nodes / 0 edges / 0 clusters" — it connected to the API but the graph is empty from its perspective. The MCP server seeded data in its own process, but the HTTP API might be running a separate matrix instance. Let me check — or we can just hit Refresh to see if it pulls:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Still 0 nodes. The HTTP API is likely running a separate SandboxMatrix instance that opened a fresh DB. Let me check if the API endpoint is even responding:
+```
+This block is not supported on your current device yet.
+```
+
+The API is up but reports 0 nodes. The problem: **MCP mode runs FastMCP in the main thread**, which uses stdio transport. When Claude Desktop launched the MCP server, it initialized a matrix, but the HTTP background thread shares the same `matrix` object. The seed data we pushed through MCP tools created the DB file, but there may be a threading issue — or more likely, the MCP process that Claude Desktop spawns *is* the one with data, but the HTTP thread's matrix initialized before we seeded.
+
+Quick fix — seed through the HTTP API instead. Or just re-seed via MCP and the shared object should update:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Still 0. The MCP and HTTP server are using **separate matrix instances** or separate DB connections. Let me look at the shared state:
+```
+This block is not supported on your current device yet.
+```
+
+I see the issue. `matrix = SandboxMatrix(bus)` is module-level shared state. Both MCP tools and FastAPI routes reference the same `matrix` object. But there's a threading problem — the HTTP server runs in a `daemon thread` with its **own event loop**, while the MCP tools run in the main thread's event loop. The async sqlite connections aren't thread-safe across event loops.
+
+The fix is to run the HTTP server in the same event loop, or more practically for right now — just run the HTTP server standalone:
+```
+This block is not supported on your current device yet.
+```
+
+Port 8100 is already bound by the MCP server's background thread. So the HTTP server IS running — it's just not seeing the data because the MCP tools write to a different async connection/event loop.
+
+This is a real bug. The matrix's aiosqlite connection was created in one event loop (main/MCP) and can't be read from another (HTTP thread). Let me check the sandbox_matrix init:
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T08:43:38.129433Z
+
+
+Right — the HTTP/MCP event loop split is the blocker. The frontend can't see data because aiosqlite connections don't cross thread boundaries. Let me just bypass the broken HTTP path and serve the graph data directly to the frontend.
+
+Fastest fix: make the HTTP endpoints use their own synchronous sqlite connection instead of sharing the async one.
+```
+This block is not supported on your current device yet.
+```
+
+The HTTP routes use `await matrix.graph_dump()` etc — but when running in the daemon thread's event loop, the aiosqlite connection from the main loop is invalid. The cleanest fix: make the HTTP endpoints use **raw sqlite3** (synchronous) directly from the DB file. The MCP writes to disk, the HTTP reads from disk. SQLite WAL mode allows concurrent readers.
+```
+This block is not supported on your current device yet.
+```
+
+Need to add the Path import reference — let me check it's already imported:
+```
+This block is not supported on your current device yet.
+```
+
+Good, `Path` is already imported. Now restart Claude Desktop to pick up the server changes. But wait — we can't restart ourselves. Let me test the fix by running a standalone HTTP server on a different port:
+```
+This block is not supported on your current device yet.
+```
+
+The data IS on disk — sync reads work fine. The fix will work once the MCP server restarts. But we can't restart Claude Desktop from here. Let me spin up a **standalone** HTTP server on port 8101 with the sync approach so the frontend can see data right now:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+**20 nodes, 21 edges, 5 clusters** — the standalone API reads it fine. Now point the Vite proxy to 8101:
+```
+This block is not supported on your current device yet.
+```
+
+Vite should auto-reload with the config change. Let me kill the old vite process and restart:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+New Vite on 5175. Let me navigate:
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T08:44:18.303796Z
+
+
+Still showing 0. Let me check if the proxy is actually hitting the new backend and if the frontend is fetching correctly:
+```
+This block is not supported on your current device yet.
+```
+
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T08:47:27.919416Z
+ok i restarted it
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T08:48:55.391132Z
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+
+```
+This block is not supported on your current device yet.
+```
+
+Still 0. After restart the MCP re-initialized with a fresh DB (reset wiped it). Let me re-seed and check if the HTTP sync fix is working now:
+```
+This block is not supported on your current device yet.
+```
+
+Good, data seeded. Now check if the HTTP endpoint sees it (the restarted MCP should have my sync fix):
+```
+This block is not supported on your current device yet.
+```
+
+Still 0. The restart picked up the code change but the fix isn't working. Let me check if the server.py actually got my edit — it might have been overwritten on restart or the import failed:
+```
+This block is not supported on your current device yet.
+```
+
+
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T09:01:50.842407Z
+
+```
+This block is not supported on your current device yet.
+```
+
+MCP not connected yet. Give it a sec.
+```
+This block is not supported on your current device yet.
+```
+
+MCP server might still be initializing. Let me check if the HTTP side is even up:
+```
+This block is not supported on your current device yet.
+```
+
+Everything's still coming back online. Give Claude Desktop a moment to fully restart and reconnect the MCP servers. Try the seed again when you're ready, or let me know when the toolbar shows the MCP tools are connected.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2026-02-09T09:08:59.773963Z
+All queries work perfectly against the real DB. 20 nodes, 21 edges, 5 clusters with proper `label` aliasing and `member_ids` from the junction table.
+The fix was a single edit to server.py:149-166:
+What was wrong: The `/api/graph-dump` clusters query was `SELECT id, label, lock_in, member_ids FROM clusters` — but the actual schema has `name` (not `label`) and no `member_ids` column (members are in the `cluster_members` junction table). This caused a sqlite3 error, returning nothing to the frontend.
+What I fixed:
+* Query now selects the real columns: `id, name, lock_in, state, created_at, updated_at`
+* Aliases `name` → `label` in Python for frontend compatibility
+* Joins `cluster_members` to build the `member_ids` array per cluster
+* Filters edges to only include those connecting visible nodes (matching the async `graph_dump()` behavior)
+The `/api/stats` endpoint was already correct — no changes needed there.
+After restarting the MCP server (Claude Desktop restart), `curl http://localhost:8100/api/graph-dump` should return 20 nodes, 21 edges, and 5 clusters, and the frontend should render the graph. i restarted claude
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2026-02-09T09:09:04.581904Z
+
+
+--------------------------------------------------------------------------------

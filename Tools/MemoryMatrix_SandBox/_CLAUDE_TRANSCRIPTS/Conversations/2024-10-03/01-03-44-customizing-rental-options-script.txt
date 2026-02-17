@@ -1,0 +1,710 @@
+Conversation: Customizing Rental Options Script
+UUID: a2e25497-3b42-435f-bc3c-b3c19dc9c867
+Created: 2024-10-03T01:03:44.106687Z
+Updated: 2024-10-08T06:18:07.103507Z
+================================================================================
+
+[HUMAN] 2024-10-03T01:04:23.200903Z
+here is the script im working on but i want to out put the totals for each of the options also take away the makeup artist option. And option 4 for a long term rental option to be negotiated on price. Keep all script files and naming convention the same if possible
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2024-10-03T01:04:23.200903Z
+ I understand you'd like to modify the existing scripts to include totals for each option, remove the makeup artist option, and add a new Option 4 for long-term rental. I'll update both the CSV generator script and the GUI script to accommodate these changes. I'll keep the file names and overall structure the same.
+
+Let's start with updating the CSV generator script:
+
+
+
+```python
+import csv
+
+def get_user_input(prompt, data_type=float):
+    while True:
+        try:
+            return data_type(input(prompt))
+        except ValueError:
+            print("Invalid input. Please try again.")
+
+def create_pricing_sheet():
+    variables = {
+        'X': ('Photo Booth Rental (per day)', float),
+        'Y': ('Setup and Transportation Fee', float),
+        'A': ('Kiosk Rental (per day)', float),
+        'B': ('Photographer Rate (per hour)', float),
+        'C': ('Tech Support Rate (per hour)', float),
+        'Z': ('Venue Fee (for Option 2)', float),
+        'D': ('Extra Prints (per 100 prints)', float),
+        'E': ('Premium Camera Upgrade', float),
+        'F': ('Specialty Lighting', float),
+        'G': ('Custom Backdrop (starting price)', float),
+        'H': ('Themed Props (per set)', float),
+        'I': ('Custom Print Design', float),
+        'J': ('Additional Staff Member (per hour)', float),
+        'L': ('Additional Hour Rate', float),
+        'M': ('Full Day Extension Rate', float),
+        'N': ('Deposit Percentage', float),
+    }
+
+    values = {}
+    for var, (description, data_type) in variables.items():
+        values[var] = get_user_input(f"Enter value for {description} ({var}): ", data_type)
+
+    with open('Photo_Booth_Pricing.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Item", "Description", "Price"])
+
+        # Option 1
+        writer.writerow(["Option 1", "Client-Managed Event (Client keeps profit)", ""])
+        writer.writerow(["Basic Package", "", ""])
+        writer.writerow(["", f"Photo Booth Rental", f"${values['X']:.2f}/day"])
+        writer.writerow(["", f"Setup and Transportation", f"${values['Y']:.2f}"])
+        writer.writerow(["", "Customer Service Experience", "Included"])
+        total_option1 = values['X'] + values['Y']
+        writer.writerow(["", "Total for Basic Package", f"${total_option1:.2f}"])
+        writer.writerow(["Add-ons", "", ""])
+        writer.writerow(["", f"Kiosk Rental", f"+${values['A']:.2f}/day"])
+        writer.writerow(["", f"Photographer", f"+${values['B']:.2f}/hour"])
+        writer.writerow(["", f"Tech Support", f"+${values['C']:.2f}/hour"])
+
+        # Option 2
+        writer.writerow([])
+        writer.writerow(["Option 2", "We Manage Event (We keep profit)", ""])
+        writer.writerow(["Venue Fee", f"We pay for booth space", f"${values['Z']:.2f}"])
+        writer.writerow(["What We Provide", "Full Photo Booth Setup, Staff, All equipment, Customer Service", ""])
+        total_option2 = values['Z']
+        writer.writerow(["", "Total for Option 2", f"${total_option2:.2f}"])
+
+        # Option 3
+        writer.writerow([])
+        writer.writerow(["Option 3", "Profit-Sharing Model", ""])
+        writer.writerow(["Base Setup", "", ""])
+        writer.writerow(["", f"Photo Booth Rental", f"${values['X']:.2f}/day"])
+        writer.writerow(["", f"Setup and Transportation", f"${values['Y']:.2f}"])
+        writer.writerow(["", "Customer Service Experience", "Included"])
+        total_option3 = values['X'] + values['Y']
+        writer.writerow(["", "Total for Base Setup", f"${total_option3:.2f}"])
+        writer.writerow(["Profit Splitting Options", "50/50, 60/40, 70/30, or Custom (to be negotiated)", ""])
+
+        # Option 4
+        writer.writerow([])
+        writer.writerow(["Option 4", "Long-Term Rental", ""])
+        writer.writerow(["", "Price to be negotiated based on duration and specific requirements", ""])
+
+        # Additional Options
+        writer.writerow([])
+        writer.writerow(["Additional Options", "Apply to all packages", ""])
+        writer.writerow(["Extra Prints", f"Per 100 prints", f"${values['D']:.2f}"])
+        writer.writerow(["Premium Camera Upgrade", "", f"${values['E']:.2f}"])
+        writer.writerow(["Specialty Lighting", "", f"${values['F']:.2f}"])
+        writer.writerow(["Custom Backdrop", "Starting at", f"${values['G']:.2f}"])
+        writer.writerow(["Themed Props", "Per set", f"${values['H']:.2f}"])
+        writer.writerow(["Custom Print Design", "", f"${values['I']:.2f}"])
+        writer.writerow(["Additional Staff Member", "Per hour", f"${values['J']:.2f}"])
+        writer.writerow(["Additional Hour", "", f"${values['L']:.2f}"])
+        writer.writerow(["Full Day Extension", "", f"${values['M']:.2f}"])
+
+        # Notes
+        writer.writerow([])
+        writer.writerow(["Notes", "", ""])
+        writer.writerow(["", "Prices subject to change based on event specifics", ""])
+        writer.writerow(["", "Travel fees may apply for events outside standard service area", ""])
+        writer.writerow(["", f"Deposit of {values['N']}% required to secure booking", ""])
+        writer.writerow(["", "Cancellation fees may apply", ""])
+
+    print("Pricing sheet has been generated and saved as 'Photo_Booth_Pricing.csv'")
+
+if __name__ == "__main__":
+    create_pricing_sheet()
+```
+
+Now, let's update the GUI script:
+
+
+
+```python
+import tkinter as tk
+from tkinter import ttk, messagebox
+import csv
+
+class PhotoBoothPricingGUI:
+    def __init__(self, master):
+        self.master = master
+        master.title("Photo Booth Pricing Generator")
+        master.geometry("600x700")
+
+        self.variables = {
+            'X': ('Photo Booth Rental (per day)', float),
+            'Y': ('Setup and Transportation Fee', float),
+            'A': ('Kiosk Rental (per day)', float),
+            'B': ('Photographer Rate (per hour)', float),
+            'C': ('Tech Support Rate (per hour)', float),
+            'Z': ('Venue Fee (for Option 2)', float),
+            'D': ('Extra Prints (per 100 prints)', float),
+            'E': ('Premium Camera Upgrade', float),
+            'F': ('Specialty Lighting', float),
+            'G': ('Custom Backdrop (starting price)', float),
+            'H': ('Themed Props (per set)', float),
+            'I': ('Custom Print Design', float),
+            'J': ('Additional Staff Member (per hour)', float),
+            'L': ('Additional Hour Rate', float),
+            'M': ('Full Day Extension Rate', float),
+            'N': ('Deposit Percentage', float),
+        }
+
+        self.simulated_values = {
+            'X': 500.00, 'Y': 150.00, 'A': 100.00, 'B': 75.00, 'C': 50.00,
+            'Z': 200.00, 'D': 50.00, 'E': 150.00, 'F': 100.00, 'G': 200.00,
+            'H': 75.00, 'I': 125.00, 'J': 30.00, 'L': 100.00,
+            'M': 400.00, 'N': 25.00
+        }
+
+        self.entries = {}
+
+        # Create a canvas with a scrollbar
+        self.canvas = tk.Canvas(master)
+        self.scrollbar = ttk.Scrollbar(master, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        # Pack canvas and scrollbar
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # Create input fields
+        for var, (description, _) in self.variables.items():
+            frame = ttk.Frame(self.scrollable_frame)
+            frame.pack(fill='x', padx=5, pady=5)
+            
+            label = ttk.Label(frame, text=f"{description} ({var}):")
+            label.pack(side='left')
+            
+            entry = ttk.Entry(frame)
+            entry.insert(0, str(self.simulated_values[var]))  # Pre-fill with simulated value
+            entry.pack(side='right', expand=True)
+            
+            self.entries[var] = entry
+
+        # Generate button
+        self.generate_button = ttk.Button(self.scrollable_frame, text="Generate Pricing Sheet", command=self.generate_pricing_sheet)
+        self.generate_button.pack(pady=20)
+
+    def generate_pricing_sheet(self):
+        values = {}
+        for var, entry in self.entries.items():
+            try:
+                values[var] = float(entry.get())
+            except ValueError:
+                messagebox.showerror("Error", f"Invalid input for {self.variables[var][0]}. Please enter a number.")
+                return
+
+        self.create_csv_sheet(values)
+        messagebox.showinfo("Success", "Pricing sheet has been generated and saved as 'Photo_Booth_Pricing.csv'")
+
+    def create_csv_sheet(self, values):
+        with open('Photo_Booth_Pricing.csv', 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Item", "Description", "Price"])
+
+            # Option 1
+            writer.writerow(["Option 1", "Client-Managed Event (Client keeps profit)", ""])
+            writer.writerow(["Basic Package", "", ""])
+            writer.writerow(["", f"Photo Booth Rental", f"${values['X']:.2f}/day"])
+            writer.writerow(["", f"Setup and Transportation", f"${values['Y']:.2f}"])
+            writer.writerow(["", "Customer Service Experience", "Included"])
+            total_option1 = values['X'] + values['Y']
+            writer.writerow(["", "Total for Basic Package", f"${total_option1:.2f}"])
+            writer.writerow(["Add-ons", "", ""])
+            writer.writerow(["", f"Kiosk Rental", f"+${values['A']:.2f}/day"])
+            writer.writerow(["", f"Photographer", f"+${values['B']:.2f}/hour"])
+            writer.writerow(["", f"Tech Support", f"+${values['C']:.2f}/hour"])
+
+            # Option 2
+            writer.writerow([])
+            writer.writerow(["Option 2", "We Manage Event (We keep profit)", ""])
+            writer.writerow(["Venue Fee", f"We pay for booth space", f"${values['Z']:.2f}"])
+            writer.writerow(["What We Provide", "Full Photo Booth Setup, Staff, All equipment, Customer Service", ""])
+            total_option2 = values['Z']
+            writer.writerow(["", "Total for Option 2", f"${total_option2:.2f}"])
+
+            # Option 3
+            writer.writerow([])
+            writer.writerow(["Option 3", "Profit-Sharing Model", ""])
+            writer.writerow(["Base Setup", "", ""])
+            writer.writerow(["", f"Photo Booth Rental", f"${values['X']:.2f}/day"])
+            writer.writerow(["", f"Setup and Transportation", f"${values['Y']:.2f}"])
+            writer.writerow(["", "Customer Service Experience", "Included"])
+            total_option3 = values['X'] + values['Y']
+            writer.writerow(["", "Total for Base Setup", f"${total_option3:.2f}"])
+            writer.writerow(["Profit Splitting Options", "50/50, 60/40, 70/30, or Custom (to be negotiated)", ""])
+
+            # Option 4
+            writer.writerow([])
+            writer.writerow(["Option 4", "Long-Term Rental", ""])
+            writer.writerow(["", "Price to be negotiated based on duration and specific requirements", ""])
+
+            # Additional Options
+            writer.writerow([])
+            writer.writerow(["Additional Options", "Apply to all packages", ""])
+            writer.writerow(["Extra Prints", f"Per 100 prints", f"${values['D']:.2f}"])
+            writer.writerow(["Premium Camera Upgrade", "", f"${values['E']:.2f}"])
+            writer.writerow(["Specialty Lighting", "", f"${values['F']:.2f}"])
+            writer.writerow(["Custom Backdrop", "Starting at", f"${values['G']:.2f}"])
+            writer.writerow(["Themed Props", "Per set", f"${values['H']:.2f}"])
+            writer.writerow(["Custom Print Design", "", f"${values['I']:.2f}"])
+            writer.writerow(["Additional Staff Member", "Per hour", f"${values['J']:.2f}"])
+            writer.writerow(["Additional Hour", "", f"${values['L']:.2f}"])
+            writer.writerow(["Full Day Extension", "", f"${values['M']:.2f}"])
+
+            # Notes
+            writer.writerow([])
+            writer.writerow(["Notes", "", ""])
+            writer.writerow(["", "Prices subject to change based on event specifics", ""])
+            writer.writerow(["", "Travel fees may apply for events outside standard service area", ""])
+            writer.writerow(["", f"Deposit of {values['N']}% required to secure booking", ""])
+            writer.writerow(["", "Cancellation fees may apply", ""])
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = PhotoBoothPricingGUI(root)
+    root.mainloop()
+```
+
+These updated scripts include the following changes:
+
+1. Removed the makeup artist option from both scripts.
+2. Added totals for Options 1, 2, and 3 in both scripts.
+3. Added Option 4 for long-term rental in both scripts, with a note that the price is to be negotiated.
+4. Kept the file names and overall structure the same.
+
+The
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2024-10-08T05:48:58.253422Z
+why wont my gui launch?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2024-10-08T05:48:58.253422Z
+ I apologize for the confusion. The GUI should launch, but there might be an issue preventing it from doing so. Let's troubleshoot this step by step:
+
+1. First, make sure you have the required libraries installed. The GUI script uses tkinter, which comes pre-installed with most Python distributions, but it's worth checking.
+
+2. Let's simplify the GUI script to isolate any potential issues. Here's a minimal version that should definitely launch:
+
+
+
+```python
+import tkinter as tk
+from tkinter import ttk
+
+class SimplePhotoBoothPricingGUI:
+    def __init__(self, master):
+        self.master = master
+        master.title("Simple Photo Booth Pricing Generator")
+        master.geometry("300x200")
+
+        label = ttk.Label(master, text="Photo Booth Pricing Generator")
+        label.pack(pady=20)
+
+        button = ttk.Button(master, text="Generate Pricing Sheet", command=self.dummy_function)
+        button.pack()
+
+    def dummy_function(self):
+        print("Button clicked!")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = SimplePhotoBoothPricingGUI(root)
+    root.mainloop()
+```
+
+Try running this simplified version. If it launches, then we know the issue is with the complexity of the full script, not with your Python environment or tkinter installation.
+
+3. If the simplified version doesn't launch, there might be an issue with your Python installation or tkinter. Here are some things to check:
+
+   a. Make sure you're running the script with the correct Python version.
+   b. Try running the script from the command line to see if there are any error messages.
+   c. Verify that tkinter is installed correctly. You can do this by opening a Python interactive shell and typing:
+      ```python
+      import tkinter
+      tkinter._test()
+      ```
+      This should open a small window if tkinter is installed correctly.
+
+4. If the simplified version does launch, but the full version doesn't, the issue might be related to the scrollable frame or the large number of widgets. In this case, we might need to optimize the full script.
+
+5. Another possibility is that the GUI is launching but is not visible (perhaps off-screen). Try moving your mouse to different corners of your screen to see if you can find the window.
+
+6. Lastly, ensure that your script isn't getting stuck in an infinite loop or encountering an unhandled exception before it reaches the `root.mainloop()` call.
+
+If you're still having trouble after trying these steps, please provide more information:
+
+- What operating system are you using?
+- What version of Python are you using?
+- Are you running the script from an IDE or the command line?
+- Do you see any error messages when you try to run the script?
+
+With this information, we can better diagnose and solve the issue.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2024-10-08T05:50:59.693968Z
+nter value for Photo Booth Rental (per day) (X): /usr/bin/python3 /Users/zayneamason/Documents/Coding/PricingList/photobooth_pricing_gui.py
+Invalid input. Please try again.
+Enter value for Photo Booth Rental (per day) (X): /usr/bin/python3 /Users/zayneamason/Documents/Coding/PricingList/photobooth_pricing_csv_generator.py
+Invalid input. Please try again.
+Enter value for Photo Booth Rental (per day) (X): /usr/bin/python3 /Users/zayneamason/Documents/Coding/PricingList/photobooth_pricing_csv_generator.py
+Invalid input. Please try again.
+Enter value for Photo Booth Rental (per day) (X):
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2024-10-08T05:50:59.693968Z
+ I see the issue now. It appears that you're trying to run the GUI script, but it's actually executing the CSV generator script instead. This is causing confusion because the CSV generator script is prompting for input in the terminal, which is not what we want when launching the GUI.
+
+Let's address this step-by-step:
+
+1. Make sure you're running the correct file. You want to run `photobooth_pricing_gui.py`, not `photobooth_pricing_csv_generator.py`.
+
+2. It seems like your command to run the Python script is being interpreted as input for the CSV generator. This suggests that you might have a script or alias set up incorrectly, or you're running the wrong file.
+
+3. To run the GUI script correctly, open a terminal and navigate to the directory containing your scripts. Then run:
+
+   ```
+   python3 photobooth_pricing_gui.py
+   ```
+
+   Or, if you're on Windows:
+
+   ```
+   python photobooth_pricing_gui.py
+   ```
+
+4. If you're using an IDE, make sure you're opening and running the `photobooth_pricing_gui.py` file, not the CSV generator.
+
+5. Let's modify the GUI script slightly to help debug. We'll add a print statement at the beginning to confirm it's running:
+
+
+
+```python
+import tkinter as tk
+from tkinter import ttk, messagebox
+import csv
+
+print("Starting Photo Booth Pricing GUI...")
+
+class PhotoBoothPricingGUI:
+    def __init__(self, master):
+        print("Initializing GUI...")
+        self.master = master
+        master.title("Photo Booth Pricing Generator")
+        master.geometry("600x700")
+
+        self.variables = {
+            'X': ('Photo Booth Rental (per day)', float),
+            'Y': ('Setup and Transportation Fee', float),
+            # ... [rest of the variables] ...
+        }
+
+        self.simulated_values = {
+            'X': 500.00, 'Y': 150.00, 'A': 100.00, 'B': 75.00, 'C': 50.00,
+            # ... [rest of the simulated values] ...
+        }
+
+        self.entries = {}
+
+        # Create a canvas with a scrollbar
+        self.canvas = tk.Canvas(master)
+        self.scrollbar = ttk.Scrollbar(master, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        # Pack canvas and scrollbar
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # Create input fields
+        for var, (description, _) in self.variables.items():
+            frame = ttk.Frame(self.scrollable_frame)
+            frame.pack(fill='x', padx=5, pady=5)
+            
+            label = ttk.Label(frame, text=f"{description} ({var}):")
+            label.pack(side='left')
+            
+            entry = ttk.Entry(frame)
+            entry.insert(0, str(self.simulated_values[var]))  # Pre-fill with simulated value
+            entry.pack(side='right', expand=True)
+            
+            self.entries[var] = entry
+
+        # Generate button
+        self.generate_button = ttk.Button(self.scrollable_frame, text="Generate Pricing Sheet", command=self.generate_pricing_sheet)
+        self.generate_button.pack(pady=20)
+
+        print("GUI initialization complete.")
+
+    def generate_pricing_sheet(self):
+        print("Generate button clicked.")
+        # ... [rest of the method] ...
+
+    def create_csv_sheet(self, values):
+        print("Creating CSV sheet...")
+        # ... [rest of the method] ...
+
+if __name__ == "__main__":
+    print("Creating Tk instance...")
+    root = tk.Tk()
+    print("Creating PhotoBoothPricingGUI instance...")
+    app = PhotoBoothPricingGUI(root)
+    print("Starting main loop...")
+    root.mainloop()
+    print("GUI closed.")
+```
+
+Replace your current `photobooth_pricing_gui.py` with this version. Then try running it again using the command:
+
+```
+python3 /Users/zayneamason/Documents/Coding/PricingList/photobooth_pricing_gui.py
+```
+
+This should either launch the GUI or give you more informative error messages about what's going wrong.
+
+If you're still having issues, please provide the output you see when running this updated script. This will help us pinpoint exactly where the problem is occurring.
+
+--------------------------------------------------------------------------------
+
+[HUMAN] 2024-10-08T06:18:07.103507Z
+i want to be able to toggle option on and off, can i get a function of that thats nested within the gui script?
+
+--------------------------------------------------------------------------------
+
+[ASSISTANT] 2024-10-08T06:18:07.103507Z
+ Certainly! I can help you add a feature to toggle options on and off within the GUI script. We'll add checkboxes for each option, allowing users to enable or disable them as needed. This will require modifying the existing GUI script to include these toggles and adjust the pricing calculations accordingly.
+
+Here's an updated version of the GUI script with the toggle functionality:
+
+
+
+```python
+import tkinter as tk
+from tkinter import ttk, messagebox
+import csv
+
+class PhotoBoothPricingGUI:
+    def __init__(self, master):
+        self.master = master
+        master.title("Photo Booth Pricing Generator")
+        master.geometry("800x700")
+
+        self.variables = {
+            'X': ('Photo Booth Rental (per day)', float),
+            'Y': ('Setup and Transportation Fee', float),
+            'A': ('Kiosk Rental (per day)', float),
+            'B': ('Photographer Rate (per hour)', float),
+            'C': ('Tech Support Rate (per hour)', float),
+            'Z': ('Venue Fee (for Option 2)', float),
+            'D': ('Extra Prints (per 100 prints)', float),
+            'E': ('Premium Camera Upgrade', float),
+            'F': ('Specialty Lighting', float),
+            'G': ('Custom Backdrop (starting price)', float),
+            'H': ('Themed Props (per set)', float),
+            'I': ('Custom Print Design', float),
+            'J': ('Additional Staff Member (per hour)', float),
+            'L': ('Additional Hour Rate', float),
+            'M': ('Full Day Extension Rate', float),
+            'N': ('Deposit Percentage', float),
+        }
+
+        self.simulated_values = {
+            'X': 500.00, 'Y': 150.00, 'A': 100.00, 'B': 75.00, 'C': 50.00,
+            'Z': 200.00, 'D': 50.00, 'E': 150.00, 'F': 100.00, 'G': 200.00,
+            'H': 75.00, 'I': 125.00, 'J': 30.00, 'L': 100.00,
+            'M': 400.00, 'N': 25.00
+        }
+
+        self.entries = {}
+        self.toggles = {}
+
+        # Create a canvas with a scrollbar
+        self.canvas = tk.Canvas(master)
+        self.scrollbar = ttk.Scrollbar(master, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        # Pack canvas and scrollbar
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # Create input fields and toggles
+        for var, (description, _) in self.variables.items():
+            frame = ttk.Frame(self.scrollable_frame)
+            frame.pack(fill='x', padx=5, pady=5)
+            
+            toggle_var = tk.BooleanVar(value=True)
+            toggle = ttk.Checkbutton(frame, variable=toggle_var, command=lambda v=var: self.toggle_option(v))
+            toggle.pack(side='left')
+            
+            label = ttk.Label(frame, text=f"{description} ({var}):")
+            label.pack(side='left')
+            
+            entry = ttk.Entry(frame)
+            entry.insert(0, str(self.simulated_values[var]))
+            entry.pack(side='right', expand=True)
+            
+            self.entries[var] = entry
+            self.toggles[var] = toggle_var
+
+        # Generate button
+        self.generate_button = ttk.Button(self.scrollable_frame, text="Generate Pricing Sheet", command=self.generate_pricing_sheet)
+        self.generate_button.pack(pady=20)
+
+    def toggle_option(self, var):
+        is_enabled = self.toggles[var].get()
+        self.entries[var].config(state='normal' if is_enabled else 'disabled')
+
+    def generate_pricing_sheet(self):
+        values = {}
+        for var, entry in self.entries.items():
+            if self.toggles[var].get():
+                try:
+                    values[var] = float(entry.get())
+                except ValueError:
+                    messagebox.showerror("Error", f"Invalid input for {self.variables[var][0]}. Please enter a number.")
+                    return
+            else:
+                values[var] = 0.0
+
+        self.create_csv_sheet(values)
+        messagebox.showinfo("Success", "Pricing sheet has been generated and saved as 'Photo_Booth_Pricing.csv'")
+
+    def create_csv_sheet(self, values):
+        with open('Photo_Booth_Pricing.csv', 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["Item", "Description", "Price"])
+
+            # Option 1
+            writer.writerow(["Option 1", "Client-Managed Event (Client keeps profit)", ""])
+            writer.writerow(["Basic Package", "", ""])
+            if values['X'] > 0:
+                writer.writerow(["", f"Photo Booth Rental", f"${values['X']:.2f}/day"])
+            if values['Y'] > 0:
+                writer.writerow(["", f"Setup and Transportation", f"${values['Y']:.2f}"])
+            writer.writerow(["", "Customer Service Experience", "Included"])
+            total_option1 = values['X'] + values['Y']
+            writer.writerow(["", "Total for Basic Package", f"${total_option1:.2f}"])
+            writer.writerow(["Add-ons", "", ""])
+            if values['A'] > 0:
+                writer.writerow(["", f"Kiosk Rental", f"+${values['A']:.2f}/day"])
+            if values['B'] > 0:
+                writer.writerow(["", f"Photographer", f"+${values['B']:.2f}/hour"])
+            if values['C'] > 0:
+                writer.writerow(["", f"Tech Support", f"+${values['C']:.2f}/hour"])
+
+            # Option 2
+            writer.writerow([])
+            writer.writerow(["Option 2", "We Manage Event (We keep profit)", ""])
+            if values['Z'] > 0:
+                writer.writerow(["Venue Fee", f"We pay for booth space", f"${values['Z']:.2f}"])
+            writer.writerow(["What We Provide", "Full Photo Booth Setup, Staff, All equipment, Customer Service", ""])
+            total_option2 = values['Z']
+            writer.writerow(["", "Total for Option 2", f"${total_option2:.2f}"])
+
+            # Option 3
+            writer.writerow([])
+            writer.writerow(["Option 3", "Profit-Sharing Model", ""])
+            writer.writerow(["Base Setup", "", ""])
+            if values['X'] > 0:
+                writer.writerow(["", f"Photo Booth Rental", f"${values['X']:.2f}/day"])
+            if values['Y'] > 0:
+                writer.writerow(["", f"Setup and Transportation", f"${values['Y']:.2f}"])
+            writer.writerow(["", "Customer Service Experience", "Included"])
+            total_option3 = values['X'] + values['Y']
+            writer.writerow(["", "Total for Base Setup", f"${total_option3:.2f}"])
+            writer.writerow(["Profit Splitting Options", "50/50, 60/40, 70/30, or Custom (to be negotiated)", ""])
+
+            # Option 4
+            writer.writerow([])
+            writer.writerow(["Option 4", "Long-Term Rental", ""])
+            writer.writerow(["", "Price to be negotiated based on duration and specific requirements", ""])
+
+            # Additional Options
+            writer.writerow([])
+            writer.writerow(["Additional Options", "Apply to all packages", ""])
+            if values['D'] > 0:
+                writer.writerow(["Extra Prints", f"Per 100 prints", f"${values['D']:.2f}"])
+            if values['E'] > 0:
+                writer.writerow(["Premium Camera Upgrade", "", f"${values['E']:.2f}"])
+            if values['F'] > 0:
+                writer.writerow(["Specialty Lighting", "", f"${values['F']:.2f}"])
+            if values['G'] > 0:
+                writer.writerow(["Custom Backdrop", "Starting at", f"${values['G']:.2f}"])
+            if values['H'] > 0:
+                writer.writerow(["Themed Props", "Per set", f"${values['H']:.2f}"])
+            if values['I'] > 0:
+                writer.writerow(["Custom Print Design", "", f"${values['I']:.2f}"])
+            if values['J'] > 0:
+                writer.writerow(["Additional Staff Member", "Per hour", f"${values['J']:.2f}"])
+            if values['L'] > 0:
+                writer.writerow(["Additional Hour", "", f"${values['L']:.2f}"])
+            if values['M'] > 0:
+                writer.writerow(["Full Day Extension", "", f"${values['M']:.2f}"])
+
+            # Notes
+            writer.writerow([])
+            writer.writerow(["Notes", "", ""])
+            writer.writerow(["", "Prices subject to change based on event specifics", ""])
+            writer.writerow(["", "Travel fees may apply for events outside standard service area", ""])
+            writer.writerow(["", f"Deposit of {values['N']}% required to secure booking", ""])
+            writer.writerow(["", "Cancellation fees may apply", ""])
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = PhotoBoothPricingGUI(root)
+    root.mainloop()
+```
+
+This updated script includes the following changes:
+
+1. Added checkboxes (toggles) next to each input field.
+2. Implemented a `toggle_option` method that enables or disables the corresponding input field when a checkbox is clicked.
+3. Modified the `generate_pricing_sheet` method to only include values for enabled options.
+4. Updated the `create_csv_sheet` method to only write rows for enabled options (those with values greater than 0).
+
+To use this new functionality:
+
+1. Each option now has a checkbox next to it.
+2. When a checkbox is unchecked, the corresponding input field will be disabled, and its value won't be included in the generated pricing sheet.
+3. When generating the pricing sheet, only the enabled (checked) options will be included in the calculations and the CSV output.
+
+This allows for more flexible pricing configurations, as you can easily enable or disable specific options for different scenarios or client requirements.
+
+--------------------------------------------------------------------------------
