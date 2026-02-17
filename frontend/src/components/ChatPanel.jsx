@@ -6,6 +6,8 @@ import { VoiceTuningPanel } from './VoiceTuningPanel';
 import { OrbSettingsPanel } from './OrbSettingsPanel';
 import { FallbackChainPanel } from './FallbackChainPanel';
 import { ServerMonitorPanel } from './ServerMonitorPanel';
+import AnnotatedText from './AnnotatedText';
+import { useNavigation } from '../hooks/useNavigation';
 
 // Highlight keywords in text for debug mode
 const highlightKeywords = (text, keywords) => {
@@ -55,7 +57,7 @@ const SLASH_COMMANDS = [
   { command: '/prompt', description: 'Show last system prompt sent to LLM', icon: '📋' },
 ];
 
-const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => {
+const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [] }) => {
   const [input, setInput] = useState('');
   const [showCommands, setShowCommands] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -68,6 +70,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
   const inputRef = useRef(null);
   const animationTimeoutRef = useRef(null);
   const { orbState, isConnected } = useOrbState();
+  const { navigate } = useNavigation();
 
   // Panel update handlers
   const handleVoiceUpdate = async (values) => {
@@ -245,12 +248,12 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
   };
 
   return (
-    <GlassCard className="flex flex-col h-full" padding="p-0" hover={false}>
+    <GlassCard className="flex flex-col h-full" padding="p-0" hover={false} glow>
       {/* Header */}
-      <div className="flex-shrink-0 px-6 py-4 border-b border-white/10">
+      <div className="flex-shrink-0 px-6 py-4 border-b border-kozmo-border">
         <div className="flex items-center gap-3">
-          <div className="w-1 h-6 bg-gradient-to-b from-violet-400 to-cyan-400 rounded-full" />
-          <h2 className="text-lg font-light tracking-wide text-white/90">Chat</h2>
+          <div className="w-1 h-6 bg-kozmo-accent rounded-full" style={{ boxShadow: '0 0 12px rgba(192,132,252,0.5), 0 0 4px rgba(192,132,252,0.8)' }} />
+          <h2 className="text-lg font-display font-semibold tracking-tight text-white/90">Chat</h2>
         </div>
       </div>
 
@@ -267,7 +270,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
         />
 
         {messages.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-white/30 text-sm">
+          <div className="flex items-center justify-center h-full text-kozmo-muted text-sm">
             Start a conversation with Luna
           </div>
         ) : (
@@ -277,16 +280,20 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                className={`max-w-[80%] rounded px-4 py-3 ${
                   msg.role === 'user'
-                    ? 'bg-gradient-to-r from-violet-500/20 to-cyan-500/20 border border-violet-400/30 text-white/90'
-                    : 'bg-white/5 border border-white/10 text-white/80'
+                    ? 'bg-kozmo-accent/10 border border-kozmo-accent/30 text-white/90'
+                    : 'bg-kozmo-surface border border-kozmo-border text-white/80'
                 }`}
               >
                 <p className="text-sm whitespace-pre-wrap">
                   {debugKeywords.length > 0
                     ? highlightKeywords(msg.content, debugKeywords)
-                    : msg.content}
+                    : <AnnotatedText
+                        text={msg.content}
+                        entities={entities}
+                        onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
+                      />}
                 </p>
                 {(msg.model || msg.delegated || msg.local || msg.fallback) && (
                   <div className="mt-2 flex items-center gap-3 text-xs">
@@ -307,10 +314,10 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
                         <span>cloud</span>
                       </span>
                     ) : (
-                      <span className="text-white/30">{msg.model}</span>
+                      <span className="text-kozmo-muted">{msg.model}</span>
                     )}
-                    {msg.tokens && <span className="text-white/30">{msg.tokens} tokens</span>}
-                    {msg.latency && <span className="text-white/30">{msg.latency}ms</span>}
+                    {msg.tokens && <span className="text-kozmo-muted">{msg.tokens} tokens</span>}
+                    {msg.latency && <span className="text-kozmo-muted">{msg.latency}ms</span>}
                   </div>
                 )}
               </div>
@@ -320,11 +327,11 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
 
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-white/5 border border-white/10 rounded-2xl px-4 py-3">
+            <div className="bg-kozmo-surface border border-kozmo-border rounded px-4 py-3">
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-                <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" style={{ animationDelay: '0.2s' }} />
-                <div className="w-2 h-2 rounded-full bg-pink-400 animate-pulse" style={{ animationDelay: '0.4s' }} />
+                <div className="w-2 h-2 rounded-full bg-kozmo-accent animate-pulse" />
+                <div className="w-2 h-2 rounded-full bg-kozmo-accent animate-pulse" style={{ animationDelay: '0.2s' }} />
+                <div className="w-2 h-2 rounded-full bg-kozmo-accent animate-pulse" style={{ animationDelay: '0.4s' }} />
               </div>
             </div>
           </div>
@@ -334,12 +341,12 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
       </div>
 
       {/* Input */}
-      <form onSubmit={handleSubmit} className="flex-shrink-0 p-4 border-t border-white/10 relative">
+      <form onSubmit={handleSubmit} className="flex-shrink-0 p-4 border-t border-kozmo-border relative">
         {/* Slash command dropdown */}
         {showCommands && (
-          <div className="absolute bottom-full left-4 right-4 mb-2 bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-xl overflow-hidden shadow-2xl z-50">
-            <div className="px-3 py-2 border-b border-white/10">
-              <span className="text-xs text-white/40">Commands</span>
+          <div className="absolute bottom-full left-4 right-4 mb-2 bg-kozmo-surface backdrop-blur-xl border border-kozmo-border rounded overflow-hidden shadow-2xl z-50">
+            <div className="px-3 py-2 border-b border-kozmo-border">
+              <span className="text-xs text-kozmo-muted">Commands</span>
             </div>
             <div className="max-h-64 overflow-y-auto">
               {filteredCommands.map((cmd, i) => (
@@ -349,8 +356,8 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
                   onClick={() => selectCommand(cmd)}
                   className={`w-full px-3 py-2.5 flex items-center gap-3 text-left transition-all ${
                     i === selectedIndex
-                      ? 'bg-violet-500/20 border-l-2 border-violet-400'
-                      : 'hover:bg-white/5 border-l-2 border-transparent'
+                      ? 'bg-kozmo-accent/20 border-l-2 border-kozmo-accent'
+                      : 'hover:bg-kozmo-surface border-l-2 border-transparent'
                   }`}
                 >
                   <span className="text-lg">{cmd.icon}</span>
@@ -358,13 +365,13 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-white/90">{cmd.command}</span>
                       {cmd.placeholder && (
-                        <span className="text-xs text-white/30">{cmd.placeholder}</span>
+                        <span className="text-xs text-kozmo-muted">{cmd.placeholder}</span>
                       )}
                     </div>
-                    <p className="text-xs text-white/50 truncate">{cmd.description}</p>
+                    <p className="text-xs text-kozmo-muted truncate">{cmd.description}</p>
                   </div>
                   {i === selectedIndex && (
-                    <span className="text-xs text-white/30 px-1.5 py-0.5 bg-white/10 rounded">↵</span>
+                    <span className="text-xs text-kozmo-muted px-1.5 py-0.5 bg-kozmo-surface rounded">↵</span>
                   )}
                 </button>
               ))}
@@ -381,12 +388,18 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [] }) => 
             onKeyDown={handleKeyDown}
             placeholder="Message Luna... (type / for commands)"
             disabled={isLoading}
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white/90 placeholder-white/30 focus:outline-none focus:border-violet-400/50 transition-all disabled:opacity-50"
+            className="flex-1 font-mono bg-kozmo-surface border border-kozmo-border rounded px-4 py-3 text-sm text-white/90 placeholder-white/30 focus:outline-none focus:border-kozmo-accent/50 transition-all disabled:opacity-50"
+            style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03), 0 2px 8px rgba(0,0,0,0.3)' }}
           />
           <button
             type="submit"
             disabled={!input.trim() || isLoading}
-            className="px-6 py-3 rounded-xl bg-gradient-to-r from-violet-500/20 to-cyan-500/20 border border-violet-400/30 text-white/80 text-sm hover:border-violet-400/50 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            className="px-6 py-3 rounded text-white/90 text-sm font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            style={{
+              background: 'linear-gradient(135deg, rgba(192,132,252,0.2), rgba(129,140,248,0.15))',
+              border: '1px solid rgba(192,132,252,0.3)',
+              boxShadow: '0 0 20px rgba(192,132,252,0.1), inset 0 1px 0 rgba(255,255,255,0.05)',
+            }}
           >
             Send
           </button>

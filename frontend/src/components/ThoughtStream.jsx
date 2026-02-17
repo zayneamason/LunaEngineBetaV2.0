@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import GlassCard from './GlassCard';
+import AnnotatedText from './AnnotatedText';
+import { useNavigation } from '../hooks/useNavigation';
 
-const ThoughtStream = ({ apiUrl = 'http://localhost:8000' }) => {
+const ThoughtStream = ({ apiUrl = 'http://127.0.0.1:8000', entities = [] }) => {
   const [thoughts, setThoughts] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentGoal, setCurrentGoal] = useState(null);
   const streamRef = useRef(null);
   const containerRef = useRef(null);
+  const { navigate } = useNavigation();
 
   useEffect(() => {
     // Connect to thought stream SSE
@@ -74,8 +77,8 @@ const ThoughtStream = ({ apiUrl = 'http://localhost:8000' }) => {
   };
 
   const getPhaseColor = (message) => {
-    if (message.includes('[OBSERVE]')) return 'text-cyan-400';
-    if (message.includes('[THINK]')) return 'text-violet-400';
+    if (message.includes('[OBSERVE]')) return 'text-kozmo-accent';
+    if (message.includes('[THINK]')) return 'text-kozmo-accent';
     if (message.includes('[ACT:')) return 'text-amber-400';
     if (message.includes('[OK]')) return 'text-emerald-400';
     if (message.includes('[FAIL]')) return 'text-red-400';
@@ -101,10 +104,10 @@ const ThoughtStream = ({ apiUrl = 'http://localhost:8000' }) => {
   return (
     <GlassCard padding="p-0" hover={false}>
       {/* Header */}
-      <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-kozmo-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-1 h-5 bg-gradient-to-b from-violet-400 to-cyan-400 rounded-full" />
-          <h3 className="text-sm font-light tracking-wide text-white/80">Thought Stream</h3>
+          <div className="w-1 h-5 bg-kozmo-accent rounded-full" style={{ boxShadow: '0 0 12px rgba(192,132,252,0.5), 0 0 4px rgba(192,132,252,0.8)' }} />
+          <h3 className="text-sm font-display font-semibold tracking-tight text-white/80">Thought Stream</h3>
         </div>
         <div className="flex items-center gap-2">
           {isProcessing && (
@@ -116,8 +119,8 @@ const ThoughtStream = ({ apiUrl = 'http://localhost:8000' }) => {
 
       {/* Current Goal */}
       {currentGoal && (
-        <div className="px-4 py-2 bg-white/5 border-b border-white/5">
-          <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Current Goal</div>
+        <div className="px-4 py-2 bg-kozmo-surface border-b border-kozmo-border/50">
+          <div className="text-[10px] text-kozmo-muted uppercase tracking-wider mb-1">Current Goal</div>
           <div className="text-xs text-white/70 truncate">{currentGoal}</div>
         </div>
       )}
@@ -125,10 +128,10 @@ const ThoughtStream = ({ apiUrl = 'http://localhost:8000' }) => {
       {/* Thought Stream */}
       <div
         ref={containerRef}
-        className="h-48 overflow-y-auto p-3 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-white/10"
+        className="h-48 overflow-y-auto p-3 font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-kozmo-border"
       >
         {thoughts.length === 0 ? (
-          <div className="text-white/30 text-center py-8">
+          <div className="text-kozmo-muted text-center py-8">
             Waiting for Luna's thoughts...
           </div>
         ) : (
@@ -140,7 +143,11 @@ const ThoughtStream = ({ apiUrl = 'http://localhost:8000' }) => {
               <span className="text-white/20 flex-shrink-0">{thought.timestamp}</span>
               <span className="flex-shrink-0">{getPhaseIcon(thought.message)}</span>
               <span className={getPhaseColor(thought.message)}>
-                {thought.message}
+                <AnnotatedText
+                  text={thought.message}
+                  entities={entities}
+                  onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
+                />
               </span>
             </div>
           ))
@@ -159,7 +166,7 @@ const ThoughtStream = ({ apiUrl = 'http://localhost:8000' }) => {
       </div>
 
       {/* Footer */}
-      <div className="px-4 py-2 border-t border-white/5 flex justify-between text-[10px] text-white/30">
+      <div className="px-4 py-2 border-t border-kozmo-border/50 flex justify-between text-[10px] text-kozmo-muted">
         <span>{thoughts.length} thoughts</span>
         <span>{isConnected ? 'Live' : 'Disconnected'}</span>
       </div>
