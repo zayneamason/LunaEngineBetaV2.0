@@ -174,6 +174,9 @@ class ScribeActor(Actor):
         self._turn_count_in_flow: int = 0
         self._open_actions: list[dict] = []
 
+        # Entity hints from LocalSubtaskRunner (gates expensive extraction)
+        self._last_entity_hints: Optional[list] = None  # None = no hints received yet
+
         logger.info(f"Scribe (Ben) initialized with backend: {self.config.backend}")
 
     @property
@@ -206,6 +209,9 @@ class ScribeActor(Actor):
             case "entity_note":
                 await self._handle_entity_note(msg)
 
+            case "entity_hints":
+                self._handle_entity_hints(msg)
+
             case "flush_stack":
                 await self._flush_stack()
 
@@ -220,6 +226,22 @@ class ScribeActor(Actor):
 
             case _:
                 logger.warning(f"Ben: Unknown message type: {msg.type}")
+
+    def _handle_entity_hints(self, msg: Message) -> None:
+        """
+        Receive entity hints from LocalSubtaskRunner (Qwen 3B NER).
+
+        These hints gate expensive Claude Haiku extraction:
+        - If zero entities detected, skip deep extraction for this turn
+        - If entities found, pass as hints to improve extraction accuracy
+        """
+        payload = msg.payload or {}
+        entities = payload.get("entities", [])
+        self._last_entity_hints = entities
+        if entities:
+            logger.info(f"Ben: Received {len(entities)} entity hints: {[e.get('name') for e in entities[:5]]}")
+        else:
+            logger.debug("Ben: Received empty entity hints (turn is pure chat)")
 
     async def _handle_extract_turn(self, msg: Message) -> None:
         """
@@ -250,6 +272,17 @@ class ScribeActor(Actor):
         if len(content) < self.config.min_content_length:
             logger.debug(f"Ben: Skipping short content ({len(content)} chars)")
             return
+
+        # ENTITY HINT GATING: If Qwen NER found zero entities, skip expensive
+        # Claude extraction for this turn. Pure chat ("lol", "ok", "thanks")
+        # doesn't need deep extraction. Reset hints after consuming.
+        if self._last_entity_hints is not None and len(self._last_entity_hints) == 0:
+            logger.info("Ben: Skipping extraction (no entities detected by NER)")
+            self._last_entity_hints = None  # Reset for next turn
+            return
+        # Consume and reset hints
+        entity_hints = self._last_entity_hints
+        self._last_entity_hints = None
 
         # Create turn and chunk it
         turn = Turn(id=turn_id, role=role, content=content)
@@ -410,12 +443,15 @@ class ScribeActor(Actor):
             f"open_threads={len(flow_signal.open_threads)}"
         )
 
-        if not extraction.is_empty():
+        # Always send to Librarian when a flow signal exists — even on empty
+        # extractions — so RECALIBRATION/AMEND signals reach thread management.
+        if not extraction.is_empty() or extraction.flow_signal is not None:
             await self._send_to_librarian(extraction)
-            logger.info(
-                f"Ben: Extracted {len(extraction.objects)} objects, "
-                f"{len(extraction.edges)} edges"
-            )
+            if not extraction.is_empty():
+                logger.info(
+                    f"Ben: Extracted {len(extraction.objects)} objects, "
+                    f"{len(extraction.edges)} edges"
+                )
 
         # Send entity updates to Librarian
         if entity_updates:
@@ -580,6 +616,14 @@ class ScribeActor(Actor):
         try:
             if self.config.backend == "local":
                 extraction, entity_updates = await self._extract_local(conversation_text, source_id)
+                # Fallback: if local returned empty, try the Director's fallback chain
+                if extraction.is_empty() and not entity_updates:
+                    extraction, entity_updates = await self._extract_via_fallback(conversation_text, source_id)
+            elif self.config.backend in ("haiku", "sonnet"):
+                extraction, entity_updates = await self._extract_claude(conversation_text, source_id)
+                # Fallback: if Claude credits exhausted, try the fallback chain
+                if extraction.is_empty() and not entity_updates:
+                    extraction, entity_updates = await self._extract_via_fallback(conversation_text, source_id)
             else:
                 extraction, entity_updates = await self._extract_claude(conversation_text, source_id)
 
@@ -696,6 +740,44 @@ class ScribeActor(Actor):
             logger.warning("Ben: No engine reference — cannot access local model.")
 
         return (ExtractionOutput(), [])
+
+    async def _extract_via_fallback(
+        self,
+        text: str,
+        source_id: str,
+    ) -> tuple[ExtractionOutput, list[EntityUpdate]]:
+        """
+        Extract using Director's fallback chain (Groq → Gemini → Claude).
+
+        Called when primary backend (local or Claude) fails or returns empty.
+        Uses the same fallback infrastructure as conversation generation.
+        """
+        if not self.engine:
+            return (ExtractionOutput(), [])
+
+        director = self.engine.get_actor("director")
+        if not director or not hasattr(director, "_fallback_chain") or not director._fallback_chain:
+            logger.debug("Ben: No fallback chain available for extraction")
+            return (ExtractionOutput(), [])
+
+        try:
+            result = await director._fallback_chain.generate(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Extract knowledge from this conversation:\n\n{text}",
+                    }
+                ],
+                system=EXTRACTION_SYSTEM_PROMPT,
+                max_tokens=self.config.max_tokens,
+            )
+
+            logger.info(f"Ben: Fallback extraction via {result.provider_used}")
+            return self._parse_extraction_response(result.content, source_id)
+
+        except Exception as e:
+            logger.warning(f"Ben: Fallback extraction failed: {e}")
+            return (ExtractionOutput(), [])
 
     def _parse_extraction_response(
         self,

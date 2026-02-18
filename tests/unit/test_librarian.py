@@ -281,7 +281,7 @@ class TestLibrarianEdgeCreation:
         """Test LibrarianActor creates edges between nodes."""
         mock_graph = Mock()
         mock_graph.has_edge = Mock(return_value=False)
-        mock_graph.add_edge = Mock()
+        mock_graph.add_edge = AsyncMock()
 
         mock_matrix_actor = Mock()
         mock_matrix_actor._graph = mock_graph
@@ -345,11 +345,14 @@ class TestLibrarianPruning:
     async def test_librarian_prunes_edges(self, mock_librarian_actor, mock_engine):
         """Test LibrarianActor prunes low-confidence edges."""
         mock_graph = Mock()
-        mock_graph.get_all_edges = Mock(return_value=[
-            {"from_id": "a", "to_id": "b", "edge_type": "weak", "weight": 0.1},
-            {"from_id": "c", "to_id": "d", "edge_type": "strong", "weight": 0.9},
+        # _prune_edges iterates graph.graph.edges(data=True) — mock the NetworkX interface
+        mock_nx_graph = Mock()
+        mock_nx_graph.edges = Mock(return_value=[
+            ("a", "b", {"strength": 0.1, "created_at": "2025-01-01T00:00:00"}),
+            ("c", "d", {"strength": 0.9, "created_at": "2025-01-01T00:00:00"}),
         ])
-        mock_graph.remove_edge = Mock()
+        mock_graph.graph = mock_nx_graph
+        mock_graph.remove_edge = AsyncMock()
 
         mock_matrix_actor = Mock()
         mock_matrix_actor._graph = mock_graph

@@ -238,12 +238,18 @@ class TestAPIHandlesEngineError:
     async def test_engine_not_ready_returns_503(self):
         """Test that 503 is returned when Engine not ready."""
         from luna.api.server import app
+        import luna.api.server as server_module
 
-        # Patch engine to None (not ready)
-        with patch('luna.api.server._engine', None):
-            with TestClient(app, raise_server_exceptions=False) as client:
+        # TestClient triggers lifespan which creates a real engine.
+        # We need to set _engine = None AFTER the client starts.
+        with TestClient(app, raise_server_exceptions=False) as client:
+            saved = server_module._engine
+            try:
+                server_module._engine = None
                 response = client.get("/status")
                 assert response.status_code == 503
+            finally:
+                server_module._engine = saved
 
 
 @pytest.mark.integration
@@ -378,15 +384,21 @@ class TestAPIEndpoints:
         }
 
         from luna.api.server import app
+        import luna.api.server as server_module
 
-        with patch('luna.api.server._engine', mock_engine):
-            with TestClient(app) as client:
+        # Lifespan creates a real engine; replace it after startup
+        with TestClient(app) as client:
+            saved = server_module._engine
+            try:
+                server_module._engine = mock_engine
                 response = client.get("/status")
                 assert response.status_code == 200
 
                 data = response.json()
                 assert "agentic" in data
                 assert data["agentic"]["is_processing"] is True
+            finally:
+                server_module._engine = saved
 
 
 @pytest.mark.integration

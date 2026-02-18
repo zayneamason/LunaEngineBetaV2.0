@@ -37,6 +37,13 @@ from luna.agentic.loop import AgentLoop, AgentStatus, AgentResult
 from luna.agentic.router import QueryRouter, ExecutionPath
 from luna.agentic.planner import Planner
 
+# Local subtask runner (Qwen 3B lightweight agentic dispatch)
+try:
+    from luna.inference.subtasks import LocalSubtaskRunner, SubtaskPhaseResult
+    SUBTASK_RUNNER_AVAILABLE = True
+except ImportError:
+    SUBTASK_RUNNER_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,12 +147,14 @@ class LunaEngine:
         # Agentic components (Phase XIV)
         self.router = QueryRouter()
         self.agent_loop: Optional[AgentLoop] = None  # Initialized in _boot
+        self._subtask_runner: Optional["LocalSubtaskRunner"] = None  # Initialized in _boot
 
         # Concurrent task handling - talk while processing
         self._current_task: Optional[asyncio.Task] = None
         self._current_goal: Optional[str] = None
         self._pending_messages: List[str] = []  # Queue for messages during processing
         self._is_processing = False
+        self._stream_owns_response = False  # When True, streaming endpoint handles turn recording
 
         # Callbacks for external integration
         self._on_response_callbacks: list[Callable] = []
@@ -329,6 +338,17 @@ Emojis can accompany gestures or stand alone.
         self.agent_loop = AgentLoop(orchestrator=self, max_iterations=50)
         self.agent_loop.on_progress(self._handle_agent_progress)
         logger.info("AgentLoop initialized")
+
+        # Initialize LocalSubtaskRunner (Qwen 3B lightweight agentic dispatch)
+        if SUBTASK_RUNNER_AVAILABLE:
+            director = self.get_actor("director")
+            if director and director.local_available:
+                self._subtask_runner = LocalSubtaskRunner(director._local)
+                logger.info("LocalSubtaskRunner initialized (Qwen 3B subtasks active)")
+            else:
+                logger.info("LocalSubtaskRunner skipped (local model not available)")
+        else:
+            logger.debug("LocalSubtaskRunner module not available")
 
         # Initialize voice system if enabled
         if self.config.voice_enabled:
@@ -549,7 +569,12 @@ Emojis can accompany gestures or stand alone.
         # 4. History Manager tick (process compression/extraction queues)
         history = self.get_actor("history_manager")
         if history and hasattr(history, "tick"):
-            await history.tick()
+            try:
+                await asyncio.wait_for(history.tick(), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("History manager tick timed out (2s)")
+            except Exception as e:
+                logger.warning(f"History manager tick error: {e}")
 
         # 5. Rebalance rings (decay happens in reflective loop, not every tick)
         self.context._rebalance_rings()
@@ -559,13 +584,21 @@ Emojis can accompany gestures or stand alone.
             await self.consciousness.save()
 
     async def _dispatch_event(self, event: InputEvent) -> None:
-        """Route event to appropriate actor(s)."""
+        """Route event to appropriate actor(s).
+
+        User messages are dispatched as background tasks so the cognitive
+        tick loop is never blocked by long-running agentic pipelines.
+        """
         logger.debug(f"Dispatching: {event}")
 
         match event.type:
             case EventType.TEXT_INPUT | EventType.TRANSCRIPT_FINAL:
                 user_message = event.payload
-                await self._handle_user_message(user_message, event.correlation_id)
+                cid = event.correlation_id or "anon"
+                asyncio.create_task(
+                    self._handle_user_message(user_message, cid),
+                    name=f"msg-{cid[:8]}",
+                )
 
             case EventType.USER_INTERRUPT:
                 # Abort current task/generation
@@ -630,19 +663,18 @@ Emojis can accompany gestures or stand alone.
         await self._process_message_agentic(user_message, correlation_id)
 
     async def _process_message_agentic(self, user_message: str, correlation_id: str) -> None:
-        """Process message through the agentic pipeline (router → planner → loop)."""
+        """Process message through the agentic pipeline (subtasks → router → planner → loop)."""
         self._is_processing = True
         self._current_goal = user_message
         self.metrics.agentic_tasks_started += 1
 
         try:
-            # Route the query
-            routing = self.router.analyze(user_message)
-            logger.info(f"Routing: {routing.path.name} (complexity={routing.complexity:.2f})")
+            # ══════════════════════════════════════════════════════════════
+            # PHASE 1: Run Qwen subtasks in parallel with memory retrieval
+            # Subtasks: intent classification, entity extraction, query rewriting
+            # These run concurrently — total wall time ≈ max(subtask, memory)
+            # ══════════════════════════════════════════════════════════════
 
-            # Retrieve memory context AND conversation history
-            memory_context = ""
-            history_context = None
             matrix = self.get_actor("matrix")
             history_manager = self.get_actor("history_manager")
 
@@ -653,29 +685,97 @@ Emojis can accompany gestures or stand alone.
                 source="text",
             )
 
-            # Build history context (may include Recent tier search if backward ref detected)
-            if history_manager and history_manager.is_ready:
-                history_context = await history_manager.build_history_context(user_message)
+            # Build recent turns list for query rewriting context
+            recent_turns = []
+            director = self.get_actor("director")
+            if director and hasattr(director, '_active_ring'):
+                ring = director._active_ring
+                recent_turns = [
+                    f"{'User' if t.get('role') == 'user' else 'Luna'}: {t.get('content', '')[:200]}"
+                    for t in ring.get_recent(4)
+                ] if hasattr(ring, 'get_recent') else []
 
-            if matrix and matrix.is_ready:
-                # Load recent conversation history into context (if not already there)
-                await self._load_conversation_history(matrix, limit=10)
+            # Fire subtasks + memory/history retrieval concurrently
+            subtask_phase = None
+            parallel_tasks = []
 
-                # Retrieve semantic memory context
-                memory_context = await matrix.get_context(user_message, max_tokens=1500)
-                if memory_context:
-                    self.context.add(
-                        content=memory_context,
-                        source=ContextSource.MEMORY,
-                    )
+            if self._subtask_runner and self._subtask_runner.is_available:
+                parallel_tasks.append(
+                    self._subtask_runner.run_subtask_phase(user_message, recent_turns)
+                )
+            else:
+                parallel_tasks.append(asyncio.sleep(0))  # no-op placeholder
 
-            # Handle based on execution path
+            # Memory retrieval (existing)
+            async def _retrieve_context():
+                memory_context = ""
+                history_context = None
+
+                if history_manager and history_manager.is_ready:
+                    history_context = await history_manager.build_history_context(user_message)
+
+                if matrix and matrix.is_ready:
+                    await self._load_conversation_history(matrix, limit=10)
+
+                    # Use rewritten query for better retrieval if available
+                    retrieval_query = user_message
+                    if subtask_phase and subtask_phase.rewritten_query:
+                        retrieval_query = subtask_phase.rewritten_query
+                        logger.info(f"[SUBTASK] Using rewritten query for retrieval: {retrieval_query[:60]}...")
+
+                    memory_context = await matrix.get_context(retrieval_query, max_tokens=1500)
+                    if memory_context:
+                        self.context.add(content=memory_context, source=ContextSource.MEMORY)
+
+                    dataroom_context = await self._get_dataroom_context(matrix, user_message)
+                    if dataroom_context:
+                        memory_context = (memory_context or "") + "\n\n" + dataroom_context
+                        self.context.add(content=dataroom_context, source=ContextSource.MEMORY)
+
+                return memory_context, history_context
+
+            # Run subtasks first (they're fast), then memory retrieval
+            # (memory retrieval can use the rewritten query from subtasks)
+            if self._subtask_runner and self._subtask_runner.is_available:
+                subtask_phase = await self._subtask_runner.run_subtask_phase(
+                    user_message, recent_turns
+                )
+            else:
+                subtask_phase = SubtaskPhaseResult() if SUBTASK_RUNNER_AVAILABLE else None
+
+            memory_context, history_context = await _retrieve_context()
+
+            # ══════════════════════════════════════════════════════════════
+            # PHASE 2: Route using semantic classification or regex fallback
+            # ══════════════════════════════════════════════════════════════
+
+            if subtask_phase and subtask_phase.intent:
+                routing = self.router.from_intent(subtask_phase.intent, user_message)
+                logger.info(f"Routing (semantic): {routing.path.name} (complexity={routing.complexity:.2f})")
+            else:
+                routing = self.router.analyze(user_message)
+                logger.info(f"Routing (regex): {routing.path.name} (complexity={routing.complexity:.2f})")
+
+            # ══════════════════════════════════════════════════════════════
+            # PHASE 3: Pass entity hints to Scribe (gates Claude Haiku)
+            # ══════════════════════════════════════════════════════════════
+
+            if subtask_phase and subtask_phase.entities is not None:
+                scribe = self.get_actor("scribe")
+                if scribe and scribe.is_ready:
+                    await scribe.mailbox.put(Message(
+                        type="entity_hints",
+                        payload={"entities": subtask_phase.entities, "message": user_message},
+                    ))
+
+            # ══════════════════════════════════════════════════════════════
+            # PHASE 4: Execute based on routing decision
+            # ══════════════════════════════════════════════════════════════
+
             if routing.path == ExecutionPath.DIRECT:
-                # Skip planning, go straight to Director
                 self.metrics.direct_responses += 1
                 await self._process_direct(user_message, correlation_id, memory_context, history_context)
             else:
-                # Use AgentLoop for planned execution
                 self.metrics.planned_responses += 1
                 await self._process_with_agent_loop(user_message, correlation_id, memory_context, history_context)
 
@@ -981,12 +1081,8 @@ Emojis can accompany gestures or stand alone.
                 text = data.get("text", "")
 
                 logger.info(f"Generation complete: {len(text)} chars")
-                self.metrics.messages_generated += 1
 
-                # Note: Progress emission moved to streaming endpoint to avoid duplicates
-
-                # Only add valid responses to revolving context
-                # This filters out clarification echoes and partial responses
+                # Always add valid responses to revolving context
                 if self._is_valid_response(text, self._current_goal or ""):
                     self.context.add(
                         content=f"Luna: {text}",
@@ -995,20 +1091,21 @@ Emojis can accompany gestures or stand alone.
                 else:
                     logger.info(f"Skipped storing invalid response: '{text[:50]}...'")
 
-                # Record assistant turn through unified API
-                await self.record_conversation_turn(
-                    role="assistant",
-                    content=text,
-                    source="text",
-                    tokens=data.get("output_tokens"),
-                )
+                # If streaming endpoint owns post-processing, skip turn recording
+                # and metrics — the endpoint handles those itself to avoid doubles
+                if not self._stream_owns_response:
+                    self.metrics.messages_generated += 1
+                    await self.record_conversation_turn(
+                        role="assistant",
+                        content=text,
+                        source="text",
+                        tokens=data.get("output_tokens"),
+                    )
 
-                # Advance the turn counter (drives TTL expiration and decay)
-                # A "turn" = user message + Luna response
+                # Always advance turn counter and fire callbacks
                 new_turn = self.context.advance_turn()
                 logger.debug(f"Turn {new_turn} complete")
 
-                # Notify callbacks
                 for callback in self._on_response_callbacks:
                     try:
                         await callback(text, data)
@@ -1071,6 +1168,116 @@ Emojis can accompany gestures or stand alone.
     # =========================================================================
     # Context Assembly
     # =========================================================================
+
+    async def _get_dataroom_context(self, matrix, query: str) -> str:
+        """
+        Check if query is about Data Room documents and return formatted context.
+
+        Detects queries about documents, files, legal, financials, etc.
+        and searches DOCUMENT nodes specifically.
+        """
+        query_lower = query.lower()
+
+        # Keywords that indicate a Data Room query
+        dataroom_signals = [
+            "document", "documents", "docs", "files", "file",
+            "legal", "loi", "letter of intent",
+            "financials", "financial", "budget", "cost",
+            "proposal", "presentation", "deck", "pitch",
+            "data room", "dataroom",
+            "team", "portfolio", "resume",
+            "partnership", "partnerships",
+            "product", "architecture",
+            "market", "competition",
+            "overview", "company",
+            "bible", "manifesto",
+            "investor", "investment",
+        ]
+
+        # Category mapping for targeted queries
+        category_hints = {
+            "legal": "3. Legal",
+            "loi": "3. Legal",
+            "letter of intent": "3. Legal",
+            "financial": "2. Financials",
+            "budget": "2. Financials",
+            "cost": "2. Financials",
+            "team": "6. Team",
+            "portfolio": "6. Team",
+            "product": "4. Product",
+            "architecture": "4. Product",
+            "market": "5. Market & Competition",
+            "competition": "5. Market & Competition",
+            "overview": "1. Company Overview",
+            "company": "1. Company Overview",
+            "proposal": "1. Company Overview",
+            "partnership": "8. Partnerships & Impact",
+            "investor": "9. Risk & Mitigation",
+            "pitch": "9. Risk & Mitigation",
+            "go-to-market": "7. Go-to-Market",
+        }
+
+        if not any(sig in query_lower for sig in dataroom_signals):
+            return ""
+
+        try:
+            memory = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+            if not memory:
+                return ""
+
+            # Determine if there's a specific category match
+            target_category = None
+            for keyword, category in category_hints.items():
+                if keyword in query_lower:
+                    target_category = category
+                    break
+
+            # Search DOCUMENT nodes
+            if target_category:
+                import json as _json
+                rows = await memory.db.fetchall(
+                    "SELECT id, content, summary, metadata FROM memory_nodes "
+                    "WHERE node_type = 'DOCUMENT' AND metadata LIKE ? "
+                    "ORDER BY importance DESC LIMIT 20",
+                    (f'%"{target_category}"%',),
+                )
+            else:
+                rows = await memory.db.fetchall(
+                    "SELECT id, content, summary, metadata FROM memory_nodes "
+                    "WHERE node_type = 'DOCUMENT' "
+                    "ORDER BY importance DESC LIMIT 20",
+                )
+
+            if not rows:
+                return ""
+
+            # Format as directive context so Luna presents the docs
+            import json as _json
+            lines = [
+                "## Data Room Documents (PRESENT THESE TO THE USER)",
+                "The user is asking about documents. List them with names, types, status, and Google Drive links.",
+            ]
+            if target_category:
+                lines.append(f"Category: {target_category}\n")
+
+            for row in rows:
+                _id, content, summary, meta_str = row[0], row[1], row[2], row[3]
+                meta = _json.loads(meta_str) if meta_str else {}
+                name = (summary or content).split(" \u2014 ")[0]  # Just the filename
+                cat = meta.get("category", "")
+                ftype = meta.get("file_type", "")
+                url = meta.get("gdrive_url", "")
+                status = meta.get("status", "")
+                if url and "drive.google.com" in url:
+                    lines.append(f"- {name} [{ftype}] ({status}) \u2014 Link: {url}")
+                else:
+                    lines.append(f"- {name} [{ftype}] ({status})")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.warning(f"Data Room context retrieval failed: {e}")
+            return ""
 
     async def _load_conversation_history(self, matrix, limit: int = 10) -> int:
         """
@@ -1559,6 +1766,7 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
                 "direct_responses": self.metrics.direct_responses,
                 "planned_responses": self.metrics.planned_responses,
                 "agent_loop_status": self.agent_loop.status.name if self.agent_loop else "NOT_INITIALIZED",
+                "subtask_runner": self._subtask_runner.get_stats() if self._subtask_runner else None,
             },
             # Project scoping
             "active_project": self._active_project,

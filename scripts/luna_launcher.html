@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Luna Engine Launcher</title>
+<style>
+  :root {
+    --bg: #0a0e17; --surface: #111827; --border: #1e293b;
+    --text: #e2e8f0; --muted: #94a3b8; --dim: #64748b;
+    --accent: #7c3aed; --green: #10b981; --warm: #f59e0b; --red: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif;
+    padding: 32px; min-height: 100vh;
+  }
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 14px; color: var(--muted); margin-bottom: 28px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px; transition: opacity 0.2s;
+  }
+  .card.disabled { opacity: 0.5; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .card-title { font-size: 14px; font-weight: 600; }
+  .card-desc { font-size: 12px; color: var(--dim); margin-bottom: 12px; }
+  .toggle {
+    background: var(--accent); color: #fff; border: none; border-radius: 12px;
+    padding: 4px 14px; font-size: 11px; cursor: pointer; font-family: inherit;
+  }
+  .toggle.off { background: #1a2332; color: var(--dim); border: 1px solid var(--border); }
+  .port-row { display: flex; align-items: center; gap: 8px; }
+  .port-label { font-size: 12px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+  input[type="number"] {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; width: 90px; outline: none;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  input[type="number"]:focus { border-color: var(--accent); }
+  .default-hint { font-size: 11px; color: var(--warm); }
+  .section-label {
+    font-size: 11px; color: var(--dim); font-weight: 600; letter-spacing: 1px;
+    text-transform: uppercase; margin-bottom: 8px;
+  }
+  .profile-row { display: flex; gap: 8px; margin-bottom: 24px; }
+  .profile-btn {
+    background: var(--surface); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 18px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .profile-btn.active { border-color: var(--accent); color: var(--accent); }
+  .output-box {
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: var(--text); line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+    margin-bottom: 16px;
+  }
+  .btn-row { display: flex; gap: 10px; margin-bottom: 24px; }
+  .btn {
+    border: none; border-radius: 8px; padding: 10px 22px; font-size: 13px;
+    font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  .btn-primary { background: var(--green); color: #fff; }
+  .btn-secondary { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+  .btn-secondary:hover { color: var(--text); border-color: var(--accent); }
+  .toast {
+    position: fixed; bottom: 24px; right: 24px; background: var(--green);
+    color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 13px;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .instructions { font-size: 12px; color: var(--dim); line-height: 1.6; margin-top: 4px; }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<h1>Luna Engine Launcher</h1>
+<p class="subtitle">Configure services, pick a profile, copy the CLI command or save the config file.</p>
+
+<div class="section-label">Profiles</div>
+<div class="profile-row" id="profiles"></div>
+
+<div class="section-label">Services</div>
+<div class="grid" id="services"></div>
+
+<div class="two-col">
+  <div>
+    <div class="section-label">CLI Command</div>
+    <div class="output-box" id="cli-output"></div>
+  </div>
+  <div>
+    <div class="section-label">luna.launch.json</div>
+    <div class="output-box" id="json-output"></div>
+  </div>
+</div>
+
+<div class="btn-row">
+  <button class="btn btn-secondary" onclick="copyCommand()">Copy Command</button>
+  <button class="btn btn-primary" onclick="saveConfig()">Save Config</button>
+  <label class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:6px;">
+    Load Config <input type="file" accept=".json" onchange="loadConfig(event)" style="display:none">
+  </label>
+</div>
+<p class="instructions">Save downloads <code>luna.launch.json</code>. Move it: <code>mv ~/Downloads/luna.launch.json config/</code></p>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var DEFAULTS = {
+  backend:     { port: 8000, enabled: true, host: "0.0.0.0", debug: false },
+  frontend:    { port: 5173, enabled: true },
+  observatory: { port: 8100, enabled: false, start_production: false },
+  tunnel:      { enabled: false, patch_apps_script: true }
+};
+
+var PROFILES = {
+  "default":  { backend: true, frontend: true, observatory: false, tunnel: false },
+  "full":     { backend: true, frontend: true, observatory: true,  tunnel: true },
+  "api-only": { backend: true, frontend: false, observatory: false, tunnel: false }
+};
+
+var LABELS = {
+  backend:     { name: "Luna Backend",         desc: "FastAPI server \u2014 message processing, memory, delegation" },
+  frontend:    { name: "Eclissi Frontend",      desc: "Vite dev server \u2014 chat UI, observatory, Kozmo" },
+  observatory: { name: "Observatory Sandbox",   desc: "Memory Matrix debug server \u2014 graph visualization" },
+  tunnel:      { name: "Cloudflare Tunnel",     desc: "Public URL \u2014 for Google Sheets sidebar + remote access" }
+};
+
+var config = JSON.parse(JSON.stringify(DEFAULTS));
+var activeProfile = "";
+
+function render() {
+  // Profiles
+  var ph = "";
+  Object.keys(PROFILES).forEach(function(name) {
+    var cls = activeProfile === name ? "profile-btn active" : "profile-btn";
+    ph += '<button class="' + cls + '" onclick="applyProfile(\'' + name + '\')">' + name + '</button>';
+  });
+  document.getElementById("profiles").innerHTML = ph;
+
+  // Service cards
+  var sh = "";
+  Object.keys(LABELS).forEach(function(key) {
+    var svc = config[key];
+    var info = LABELS[key];
+    var hasPort = key !== "tunnel";
+    var disClass = svc.enabled ? "" : " disabled";
+    var toggleClass = svc.enabled ? "toggle" : "toggle off";
+
+    sh += '<div class="card' + disClass + '">';
+    sh += '  <div class="card-header">';
+    sh += '    <span class="card-title">' + info.name + '</span>';
+    sh += '    <button class="' + toggleClass + '" onclick="toggleSvc(\'' + key + '\')">' + (svc.enabled ? "ON" : "OFF") + '</button>';
+    sh += '  </div>';
+    sh += '  <div class="card-desc">' + info.desc + '</div>';
+    if (hasPort && svc.enabled) {
+      sh += '  <div class="port-row">';
+      sh += '    <span class="port-label">port:</span>';
+      sh += '    <input type="number" value="' + svc.port + '" onchange="setPort(\'' + key + '\', this.value)">';
+      if (svc.port !== DEFAULTS[key].port) {
+        sh += '    <span class="default-hint">(default: ' + DEFAULTS[key].port + ')</span>';
+      }
+      sh += '  </div>';
+    }
+    sh += '</div>';
+  });
+  document.getElementById("services").innerHTML = sh;
+
+  // CLI command
+  var parts = ["./scripts/launch_luna.sh"];
+  if (config.backend.enabled && config.backend.port !== 8000) parts.push("--backend-port " + config.backend.port);
+  if (config.frontend.enabled && config.frontend.port !== 5173) parts.push("--frontend-port " + config.frontend.port);
+  if (config.observatory.enabled) {
+    parts.push("--observatory");
+    if (config.observatory.port !== 8100) parts.push("--observatory-port " + config.observatory.port);
+  }
+  if (config.tunnel.enabled) parts.push("--tunnel");
+  if (!config.backend.enabled) parts.push("--no-backend");
+  if (!config.frontend.enabled) parts.push("--no-frontend");
+  document.getElementById("cli-output").textContent = parts.join(" ");
+
+  // JSON output
+  var out = {
+    services: {
+      backend:     { port: config.backend.port, enabled: config.backend.enabled, host: config.backend.host || "0.0.0.0", debug: config.backend.debug || false },
+      frontend:    { port: config.frontend.port, enabled: config.frontend.enabled },
+      observatory: { port: config.observatory.port, enabled: config.observatory.enabled, start_production: config.observatory.start_production || false },
+      tunnel:      { enabled: config.tunnel.enabled, patch_apps_script: config.tunnel.patch_apps_script !== false }
+    },
+    profiles: {
+      "default":  { services: { backend: { enabled: true }, frontend: { enabled: true }, observatory: { enabled: false }, tunnel: { enabled: false } } },
+      "full":     { services: { backend: { enabled: true }, frontend: { enabled: true }, observatory: { enabled: true }, tunnel: { enabled: true } } },
+      "api-only": { services: { backend: { enabled: true }, frontend: { enabled: false }, observatory: { enabled: false }, tunnel: { enabled: false } } }
+    }
+  };
+  document.getElementById("json-output").textContent = JSON.stringify(out, null, 2);
+}
+
+function toggleSvc(key) {
+  config[key].enabled = !config[key].enabled;
+  activeProfile = "";
+  render();
+}
+
+function setPort(key, val) {
+  config[key].port = parseInt(val) || 0;
+  activeProfile = "";
+  render();
+}
+
+function applyProfile(name) {
+  var p = PROFILES[name];
+  Object.keys(p).forEach(function(key) {
+    config[key].enabled = p[key];
+  });
+  // Reset ports to defaults for the profile
+  Object.keys(DEFAULTS).forEach(function(key) {
+    if (DEFAULTS[key].port) config[key].port = DEFAULTS[key].port;
+  });
+  activeProfile = name;
+  render();
+}
+
+function copyCommand() {
+  var text = document.getElementById("cli-output").textContent;
+  navigator.clipboard.writeText(text).then(function() { showToast("Copied!"); });
+}
+
+function saveConfig() {
+  var json = document.getElementById("json-output").textContent;
+  var blob = new Blob([json], { type: "application/json" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "luna.launch.json";
+  a.click();
+  showToast("Downloaded luna.launch.json");
+}
+
+function loadConfig(event) {
+  var file = event.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var cfg = JSON.parse(e.target.result);
+      var svcs = cfg.services || {};
+      Object.keys(svcs).forEach(function(key) {
+        if (config[key]) {
+          Object.assign(config[key], svcs[key]);
+        }
+      });
+      activeProfile = "";
+      render();
+      showToast("Config loaded");
+    } catch (err) {
+      showToast("Invalid JSON file");
+    }
+  };
+  reader.readAsText(file);
+}
+
+function showToast(msg) {
+  var el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(function() { el.classList.remove("show"); }, 2000);
+}
+
+render();
+</script>
+</body>
+</html>

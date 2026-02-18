@@ -59,12 +59,27 @@ try:
 except ImportError:
     CONTEXT_PIPELINE_AVAILABLE = False
 
+# Prompt assembler (single funnel for all prompt construction)
+from luna.context.assembler import PromptAssembler, PromptRequest, PromptResult
+
+# Perception field (user behavioral observation layer)
+from luna.context.perception import PerceptionField
+
 # Smart acknowledgment router (contextual acks based on query intent)
 try:
     from luna.core.acknowledgment import generate_acknowledgment, precompute_clusters
     ACKNOWLEDGMENT_ROUTER_AVAILABLE = True
 except ImportError:
     ACKNOWLEDGMENT_ROUTER_AVAILABLE = False
+
+# Voice System (confidence-weighted voice injection)
+try:
+    from luna.voice.orchestrator import VoiceSystemOrchestrator
+    from luna.voice.models import VoiceSystemConfig, ConfidenceSignals, ContextType
+    from luna.voice.lock import classify_query_type
+    VOICE_SYSTEM_AVAILABLE = True
+except ImportError:
+    VOICE_SYSTEM_AVAILABLE = False
 
 # Standalone ring buffer (fallback when context pipeline unavailable)
 from luna.memory.ring import ConversationRing
@@ -195,6 +210,7 @@ class DirectorActor(Actor):
         # [DIAGNOSTIC] Last system prompt sent to LLM (for /prompt command)
         self._last_system_prompt: Optional[str] = None
         self._last_route_decision: Optional[str] = None
+        self._last_prompt_meta: Optional[dict] = None
 
         # Fallback chain for resilient inference
         self._fallback_chain: Optional["FallbackChain"] = None
@@ -202,6 +218,17 @@ class DirectorActor(Actor):
         # QA validator for live inference validation (lazy init)
         self._qa_validator = None
         self._qa_enabled = True  # Can be disabled for performance
+
+        # Voice system (confidence-weighted prompt injection)
+        self._voice_orchestrator: Optional["VoiceSystemOrchestrator"] = None
+        self._voice_turn_count: int = 0
+
+        # Perception field (user behavioral observation layer — session-scoped)
+        self._perception_field = PerceptionField()
+        self._perception_turn_count: int = 0
+
+        # Prompt assembler (single funnel for all prompt construction)
+        self._assembler = PromptAssembler(self)
 
     @property
     def client(self):
@@ -460,6 +487,123 @@ class DirectorActor(Actor):
         logger.warning("[CONTEXT-STARVE] _init_entity_context() returned False after 5 attempts")
         return False
 
+    # ── Voice System ─────────────────────────────────────────────
+
+    def _ensure_voice_system(self) -> Optional["VoiceSystemOrchestrator"]:
+        """Lazy-init the voice orchestrator from config."""
+        if self._voice_orchestrator is not None:
+            return self._voice_orchestrator
+        if not VOICE_SYSTEM_AVAILABLE:
+            return None
+        try:
+            config_path = os.path.join(
+                os.path.dirname(__file__), "..", "voice", "data", "voice_config.yaml"
+            )
+            if os.path.exists(config_path):
+                config = VoiceSystemConfig.from_yaml(config_path)
+            else:
+                config = VoiceSystemConfig()
+            self._voice_orchestrator = VoiceSystemOrchestrator(config)
+            logger.info("[VOICE] Voice system initialized (engine=%s, corpus=%s)",
+                        config.blend_engine_mode.value, config.voice_corpus_mode.value)
+            return self._voice_orchestrator
+        except Exception as e:
+            logger.warning(f"[VOICE] Failed to init voice system: {e}")
+            return None
+
+    def _detect_context_type(self, message: str, memories: list, turn_number: int) -> "ContextType":
+        """Map query classification + heuristics to ContextType enum."""
+        query_type = classify_query_type(message)
+        mapping = {
+            "greeting": ContextType.GREETING,
+            "technical": ContextType.TECHNICAL,
+            "emotional": ContextType.EMOTIONAL,
+            "creative": ContextType.CREATIVE,
+        }
+        if query_type in mapping:
+            return mapping[query_type]
+        if turn_number <= 1:
+            return ContextType.COLD_START
+        if memories and any(
+            isinstance(m, dict) and m.get("node_type") == "memory"
+            for m in memories
+        ):
+            return ContextType.MEMORY_RECALL
+        return ContextType.FOLLOW_UP
+
+    def _calculate_topic_continuity(self, message: str, conversation_history: list) -> float:
+        """Estimate topic continuity from recent conversation (0.0-1.0)."""
+        if not conversation_history:
+            return 0.0
+        recent_words = set()
+        for turn in conversation_history[-4:]:
+            content = turn.get("content", "") if isinstance(turn, dict) else str(turn)
+            recent_words.update(w.lower() for w in content.split() if len(w) > 3)
+        if not recent_words:
+            return 0.0
+        current_words = set(w.lower() for w in message.split() if len(w) > 3)
+        if not current_words:
+            return 0.0
+        overlap = len(current_words & recent_words)
+        return min(1.0, overlap / max(len(current_words), 1) * 1.5)
+
+    def _estimate_memory_score(self, memories: list) -> float:
+        """Estimate memory retrieval quality (0.0-1.0)."""
+        if not memories:
+            return 0.0
+        count = len(memories)
+        if count >= 5:
+            return 0.9
+        elif count >= 3:
+            return 0.7
+        elif count >= 1:
+            return 0.4
+        return 0.0
+
+    def _estimate_entity_depth(self, framed_context: str) -> int:
+        """Estimate entity resolution depth (0-3) from framed context."""
+        if not framed_context:
+            return 0
+        depth = 0
+        if "KNOWN PEOPLE" in framed_context or "Known People" in framed_context:
+            depth += 1
+        if "relationship" in framed_context.lower():
+            depth += 1
+        if "profile" in framed_context.lower() or "personality" in framed_context.lower():
+            depth += 1
+        return min(depth, 3)
+
+    def _generate_voice_block(
+        self, message: str, memories: list,
+        framed_context: str, conversation_history: list,
+    ) -> str:
+        """Generate voice injection block. Returns empty string on failure."""
+        voice_orch = self._ensure_voice_system()
+        if not voice_orch:
+            return ""
+        self._voice_turn_count += 1
+        try:
+            ctx_type = self._detect_context_type(message, memories, self._voice_turn_count)
+            signals = ConfidenceSignals(
+                memory_retrieval_score=self._estimate_memory_score(memories),
+                turn_number=self._voice_turn_count,
+                entity_resolution_depth=self._estimate_entity_depth(framed_context),
+                context_type=ctx_type,
+                topic_continuity=self._calculate_topic_continuity(message, conversation_history),
+            )
+            voice_block = voice_orch.generate_voice_block(
+                signals=signals,
+                context_type=ctx_type,
+                turn_number=self._voice_turn_count,
+            )
+            if voice_block:
+                logger.info("[VOICE] Injected voice block (%d chars, alpha=%.2f, ctx=%s)",
+                            len(voice_block), signals.memory_retrieval_score, ctx_type.value)
+                return f"\n\n{voice_block}"
+        except Exception as e:
+            logger.warning(f"[VOICE] Voice block generation failed: {e}")
+        return ""
+
     async def _load_identity_buffer(self, user_id: str = "ahab") -> str:
         """
         Load identity buffer and return formatted prompt context.
@@ -632,6 +776,10 @@ class DirectorActor(Actor):
         self._active_ring.add_user(message)
         logger.debug("[PROCESS-RING] Recorded user message to ring buffer (size: %d)", len(self._active_ring))
 
+        # PERCEPTION: Ingest user message before prompt assembly
+        self._perception_turn_count += 1
+        self._perception_field.ingest(message, self._perception_turn_count)
+
         start_time = time.time()
         response_text = ""
         route_decision = "unknown"
@@ -694,102 +842,33 @@ class DirectorActor(Actor):
             route_decision = "delegated"
             route_reason = "complexity/signals"
 
-            # Build system prompt with framed context
-            system_prompt = """You are Luna, a sovereign AI companion.
-Be warm, direct, and natural. Never output internal reasoning or debugging info.
-Never use generic chatbot greetings like "How can I help you?"
-You have access to an investor data room with categorized project documents. When asked about documents, data room, due diligence, or investor materials, draw from your DOCUMENT memories.
+            # ── PromptAssembler: single funnel for prompt construction ──
+            assembler_result = await self._assembler.build(PromptRequest(
+                message=message,
+                conversation_history=conversation_history,
+                memories=memories,
+                framed_context=framed_context,
+                route="delegated",
+            ))
+            system_prompt = assembler_result.system_prompt
+            messages = assembler_result.messages
+            system_prompt_tokens = assembler_result.prompt_tokens
 
-"""
-
-            if framed_context:
-                system_prompt += framed_context
-            else:
-                # Fallback: load emergent prompt if framed context failed
-                identity_context = await self._load_emergent_prompt(
-                    query=message,
-                    conversation_history=conversation_history
-                )
-                if identity_context:
-                    system_prompt += identity_context
-                    logger.info(f"[CONTEXT-FIX] Used emergent prompt fallback ({len(identity_context)} chars)")
-                else:
-                    # CRITICAL: Use robust fallback personality
-                    # This ensures Luna ALWAYS has her identity, even if entity context fails
-                    # See: HANDOFF_CONTEXT_STARVATION.md
-                    system_prompt = self.FALLBACK_PERSONALITY
-                    logger.warning("[CONTEXT-FIX] Using FALLBACK_PERSONALITY - entity context unavailable")
-
-                # Also add raw memories if no framed context
-                if memories:
-                    memory_text = "\n\n".join([
-                        f"<memory>{m.get('content', str(m))}</memory>" if isinstance(m, dict) else f"<memory>{m}</memory>"
-                        for m in memories[:5]
-                    ])
-                    system_prompt += f"\n\n## Memory Context\n{memory_text}"
-
-            system_prompt_tokens = len(system_prompt) // 4  # Rough estimate
-
-            # Build messages array from conversation_history LIST (not text parsing!)
-            messages = []
-            for turn in conversation_history:
-                role = turn.get("role", "user")
-                content = turn.get("content", "")
-                if role in ["user", "assistant"] and content:
-                    messages.append({"role": role, "content": content})
-
-            # Add current message
-            messages.append({"role": "user", "content": message})
-
-            # ============================================================
-            # CONTEXT-AUDIT: Phase 1 Diagnostic Logging
-            # See: HANDOFF-CONVERSATION-DISPLACEMENT-FIX.md
-            # ============================================================
+            # Context audit logging
             logger.info("=" * 80)
-            logger.info("[CONTEXT-AUDIT] Processing turn")
-            logger.info("[CONTEXT-AUDIT] User message: '%s'", message[:100] if message else "None")
-            logger.info("-" * 40)
-
-            # Log conversation history state
-            logger.info("[CONTEXT-AUDIT] CONVERSATION HISTORY (%d turns):", len(conversation_history))
-            for i, h in enumerate(conversation_history):
-                role = h.get('role', 'unknown') if isinstance(h, dict) else 'unknown'
-                content = (h.get('content', '') if isinstance(h, dict) else str(h))[:80]
-                logger.info("  [%d] %s: %s...", i, role, content)
-
-            # Check if marzipan appears in history
-            history_has_marzipan = any(
-                'marzipan' in (h.get('content', '') if isinstance(h, dict) else str(h)).lower()
-                for h in conversation_history
-            )
-            logger.info("[CONTEXT-AUDIT] History contains 'marzipan': %s", history_has_marzipan)
-
-            # Log what was retrieved (framed_context)
-            logger.info("-" * 40)
-            logger.info("[CONTEXT-AUDIT] FRAMED CONTEXT: %d chars", len(framed_context or ""))
-            logger.info("[CONTEXT-AUDIT] Framed context contains 'marzipan': %s",
-                        'marzipan' in (framed_context or "").lower())
-
-            # Log the actual system prompt being sent
-            logger.info("-" * 40)
-            logger.info("[CONTEXT-AUDIT] FINAL SYSTEM PROMPT: %d chars", len(system_prompt))
-            logger.info("[CONTEXT-AUDIT] System prompt contains 'marzipan': %s",
-                        'marzipan' in system_prompt.lower())
+            logger.info("[CONTEXT-AUDIT] Processing turn via assembler")
+            logger.info("[CONTEXT-AUDIT] identity=%s memory=%s temporal=%s voice=%s tokens≈%d",
+                        assembler_result.identity_source, assembler_result.memory_source,
+                        assembler_result.gap_category, assembler_result.voice_injected,
+                        assembler_result.prompt_tokens)
             logger.info("[CONTEXT-AUDIT] System prompt preview:\n%s", system_prompt[:800])
-
-            # Log the messages array being sent
-            logger.info("-" * 40)
-            logger.info("[CONTEXT-AUDIT] MESSAGES ARRAY (%d messages):", len(messages))
-            for i, m in enumerate(messages):
-                role = m.get('role', 'unknown')
-                content = m.get('content', '')[:100]
-                logger.info("  [%d] %s: %s...", i, role, content)
-
+            logger.info("[CONTEXT-AUDIT] MESSAGES ARRAY (%d messages)", len(messages))
             logger.info("=" * 80)
 
             # Store for /prompt command
             self._last_system_prompt = system_prompt
             self._last_route_decision = "delegated"
+            self._last_prompt_meta = assembler_result.to_dict()
 
             # Use FallbackChain for resilient inference (if available)
             if self._fallback_chain is not None:
@@ -829,51 +908,19 @@ You have access to an investor data room with categorized project documents. Whe
                     response_text = "I'm having trouble processing that right now."
 
             # ================================================================
-            # BUG-D FIX: Narrate delegated response through Luna's voice
-            # Without this, Claude's response goes through unfiltered
+            # NARRATION DISABLED: Qwen 3B rewrite was degrading Groq's
+            # 70B output quality. Luna's voice is now injected via the
+            # system prompt (PromptAssembler), not post-hoc rewriting.
             # ================================================================
-            if response_text and self._local and self.local_available:
-                try:
-                    logger.info("[NARRATION] Rewriting delegated response in Luna's voice...")
-
-                    # FIXED: Use minimal system prompt for narration to prevent hallucination
-                    # The full system_prompt contains conversation context that Qwen hallucinates from
-                    narration_system = """You are Luna rewriting a response in your voice.
-Output ONLY the rewritten text. Do not add context, memories, or commentary.
-Be warm and natural but stick to the content given."""
-
-                    narration_prompt = f"""Rewrite this in your own words. Keep all facts accurate.
-Output only the rewritten response, nothing else:
-
-{response_text}"""
-
-                    result = await self._local.generate(
-                        narration_prompt,
-                        system_prompt=narration_system,
-                        max_tokens=1024,
-                    )
-                    narrated_text = result.text if hasattr(result, 'text') else str(result)
-
-                    if narrated_text and len(narrated_text.strip()) > 20:
-                        response_text = narrated_text
-                        narration_applied = True
-                        logger.info(f"[NARRATION] Complete ({len(response_text)} chars)")
-                    else:
-                        logger.warning("[NARRATION] Output too short, using raw response")
-
-                except Exception as e:
-                    logger.warning(f"[NARRATION] Failed ({e}), using raw response")
 
         elif self.local_available:
             route_decision = "local"
             route_reason = "simple query"
             used_retrieval = False
 
-            # ================================================================
-            # FIX: Use unified ContextPipeline for local path (same as delegation)
-            # This ensures local inference gets entity detection, temporal framing,
-            # and memory retrieval - not just raw text parsing.
-            # ================================================================
+            # ── PromptAssembler: single funnel for local path ──
+            # ContextPipeline takes priority when available (it has its own prompt builder)
+            assembler_result = None
             if self._context_pipeline is not None:
                 try:
                     # Populate ring from context_window if empty (bridge Engine→Director gap)
@@ -888,40 +935,30 @@ Output only the rewritten response, nothing else:
                     system_prompt = packet.system_prompt
                     used_retrieval = packet.used_retrieval
                     logger.info(f"[PROCESS-LOCAL-PIPELINE] Using unified context: {packet}")
-                    logger.info(f"[PROCESS-LOCAL-PIPELINE] used_retrieval={used_retrieval}")
                 except Exception as e:
-                    logger.warning(f"[PROCESS-LOCAL] Context pipeline failed, using fallback: {e}")
-                    # Fallback to framed_context if pipeline fails
-                    system_prompt = "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info.\n\n"
-                    if framed_context:
-                        system_prompt += framed_context
-                    else:
-                        identity_context = await self._load_emergent_prompt(
-                            query=message,
-                            conversation_history=conversation_history
-                        )
-                        if identity_context:
-                            system_prompt += identity_context
-                        if context_window:
-                            system_prompt += f"\n\n## Recent Conversation\n{context_window}\n\nContinue naturally."
+                    logger.warning(f"[PROCESS-LOCAL] Pipeline failed, using assembler: {e}")
+                    assembler_result = await self._assembler.build(PromptRequest(
+                        message=message,
+                        conversation_history=conversation_history,
+                        memories=memories,
+                        framed_context=framed_context,
+                        route="local",
+                    ))
+                    system_prompt = assembler_result.system_prompt
             else:
-                # No pipeline available - use legacy framed_context
-                logger.debug("[PROCESS-LOCAL] No context pipeline, using framed_context")
-                system_prompt = "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info.\n\n"
-                if framed_context:
-                    system_prompt += framed_context
-                else:
-                    identity_context = await self._load_emergent_prompt(
-                        query=message,
-                        conversation_history=conversation_history
-                    )
-                    if identity_context:
-                        system_prompt += identity_context
-                    if context_window:
-                        system_prompt += f"\n\n## Recent Conversation\n{context_window}\n\nContinue naturally."
+                assembler_result = await self._assembler.build(PromptRequest(
+                    message=message,
+                    conversation_history=conversation_history,
+                    memories=memories,
+                    framed_context=framed_context,
+                    route="local",
+                ))
+                system_prompt = assembler_result.system_prompt
 
             system_prompt_tokens = len(system_prompt) // 4
-            self._last_system_prompt = system_prompt  # FIX BUG-A: Track for QA/debugging
+            self._last_system_prompt = system_prompt
+            if assembler_result:
+                self._last_prompt_meta = assembler_result.to_dict()
 
             try:
                 result = await self._local.generate(
@@ -941,24 +978,19 @@ Output only the rewritten response, nothing else:
             route_decision = "delegated"
             route_reason = "local unavailable"
 
-            messages = [{"role": "user", "content": message}]
-            # FIX BUG-A: Use system_prompt (not fallback_system) so QA captures it
-            system_prompt = "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info."
-
-            # Add framed context if available (same as other paths)
-            if framed_context:
-                system_prompt += "\n\n" + framed_context
-            else:
-                # Try to load emergent prompt
-                identity_context = await self._load_emergent_prompt(
-                    query=message,
-                    conversation_history=conversation_history
-                )
-                if identity_context:
-                    system_prompt += "\n\n" + identity_context
-
-            system_prompt_tokens = len(system_prompt) // 4
+            # ── PromptAssembler: single funnel for fallback path ──
+            assembler_result = await self._assembler.build(PromptRequest(
+                message=message,
+                conversation_history=conversation_history,
+                framed_context=framed_context,
+                route="fallback",
+                auto_fetch_memory=True,
+            ))
+            system_prompt = assembler_result.system_prompt
+            messages = assembler_result.messages
+            system_prompt_tokens = assembler_result.prompt_tokens
             self._last_system_prompt = system_prompt
+            self._last_prompt_meta = assembler_result.to_dict()
 
             # Use FallbackChain for resilient inference (if available)
             if self._fallback_chain is not None:
@@ -1068,6 +1100,12 @@ Output only the rewritten response, nothing else:
 
             except Exception as e:
                 logger.warning(f"[QA] Validation error (non-fatal): {e}")
+
+        # ========================================================================
+        # PERCEPTION: Record Luna's action for next turn's trigger context
+        # ========================================================================
+        if response_text:
+            self._perception_field.record_luna_action(response_text)
 
         # ========================================================================
         # PROMPT ARCHAEOLOGY: Log prompt for forensic analysis
@@ -1283,51 +1321,49 @@ Output only the rewritten response, nothing else:
         token_count = 0
         print(f"\n🏠 [LOCAL] Starting for: '{user_message[:50]}...'")
 
-        # ================================================================
-        # PHASE 3: Use unified context pipeline if available
-        # This gives local path SAME context as delegated path
-        # FIX: Bridge context gap - populate ring from context_window if empty
-        # ================================================================
+        # ── PromptAssembler: single funnel for local streaming path ──
+        # ContextPipeline takes priority when available (it handles entity detection inline)
         if self._context_pipeline is not None:
             try:
-                # FIX: If pipeline ring is empty but we have context_window,
-                # populate the ring from the text to bridge the Engine→Director gap
+                # Bridge Engine→Director gap: populate ring from context_window if empty
                 if len(self._context_pipeline._ring) == 0 and context_window:
                     logger.info("[LOCAL-PIPELINE] Ring empty, populating from context_window")
                     self._populate_ring_from_context(
                         self._context_pipeline._ring,
                         context_window
                     )
-                    logger.info(f"[LOCAL-PIPELINE] Ring populated: {len(self._context_pipeline._ring)} turns")
 
                 packet = await self._context_pipeline.build(user_message)
                 full_system_prompt = packet.system_prompt
                 print(f"✓ [LOCAL] Context pipeline: ring={packet.ring_size}, entities={len(packet.entities)}")
-                # [DIAGNOSTIC] Dump full system prompt for debugging
-                print("=" * 60)
-                print("[SYSTEM-PROMPT-CAPTURE] Full prompt sent to local model:")
-                print("-" * 60)
-                print(full_system_prompt[:2000])  # First 2000 chars
-                if len(full_system_prompt) > 2000:
-                    print(f"... [{len(full_system_prompt) - 2000} more chars]")
-                print("=" * 60)
-                # Store for /prompt command
                 self._last_system_prompt = full_system_prompt
                 self._last_route_decision = "local"
-                logger.info(f"[LOCAL-PIPELINE] Using unified context: {packet}")
             except Exception as e:
-                logger.warning(f"[LOCAL] Context pipeline failed, falling back: {e}")
-                full_system_prompt = await self._build_local_context_fallback(
-                    user_message, system_prompt, context_window
-                )
+                logger.warning(f"[LOCAL] Pipeline failed, using assembler: {e}")
+                assembler_result = await self._assembler.build(PromptRequest(
+                    message=user_message,
+                    conversation_history=[],
+                    route="local",
+                    auto_fetch_memory=True,
+                ))
+                full_system_prompt = assembler_result.system_prompt
+                self._last_system_prompt = full_system_prompt
+                self._last_route_decision = "local"
+                self._last_prompt_meta = assembler_result.to_dict()
         else:
-            # Fallback to legacy context building
-            # Record to standalone ring since pipeline unavailable
+            # No pipeline — use assembler (records to standalone ring)
             self._standalone_ring.add_user(user_message)
             logger.debug("[LOCAL-RING] Recorded user message to standalone ring (size: %d)", len(self._standalone_ring))
-            full_system_prompt = await self._build_local_context_fallback(
-                user_message, system_prompt, context_window
-            )
+            assembler_result = await self._assembler.build(PromptRequest(
+                message=user_message,
+                conversation_history=[],
+                route="local",
+                auto_fetch_memory=True,
+            ))
+            full_system_prompt = assembler_result.system_prompt
+            self._last_system_prompt = full_system_prompt
+            self._last_route_decision = "local"
+            self._last_prompt_meta = assembler_result.to_dict()
 
         try:
             print(f"📡 [LOCAL] Generating with Qwen 3B...")
@@ -1754,69 +1790,24 @@ Continue the conversation naturally, maintaining context from above."""
                 elif line.startswith("Luna:"):
                     conversation_history.append({"role": "assistant", "content": line[5:].strip()})
 
-        # Step 0a: Load emergent prompt (three-layer personality: DNA + Experience + Mood)
-        identity_context = await self._load_emergent_prompt(
-            query=user_message,
-            conversation_history=conversation_history
-        )
-        if identity_context:
-            print(f"✓ [DELEGATION] Emergent prompt loaded ({len(identity_context)} chars)")
-        else:
-            # Fallback to basic identity buffer
-            identity_context = await self._load_identity_buffer()
-            if identity_context:
-                print(f"✓ [DELEGATION] Identity buffer loaded ({len(identity_context)} chars)")
-            else:
-                # CRITICAL: Use robust fallback personality
-                # This ensures Luna ALWAYS has her identity, even if entity context fails
-                # See: HANDOFF_CONTEXT_STARVATION.md
-                identity_context = self.FALLBACK_PERSONALITY
-                print(f"⚠ [DELEGATION] Using FALLBACK_PERSONALITY ({len(identity_context)} chars)")
-                logger.warning("[CONTEXT-FIX] Using FALLBACK_PERSONALITY in delegation path")
-
-        # Step 0b: Fetch memory context for the query
-        memory_context = await self._fetch_memory_context(user_message)
-        if memory_context:
-            print(f"✓ [DELEGATION] Found memory context ({len(memory_context)} chars)")
-        else:
-            print(f"⚠ [DELEGATION] No memory context available")
-
-        # NOTE: Acknowledgments removed - they cluttered conversation flow
-        acknowledgment = ""
-
-        # Step 2: Build enhanced system prompt with emergent personality + memory context
-        # Priority: system_prompt → identity_context (with personality layers) → memory_context
-        enhanced_system_prompt = system_prompt
-
-        # Add emergent personality context (DNA + Experience + Mood layers)
-        if identity_context:
-            enhanced_system_prompt = f"""{enhanced_system_prompt}
-
-{identity_context}"""
-
-        # FIX: Explicitly identify the current user (Luna should know who she's talking to)
-        # This is Ahab, Luna's primary collaborator and friend
-        enhanced_system_prompt = f"""{enhanced_system_prompt}
-
-## Current Session
-You are currently talking to Ahab, your primary collaborator and friend.
-When he says "me" or asks if you remember him, he means Ahab."""
-
-        # Add memory context (complementary to personality patches)
-        if memory_context:
-            enhanced_system_prompt = f"""{enhanced_system_prompt}
-
-## Luna's Memory Context
-The following are relevant memories from your memory matrix. Use these to provide personal, grounded responses:
-
-{memory_context}
-
-When answering, reference these memories naturally as your own experiences and knowledge."""
-
-        # FIX: Track system prompt for QA/debugging (was missing from this path)
-        # See: HANDOFF_ENTITY_CONTEXT_INIT_FIX.md
-        self._last_system_prompt = enhanced_system_prompt
+        # ── PromptAssembler: single funnel for prompt construction ──
+        assembler_result = await self._assembler.build(PromptRequest(
+            message=user_message,
+            conversation_history=conversation_history,
+            route="delegated",
+            auto_fetch_memory=True,
+        ))
+        enhanced_system_prompt = assembler_result.system_prompt
+        self._last_system_prompt = assembler_result.system_prompt
         self._last_route_decision = "delegated"
+        self._last_prompt_meta = assembler_result.to_dict()
+        print(f"✓ [DELEGATION] Assembler: identity={assembler_result.identity_source} "
+              f"memory={assembler_result.memory_source} voice={assembler_result.voice_injected} "
+              f"temporal={assembler_result.gap_category} tokens≈{assembler_result.prompt_tokens}")
+
+        # Memory context indicator — assembler already embedded memory in system_prompt
+        # This is used below to decide query framing (knowledge queries check memories first)
+        memory_context = assembler_result.memory_source  # truthy if memory was fetched
 
         # Step 3: Delegate to Claude - ask for response in Luna's voice directly
         try:
@@ -1871,14 +1862,13 @@ When answering, reference these memories naturally as your own experiences and k
 
 User question: {user_message}
 
-IMPORTANT: Your memory context is provided in the system prompt above. These are YOUR memories -
-things you've experienced, conversations you've had, facts you've learned. Check your memory context
-first before saying you don't know something.
+IMPORTANT: Your memory context is provided in the system prompt above. Check it first.
 
-If you find relevant information in your memories, share it naturally and personally - these are YOUR
-experiences and knowledge. Reference specific details from your memory context.
+If you find relevant information in your memory context, share it naturally. Stick to what the memory
+actually contains — do not add details, embellish, or extrapolate beyond what is written there.
 
-If your memories don't contain relevant information, say so honestly and offer to help find out more."""
+If your memories do NOT contain relevant information about this topic, say honestly that you don't
+have a memory of it. Do not guess or fabricate. You can offer to help explore the topic together."""
 
             elif is_relational_query:
                 # Relational/emotional queries - NOT research, needs warmth
@@ -1887,12 +1877,12 @@ If your memories don't contain relevant information, say so honestly and offer t
 THE USER IS ASKING YOU THIS QUESTION (answer it directly):
 "{user_message}"
 
-This is a personal, relational question - NOT a research query. The user wants to know about your feelings,
-your connection with them, how you've grown together.
+This is a personal, relational question. Use ONLY the conversation history and memory context
+above to respond. If you have specific memories of interactions, reference them. If you don't
+have memories about this aspect of your relationship, be honest about that rather than inventing
+shared experiences.
 
-Use the conversation history and memory context above to give a genuine, heartfelt response.
-Reflect on your interactions together. Be warm, authentic, and personal.
-Don't deflect or treat this as an abstract question - it's about YOUR relationship with THIS person."""
+Be warm and genuine, but grounded in what you actually know from your context."""
 
             else:
                 # Research/factual queries
@@ -1924,11 +1914,11 @@ Keep your response focused and conversational."""
             response_text = ""
             token_count = 0
 
-            # P0 FIX: Collect Claude's response WITHOUT streaming (will narrate through Luna's voice)
-            # See: Docs/HANDOFF_Luna_Voice_Restoration.md
+            # Stream directly from provider to user (no Qwen narration pass)
+            # Luna's voice is injected via enhanced_system_prompt, not post-hoc rewriting
             if provider and provider_name != "claude":
-                # Use registry provider (non-streaming collection)
-                print(f"✓ [DELEGATION] Using {provider_name} provider (collecting for narration)...")
+                # Use registry provider — stream directly to callbacks
+                print(f"✓ [DELEGATION] Streaming from {provider_name} provider...")
                 llm_messages = [
                     LLMMessage("system", enhanced_system_prompt),
                 ]
@@ -1945,15 +1935,15 @@ Keep your response focused and conversational."""
                         break
                     response_text += text
                     token_count += 1
-                    # NOTE: Not streaming to callbacks here - will narrate first
+                    await self._stream_to_callbacks(text)
 
                 elapsed_ms = (time.time() - start_time) * 1000
-                print(f"✓ [DELEGATION] Collected: {token_count} chunks via {provider_name} in {elapsed_ms:.0f}ms")
+                print(f"✓ [DELEGATION] Streamed: {token_count} chunks via {provider_name} in {elapsed_ms:.0f}ms")
 
             else:
                 # Use FallbackChain for resilient inference
                 if self._fallback_chain:
-                    print(f"✓ [DELEGATION] Using FallbackChain (collecting for narration)...")
+                    print(f"✓ [DELEGATION] Streaming from FallbackChain...")
                     try:
                         async for text in self._fallback_chain.stream(
                             messages=messages,
@@ -1966,94 +1956,40 @@ Keep your response focused and conversational."""
                                 break
                             response_text += text
                             token_count += 1
-                            # NOTE: Not streaming to callbacks here - will narrate first
+                            await self._stream_to_callbacks(text)
 
                         elapsed_ms = (time.time() - start_time) * 1000
                         provider_name = "fallback-chain"
-                        print(f"✓ [DELEGATION] Collected via FallbackChain in {elapsed_ms:.0f}ms")
+                        print(f"✓ [DELEGATION] Streamed via FallbackChain in {elapsed_ms:.0f}ms")
 
                     except AllProvidersFailedError as e:
                         logger.error(f"[DELEGATION] All fallback providers failed: {e}")
-                        # Graceful degradation: send error message to user instead of hanging
                         error_message = "\n\n...sorry, I'm having trouble connecting right now. All my inference providers are unavailable. Try again in a moment?"
                         await self._stream_to_callbacks(error_message)
-                        return  # Exit gracefully instead of raising
+                        return
                 else:
-                    # Legacy: direct Claude (non-streaming collection)
+                    # Legacy: direct Claude streaming
                     with self.client.messages.stream(
                         model=self._claude_model,
                         max_tokens=max_tokens,
                         system=enhanced_system_prompt,
                         messages=messages,
                     ) as stream:
-                        print(f"✓ [DELEGATION] Collecting from Claude...")
+                        print(f"✓ [DELEGATION] Streaming from Claude...")
                         for text in stream.text_stream:
                             if self._abort_requested:
                                 print(f"⚠ [DELEGATION] Aborted!")
                                 break
                             response_text += text
                             token_count += 1
-                            # NOTE: Not streaming to callbacks here - will narrate first
+                            await self._stream_to_callbacks(text)
 
                         final = stream.get_final_message()
                         token_count = final.usage.output_tokens
                         elapsed_ms = (time.time() - start_time) * 1000
-                        print(f"✓ [DELEGATION] Collected: {token_count} tokens in {elapsed_ms:.0f}ms")
+                        print(f"✓ [DELEGATION] Streamed: {token_count} tokens in {elapsed_ms:.0f}ms")
 
-            # P0 FIX: Narrate through Luna's voice before sending to user
-            # This ensures FULL_DELEGATION path sounds like Luna, not Claude
             final_response = response_text
-            if response_text and self._local:
-                try:
-                    print(f"🎭 [NARRATION] Rewriting in Luna's voice...")
-
-                    # FIXED: Use strict system prompt for narration to prevent hallucination
-                    # The Luna LoRA adapter tends to generate creative tangents regardless of context
-                    narration_system = """Rephrase the given text. Rules:
-- Output ONLY the rephrased text
-- Do NOT add memories, stories, or new information
-- Do NOT use asterisks (*action*) or emojis
-- Do NOT say "I remember" or reference past conversations
-- Keep it concise and direct"""
-
-                    narration_prompt = f"""Rephrase this in a warm tone. Output the rephrased text only:
-
-{response_text}"""
-
-                    # Stream the narrated version to callbacks
-                    narrated_text = ""
-                    async for token in self._local.generate_stream(
-                        narration_prompt,
-                        system_prompt=narration_system,
-                        max_tokens=1024,
-                    ):
-                        if self._abort_requested:
-                            print(f"⚠ [NARRATION] Aborted!")
-                            break
-                        narrated_text += token
-                        await self._stream_to_callbacks(token)
-
-                    if narrated_text and len(narrated_text.strip()) > 20:
-                        final_response = narrated_text
-                        narration_elapsed = (time.time() - start_time) * 1000
-                        print(f"✓ [NARRATION] Complete ({len(final_response)} chars) in {narration_elapsed:.0f}ms total")
-                        logger.info("[NARRATION] FULL_DELEGATION response narrated through Luna's voice")
-                    else:
-                        # Narration failed, stream the raw response
-                        print(f"⚠ [NARRATION] Output too short, using raw response")
-                        logger.warning("[NARRATION] Narration returned empty, streaming raw response")
-                        await self._stream_to_callbacks(response_text)
-
-                except Exception as e:
-                    # Narration failed, stream the raw response
-                    print(f"⚠ [NARRATION] Failed: {e}, using raw response")
-                    logger.error(f"[NARRATION] Failed to narrate: {e}, streaming raw response")
-                    await self._stream_to_callbacks(response_text)
-            else:
-                # No local model, stream raw response
-                if not self._local:
-                    print(f"⚠ [NARRATION] Local model unavailable, using raw response")
-                await self._stream_to_callbacks(response_text)
 
             elapsed_ms = (time.time() - start_time) * 1000
 
@@ -2062,19 +1998,15 @@ Keep your response focused and conversational."""
                 self._active_ring.add_assistant(final_response)
                 logger.debug("[DELEGATION-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 
-            # FIX: Track actual narration status for QA (was checking self._local instead of actual narration)
-            # narration_applied=True when local model successfully rewrote the response
-            narration_was_applied = self._local is not None and final_response != response_text
-
             await self.send_to_engine("generation_complete", {
-                "text": acknowledgment + "\n\n" + final_response,
+                "text": final_response,
                 "correlation_id": correlation_id,
-                "model": f"{provider_name} (delegated+narrated)" if narration_was_applied else f"{provider_name} (delegated)",
+                "model": f"{provider_name} (delegated)",
                 "output_tokens": token_count,
                 "latency_ms": elapsed_ms,
                 "delegated": True,
                 "planned": True,
-                "narration_applied": narration_was_applied,  # FIX: use correct key for QA tracking
+                "narration_applied": False,
             })
 
         except Exception as e:
@@ -2283,15 +2215,21 @@ Be thorough but concise."""
         if facts.get("error"):
             return facts_text
 
-        # FIXED: Use minimal system prompt for narration to prevent hallucination
-        narration_system = """You are Luna rewriting a response in your voice.
-Output ONLY the rewritten text. Do not add context, memories, or commentary.
-Be warm and natural but stick to the content given."""
+        # STRICT narration to prevent Qwen LoRA from adding hallucinated content
+        narration_system = """STRICT REPHRASING MODE. You are a text rephraser, not a conversationalist.
 
-        narration_prompt = f"""Rewrite this in your own words. Keep all facts accurate.
-Output only the rewritten response, nothing else:
+RULES (violations will be rejected):
+1. Output ONLY the rephrased version of the input text. Nothing else.
+2. NEVER add facts, memories, stories, names, dates, or concepts not in the input.
+3. NEVER use asterisks (*action*), emojis, or roleplay markers.
+4. Keep the same meaning and approximate length. Only change tone to be warmer.
+5. If unsure, output the input text verbatim rather than risk adding anything."""
 
-{facts_text}"""
+        narration_prompt = f"""REPHRASE ONLY — do not add any new information:
+
+{facts_text}
+
+OUTPUT:"""
 
         try:
             # Use local model to narrate in Luna's voice
@@ -2526,6 +2464,7 @@ Output only the rewritten response, nothing else:
             "length": len(prompt),
             "preview": prompt[:500] + "..." if len(prompt) > 500 else prompt,
             "full_prompt": prompt,
+            "assembler": self._last_prompt_meta,
         }
 
     def log_prompt_archaeology(self, query: str, response: str = "") -> dict:
@@ -2728,6 +2667,13 @@ Output only the rewritten response, nothing else:
         self._session_start_time = None
         if self._reflection_loop:
             self._reflection_loop._interaction_count = 0
+        # Reset voice system for fresh conversation
+        self._voice_turn_count = 0
+        if self._voice_orchestrator:
+            self._voice_orchestrator.on_conversation_start()
+        # Reset perception field for fresh observation slate
+        self._perception_field.reset()
+        self._perception_turn_count = 0
         logger.debug("Session cleared")
 
     def get_session_stats(self) -> dict:

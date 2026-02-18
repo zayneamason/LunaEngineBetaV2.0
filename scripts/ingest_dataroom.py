@@ -37,6 +37,12 @@ from luna.substrate.graph import MemoryGraph
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Local FILE_MAP (mirrors populate_dataroom.py)
+# ---------------------------------------------------------------------------
+
+from populate_dataroom import FILE_MAP
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -322,15 +328,63 @@ async def cleanup_orphans(
 # Main
 # ---------------------------------------------------------------------------
 
+def build_local_index() -> list[dict]:
+    """Build index data from local FILE_MAP instead of Google Sheets."""
+    import mimetypes
+    import os
+
+    entries = []
+    for rel_path, category in FILE_MAP:
+        full_path = PROJECT_ROOT / rel_path
+        if not full_path.exists():
+            print(f"  MISSING: {rel_path}")
+            continue
+
+        stat = full_path.stat()
+        ext = full_path.suffix.lower()
+        mime = mimetypes.guess_type(str(full_path))[0] or "application/octet-stream"
+
+        # Use relative path as a stable file_id (no Google Drive ID needed)
+        stable_id = rel_path.replace("/", "__").replace(" ", "_")
+
+        size_kb = stat.st_size / 1024
+        if size_kb > 1024:
+            size_str = f"{size_kb / 1024:.1f} MB"
+        else:
+            size_str = f"{size_kb:.0f} KB"
+
+        entries.append({
+            "file_id": stable_id,
+            "file_name": full_path.name,
+            "category": category,
+            "subfolder": "",
+            "file_type": ext.lstrip(".").upper() or mime,
+            "file_size": size_str,
+            "created_date": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d"),
+            "last_modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "direct_link": f"file://{full_path}",
+            "tags": "",
+            "status": "Draft",
+            "notes": f"Local file: {rel_path}",
+        })
+
+    return entries
+
+
 async def run(args):
     config = load_config()
 
-    print("Authenticating with Google Sheets API...")
-    service = authenticate_google_sheets(config)
+    if args.local:
+        print("Building index from local FILE_MAP...")
+        index_data = build_local_index()
+        print(f"Found {len(index_data)} local documents.")
+    else:
+        print("Authenticating with Google Sheets API...")
+        service = authenticate_google_sheets(config)
 
-    print(f"Reading Master Index Sheet ({config['sheet_id'][:20]}...)...")
-    index_data = read_index_sheet(service, config["sheet_id"], config["sheet_range"])
-    print(f"Found {len(index_data)} documents in index.")
+        print(f"Reading Master Index Sheet ({config['sheet_id'][:20]}...)...")
+        index_data = read_index_sheet(service, config["sheet_id"], config["sheet_range"])
+        print(f"Found {len(index_data)} documents in index.")
 
     if not index_data:
         return
@@ -361,18 +415,22 @@ async def run(args):
         else:
             skipped += 1
 
-    # Cleanup orphans
-    current_ids = {row["file_id"] for row in index_data}
-    deleted = await cleanup_orphans(matrix, current_ids, dry_run=args.dry_run)
+    # Cleanup orphans (only for sheet-based sync, not local)
+    deleted = 0
+    if not args.local:
+        current_ids = {row["file_id"] for row in index_data}
+        deleted = await cleanup_orphans(matrix, current_ids, dry_run=args.dry_run)
 
     # Summary
     prefix = "[DRY RUN] " if args.dry_run else ""
+    source = "local FILE_MAP" if args.local else "index"
     print(f"\n{prefix}Sync complete:")
-    print(f"  Documents: {len(index_data)} in index")
+    print(f"  Documents: {len(index_data)} in {source}")
     print(f"  Created:   {created}")
     print(f"  Updated:   {updated}")
     print(f"  Skipped:   {skipped}")
-    print(f"  Orphans:   {deleted} deleted")
+    if not args.local:
+        print(f"  Orphans:   {deleted} deleted")
 
     await db.close()
 
@@ -381,6 +439,7 @@ def main():
     parser = argparse.ArgumentParser(description="Ingest Google Drive Data Room into Luna Memory")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing to database")
     parser.add_argument("--force", action="store_true", help="Re-sync all documents regardless of modification date")
+    parser.add_argument("--local", action="store_true", help="Ingest from local FILE_MAP instead of Google Sheets")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 

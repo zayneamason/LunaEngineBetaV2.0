@@ -387,6 +387,65 @@ class QueryRouter:
             suggested_tools=suggested_tools,
         )
 
+    # ── Semantic routing (Qwen 3B subtask) ────────────────────────────────
+
+    # Maps Qwen intent classification → ExecutionPath
+    _INTENT_TO_PATH = {
+        "greeting": ExecutionPath.DIRECT,
+        "simple_question": ExecutionPath.DIRECT,
+        "emotional": ExecutionPath.DIRECT,
+        "meta": ExecutionPath.DIRECT,
+        "memory_query": ExecutionPath.SIMPLE_PLAN,
+        "dataroom": ExecutionPath.SIMPLE_PLAN,
+        "creative": ExecutionPath.SIMPLE_PLAN,
+        "task": ExecutionPath.FULL_PLAN,
+        "research": ExecutionPath.FULL_PLAN,
+    }
+
+    _COMPLEXITY_TO_SCORE = {
+        "trivial": 0.1,
+        "simple": 0.25,
+        "moderate": 0.55,
+        "complex": 0.85,
+    }
+
+    def from_intent(self, intent_result: dict, query: str = "") -> RoutingDecision:
+        """
+        Convert a Qwen intent classification to a RoutingDecision.
+
+        Falls back to regex-based analyze() if the intent is invalid.
+
+        Args:
+            intent_result: {"intent": "...", "complexity": "...", "tools": [...]}
+            query: Original query (for fallback and logging)
+        """
+        intent = intent_result.get("intent", "")
+        complexity_label = intent_result.get("complexity", "simple")
+        tools = intent_result.get("tools", [])
+
+        path = self._INTENT_TO_PATH.get(intent)
+        if path is None:
+            logger.warning(f"[ROUTE-SEMANTIC] Unknown intent '{intent}', falling back to regex")
+            return self.analyze(query) if query else RoutingDecision(
+                path=ExecutionPath.DIRECT, complexity=0.1,
+                reason="Unknown intent, defaulting to DIRECT",
+            )
+
+        complexity = self._COMPLEXITY_TO_SCORE.get(complexity_label, 0.25)
+
+        logger.info(
+            f"[ROUTE-SEMANTIC] intent={intent} complexity={complexity_label}({complexity:.2f}) "
+            f"path={path.name} tools={tools}"
+        )
+
+        return RoutingDecision(
+            path=path,
+            complexity=complexity,
+            reason=f"Semantic classification: {intent} ({complexity_label})",
+            signals=[f"semantic:{intent}"],
+            suggested_tools=tools if isinstance(tools, list) else [],
+        )
+
     def estimate_complexity(self, query: str) -> float:
         """
         Estimate query complexity on a 0.0-1.0 scale.

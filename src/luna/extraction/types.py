@@ -224,7 +224,7 @@ class ExtractionConfig:
 
     Allows runtime switching between Claude models and local inference.
     """
-    backend: str = "haiku"  # "haiku", "sonnet", "local", "disabled"
+    backend: str = "local"  # "local", "haiku", "sonnet", "disabled"
     batch_size: int = 5     # Turns per extraction call
     min_content_length: int = 10  # Skip very short messages
 
@@ -271,6 +271,9 @@ class FlowSignal:
     # Debug
     signals_detected: list[str] = field(default_factory=list)
 
+    # Sovereignty: where was flow detection performed
+    detection_method: str = "local"  # "local" | "cloud" — must always be "local"
+
     def to_dict(self) -> dict:
         return {
             "mode": self.mode.value,
@@ -281,6 +284,7 @@ class FlowSignal:
             "open_threads": self.open_threads,
             "correction_target": self.correction_target,
             "signals_detected": self.signals_detected,
+            "detection_method": self.detection_method,
         }
 
     @classmethod
@@ -294,6 +298,7 @@ class FlowSignal:
             open_threads=data.get("open_threads", []),
             correction_target=data.get("correction_target", ""),
             signals_detected=data.get("signals_detected", []),
+            detection_method=data.get("detection_method", "local"),
         )
 
 

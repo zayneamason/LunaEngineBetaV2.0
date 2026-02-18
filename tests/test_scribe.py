@@ -117,7 +117,7 @@ class TestExtractionTypes:
 
         config = ExtractionConfig()
 
-        assert config.backend == "haiku"
+        assert config.backend == "local"
         assert config.batch_size == 5
         assert config.min_content_length == 10
 

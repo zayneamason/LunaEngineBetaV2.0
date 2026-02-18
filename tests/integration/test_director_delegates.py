@@ -84,18 +84,17 @@ class TestDirectorCallsClaudeForComplexQuery:
 
         simple_query = "Hello!"
 
-        # Mock complexity check to return low complexity
-        with patch.object(director, '_estimate_complexity', return_value=0.1):
-            with patch.object(director, '_should_delegate', return_value=False):
-                # The actual behavior depends on whether local is loaded
-                result = await director.generate(
-                    prompt=simple_query,
-                    system="You are Luna.",
-                    max_tokens=100,
-                )
+        # _should_delegate is async; mock it to return False (local path)
+        with patch.object(director, '_should_delegate', new_callable=AsyncMock, return_value=False):
+            # The actual behavior depends on whether local is loaded
+            result = await director.generate(
+                prompt=simple_query,
+                system="You are Luna.",
+                max_tokens=100,
+            )
 
-                # Result should exist
-                assert result is not None
+            # Result should exist
+            assert result is not None
 
 
 @pytest.mark.integration
@@ -173,20 +172,28 @@ class TestDelegationIncludesMemoryContext:
         # Query that should trigger memory lookup
         query = "What do you remember about my programming preferences?"
 
-        # Track what gets sent to Claude
-        captured_prompts = []
+        # Mock the assembler to return a clean prompt result
+        mock_result = MagicMock()
+        mock_result.system_prompt = "You are Luna."
+        mock_result.messages = [{"role": "user", "content": query}]
+        mock_result.prompt_tokens = 100
+        mock_result.identity_source = "fallback"
+        mock_result.memory_source = "fetched"
+        mock_result.to_dict.return_value = {"identity_source": "fallback", "memory_source": "fetched"}
 
-        async def capture_delegate(*args, **kwargs):
-            captured_prompts.append(kwargs.get('system_prompt', '') + kwargs.get('prompt', ''))
-            return AsyncMock(text="I remember you mentioned Python.", model="claude-3-haiku")
+        with patch.object(director._assembler, 'build', new_callable=AsyncMock, return_value=mock_result):
+            with patch.object(director, '_should_delegate', new_callable=AsyncMock, return_value=True):
+                with patch.object(director, '_fetch_memory_context', new_callable=AsyncMock, return_value="Memory: User likes Python"):
+                    # Mock the actual Claude call
+                    mock_response = MagicMock()
+                    mock_response.content = [MagicMock(text="I remember you mentioned Python.")]
+                    director._client = MagicMock()
+                    director._client.messages.create.return_value = mock_response
 
-        with patch.object(director, '_delegate_to_claude', side_effect=capture_delegate):
-            with patch.object(director, '_should_delegate', return_value=True):
-                with patch.object(director, '_fetch_memory_context', return_value="Memory: User likes Python"):
                     result = await director.process(query, {})
 
-                    # Should have attempted memory fetch
-                    # Note: exact behavior depends on internal routing
+                    assert result is not None
+                    assert result["response"] is not None
 
 
 @pytest.mark.integration
@@ -261,9 +268,8 @@ class TestSignalBasedDelegation:
         ]
 
         for query in memory_queries:
-            # The _should_delegate method should return True for these
-            # This tests the internal signal detection
-            should_delegate = director._should_delegate(query)
+            # _should_delegate is async — must await
+            should_delegate = await director._should_delegate(query)
             assert should_delegate is True, f"Should delegate: {query}"
 
     @pytest.mark.asyncio
@@ -277,7 +283,7 @@ class TestSignalBasedDelegation:
         ]
 
         for query in research_queries:
-            should_delegate = director._should_delegate(query)
+            should_delegate = await director._should_delegate(query)
             assert should_delegate is True, f"Should delegate: {query}"
 
     @pytest.mark.asyncio
@@ -291,7 +297,7 @@ class TestSignalBasedDelegation:
         ]
 
         for query in code_queries:
-            should_delegate = director._should_delegate(query)
+            should_delegate = await director._should_delegate(query)
             assert should_delegate is True, f"Should delegate: {query}"
 
     @pytest.mark.asyncio
@@ -358,7 +364,7 @@ class TestDirectorMailboxIntegration:
 
     @pytest.mark.asyncio
     async def test_set_model_message_handling(self, director_with_mailbox):
-        """Test that set_model message updates model."""
+        """Test that set_model message updates Claude delegation model."""
         director = director_with_mailbox
 
         set_model_msg = Message(
@@ -368,5 +374,5 @@ class TestDirectorMailboxIntegration:
 
         await director.handle(set_model_msg)
 
-        # Model should be updated
-        assert director._model == "claude-3-5-sonnet-20241022"
+        # set_model updates the Claude delegation model, not the display model
+        assert director._claude_model == "claude-3-5-sonnet-20241022"

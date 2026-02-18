@@ -12,6 +12,9 @@ import {
   LunaQAPanel,
   VoightKampffPanel,
   MemoryMonitorPanel,
+  VoiceBlendPanel,
+  VoiceSystemSpecPanel,
+  PromptInspectorPanel,
 } from './components';
 import { useLunaAPI } from './hooks/useLunaAPI';
 import { useChat } from './hooks/useChat';
@@ -57,6 +60,11 @@ const Eclissi = () => {
   const [vkMode, setVkMode] = useState(false);
   // Entity data for keyword highlighting (fetched from Observatory API)
   const [knownEntities, setKnownEntities] = useState([]);
+  // Voice system panels
+  const [voiceBlendMode, setVoiceBlendMode] = useState(false);
+  const [voiceSpecMode, setVoiceSpecMode] = useState(false);
+  // Prompt inspector state
+  const [promptMode, setPromptMode] = useState(false);
   // KOZMO mode - full takeover view
   const [kozmoMode, setKozmoMode] = useState(false);
   // Observatory mode - memory matrix visualization
@@ -307,6 +315,30 @@ const Eclissi = () => {
                 🔬 VK
               </button>
 
+              {/* Voice Blend Engine Toggle */}
+              <button
+                onClick={() => setVoiceBlendMode(!voiceBlendMode)}
+                className={`px-3 py-1.5 text-xs rounded border transition-all ${
+                  voiceBlendMode
+                    ? 'bg-kozmo-accent/20 border-kozmo-accent/50 text-kozmo-accent'
+                    : 'bg-kozmo-bg border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80'
+                }`}
+              >
+                λ {voiceBlendMode ? 'VOICE' : 'Voice'}
+              </button>
+
+              {/* Voice System Spec Toggle */}
+              <button
+                onClick={() => setVoiceSpecMode(!voiceSpecMode)}
+                className={`px-3 py-1.5 text-xs rounded border transition-all ${
+                  voiceSpecMode
+                    ? 'bg-violet-500/20 border-violet-500/50 text-violet-400'
+                    : 'bg-kozmo-bg border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80'
+                }`}
+              >
+                Spec
+              </button>
+
               {/* Memory Monitor Toggle */}
               <button
                 onClick={() => setMemoryMode(!memoryMode)}
@@ -329,6 +361,18 @@ const Eclissi = () => {
                 }`}
               >
                 🔍 {debugMode ? 'DEBUG ON' : 'Debug'}
+              </button>
+
+              {/* Prompt Inspector Toggle */}
+              <button
+                onClick={() => setPromptMode(!promptMode)}
+                className={`px-3 py-1.5 text-xs rounded border transition-all ${
+                  promptMode
+                    ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400'
+                    : 'bg-kozmo-bg border-kozmo-border text-kozmo-muted hover:border-kozmo-border/80'
+                }`}
+              >
+                📋 {promptMode ? 'PROMPT' : 'Prompt'}
               </button>
 
               <div className="flex items-center gap-3">
@@ -432,6 +476,25 @@ const Eclissi = () => {
               isOpen={vkMode}
               onClose={() => setVkMode(false)}
             />
+
+            {/* Voice Blend Engine Panel */}
+            <VoiceBlendPanel
+              isOpen={voiceBlendMode}
+              onClose={() => setVoiceBlendMode(false)}
+            />
+
+            {/* Voice System Spec Panel */}
+            <VoiceSystemSpecPanel
+              isOpen={voiceSpecMode}
+              onClose={() => setVoiceSpecMode(false)}
+            />
+
+            {/* Prompt Inspector Panel */}
+            <PromptInspectorPanel
+              isOpen={promptMode}
+              onClose={() => setPromptMode(false)}
+            />
+
           </>
         )}
       </div>

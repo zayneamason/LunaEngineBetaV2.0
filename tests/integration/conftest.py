@@ -117,14 +117,30 @@ def mock_matrix_actor(mock_database):
     actor = MagicMock(spec=MatrixActor)
     actor.name = "matrix"
     actor.is_ready = True
-    actor._matrix = MagicMock()
-    actor._matrix.db = mock_database
-    actor._graph = MagicMock()
-    actor._graph.has_edge = MagicMock(return_value=False)
-    actor._graph.add_edge = MagicMock()
-    actor._graph.get_all_edges = MagicMock(return_value=[])
 
-    # Mock memory methods
+    # ── MemoryMatrix mock (returned by Librarian._get_matrix()) ──
+    matrix = MagicMock()
+    matrix.db = mock_database
+    # Async methods that Librarian awaits on the MemoryMatrix object
+    matrix.add_node = AsyncMock(return_value="node_123")
+    matrix.get_node = AsyncMock(return_value=None)
+    matrix.update_node = AsyncMock()
+    matrix.delete_node = AsyncMock(return_value=True)
+    matrix.search_nodes = AsyncMock(return_value=[])
+    matrix.get_context = AsyncMock(return_value="Test memory context")
+    matrix.get_drifting_nodes = AsyncMock(return_value=[])
+    actor._matrix = matrix
+
+    # ── MemoryGraph mock (accessed as matrix_actor._graph) ──
+    graph = MagicMock()
+    graph.has_edge = MagicMock(return_value=False)       # sync (2-arg check)
+    graph.add_edge = AsyncMock()                          # async
+    graph.remove_edge = AsyncMock()                       # async
+    graph.get_all_edges = MagicMock(return_value=[])      # sync
+    graph.get_neighbors = MagicMock(return_value=[])      # sync
+    actor._graph = graph
+
+    # ── Actor-level convenience mocks (used by some tests directly) ──
     actor.get_context = AsyncMock(return_value="Test memory context")
     actor.search = AsyncMock(return_value=[])
     actor.search_nodes = AsyncMock(return_value=[])

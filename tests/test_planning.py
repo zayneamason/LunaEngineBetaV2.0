@@ -89,20 +89,18 @@ class TestShouldDelegate:
         assert await director._should_delegate("Write a script") is True
 
     @pytest.mark.asyncio
-    async def test_simple_queries_no_delegation(self, director):
-        """Simple queries should not trigger delegation."""
-        assert await director._should_delegate("Hello Luna") is False
-        assert await director._should_delegate("How are you?") is False
+    async def test_always_delegates(self, director):
+        """All queries delegate — fallback chain handles provider selection."""
+        assert await director._should_delegate("Hello Luna") is True
+        assert await director._should_delegate("How are you?") is True
 
     @pytest.mark.asyncio
-    async def test_fallback_without_hybrid(self, director):
-        """Without HybridInference, should fall back to signal checks only."""
-        # Ensure _hybrid is not set
+    async def test_delegates_without_hybrid(self, director):
+        """Without HybridInference, still delegates to fallback chain."""
         assert not hasattr(director, '_hybrid') or director._hybrid is None
 
-        # Should still work based on signals
         assert await director._should_delegate("Research AI trends") is True
-        assert await director._should_delegate("Hi there!") is False
+        assert await director._should_delegate("Hi there!") is True
 
 
 # =============================================================================

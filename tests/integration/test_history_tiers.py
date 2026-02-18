@@ -83,16 +83,25 @@ class TestActiveToRecentTransition:
         """Rotation should queue turn for compression."""
         manager = history_manager_low_budget
 
-        # Setup to trigger rotation
+        # Budget: max_active_tokens=100, max_active_turns=3
+        # fetchone call sequence inside add_turn:
+        #   1. get_active_token_count → (total_tokens, turn_count)
+        #   2. get_oldest_active_turn → (id, role, content, tokens, created_at)
+        #      → rotate (execute) + queue_compression (execute)
+        #      → local: 200-100=100, 5-1=4 → 4>3 → loop
+        #   3. get_oldest_active_turn → (id, role, content, tokens, created_at)
+        #      → rotate + queue → local: 100-50=50, 4-1=3 → exit loop
+        #   4. SELECT last_insert_rowid() → (turn_id,)
         mock_database.fetchone.side_effect = [
-            (200, 5),  # Over budget
-            (1, "user", "Message to rotate", 100, "2026-01-30"),
-            (5,),
+            (200, 5),   # #1 get_active_token_count: over budget
+            (1, "user", "Message 1", 100, "2026-01-30"),  # #2 get_oldest (1st rotation)
+            (2, "user", "Message 2", 50, "2026-01-30"),   # #3 get_oldest (2nd rotation)
+            (3,),       # #4 last_insert_rowid
         ]
 
         await manager.add_turn(role="user", content="Trigger rotation", tokens=100)
 
-        # Compression should be queued
+        # Compression should be queued (2 rotations = 2 compressions)
         assert manager._compressions_queued >= 1
 
     @pytest.mark.asyncio
@@ -104,10 +113,13 @@ class TestActiveToRecentTransition:
         """Rotation should update tier column in database."""
         manager = history_manager_low_budget
 
+        # Budget: max_active_tokens=100, max_active_turns=3
+        # Same fetchone sequence as test_rotation_queues_compression
         mock_database.fetchone.side_effect = [
-            (200, 5),  # Over budget
-            (1, "user", "Message to rotate", 100, "2026-01-30"),
-            (5,),
+            (200, 5),   # #1 get_active_token_count: over budget
+            (1, "user", "Message 1", 100, "2026-01-30"),  # #2 get_oldest (1st rotation)
+            (2, "user", "Message 2", 50, "2026-01-30"),   # #3 get_oldest (2nd rotation)
+            (3,),       # #4 last_insert_rowid
         ]
 
         await manager.add_turn(role="user", content="Trigger rotation", tokens=100)

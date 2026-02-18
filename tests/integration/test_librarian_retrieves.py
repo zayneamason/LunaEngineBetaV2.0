@@ -44,24 +44,10 @@ class TestLibrarianVectorSearch:
         mock_matrix_actor,
     ):
         """Test vector-based similarity search."""
-        # Setup matrix to return search results
-        mock_results = [
-            MagicMock(
-                id="node_1",
-                content="Luna Engine uses hybrid LLM architecture",
-                node_type="FACT",
-                confidence=0.95,
-                lock_in=0.8,
-            ),
-            MagicMock(
-                id="node_2",
-                content="Qwen 3B is used for local inference",
-                node_type="FACT",
-                confidence=0.9,
-                lock_in=0.7,
-            ),
-        ]
-        mock_matrix_actor.search = AsyncMock(return_value=mock_results)
+        # Setup matrix._matrix to return search results
+        mock_matrix_actor._matrix.get_context = AsyncMock(
+            return_value="Luna Engine uses hybrid LLM architecture"
+        )
 
         # Perform search through get_context
         context = await librarian_with_matrix._get_context(
@@ -70,9 +56,8 @@ class TestLibrarianVectorSearch:
             node_types=None,
         )
 
-        # Should return results (depends on matrix mock)
-        # The actual implementation calls matrix.get_context
-        # which we've mocked to return test context string
+        # Should return results via matrix.get_context
+        mock_matrix_actor._matrix.get_context.assert_called_once()
 
 
 @pytest.mark.integration
@@ -92,8 +77,8 @@ class TestLibrarianHybridSearch:
         mock_matrix_actor,
     ):
         """Test hybrid search combining vector and keyword."""
-        # Setup matrix for hybrid search
-        mock_matrix_actor.get_context = AsyncMock(
+        # Setup MemoryMatrix for hybrid search
+        mock_matrix_actor._matrix.get_context = AsyncMock(
             return_value="Hybrid search result: Luna Engine architecture includes hybrid LLM routing"
         )
 
@@ -103,8 +88,8 @@ class TestLibrarianHybridSearch:
             node_types=["FACT", "DECISION"],
         )
 
-        # Matrix get_context should have been called
-        mock_matrix_actor.get_context.assert_called_once()
+        # MemoryMatrix get_context should have been called
+        mock_matrix_actor._matrix.get_context.assert_called_once()
 
 
 @pytest.mark.integration
@@ -116,10 +101,11 @@ class TestLibrarianEntityGraphTraversal:
         """Librarian with mocked graph for traversal testing."""
         librarian = LibrarianActor(engine=mock_engine)
 
-        # Setup mock graph
+        # Setup mock graph with async methods where needed
         mock_graph = MagicMock()
         mock_graph.has_edge = MagicMock(return_value=False)
-        mock_graph.add_edge = MagicMock()
+        mock_graph.add_edge = AsyncMock()                   # async in MemoryGraph
+        mock_graph.remove_edge = AsyncMock()                # async in MemoryGraph
         mock_graph.get_neighbors = MagicMock(return_value=["node_2", "node_3"])
         mock_graph.get_all_edges = MagicMock(return_value=[
             {"from_id": "node_1", "to_id": "node_2", "edge_type": "collaborates_with", "weight": 0.9},
@@ -127,6 +113,10 @@ class TestLibrarianEntityGraphTraversal:
         ])
 
         mock_matrix_actor._graph = mock_graph
+
+        # Ensure MemoryMatrix search_nodes returns empty (triggers create)
+        mock_matrix_actor._matrix.search_nodes = AsyncMock(return_value=[])
+        mock_matrix_actor._matrix.add_node = AsyncMock(return_value="new_entity_id")
 
         return librarian
 
@@ -194,7 +184,10 @@ class TestLibrarianRespectsLockInScores:
             lock_in_state="drifting",
         )
 
-        mock_matrix_actor.search = AsyncMock(return_value=[locked_in_node, drifting_node])
+        # Set on MemoryMatrix (what _get_matrix() returns), not on actor
+        mock_matrix_actor._matrix.search = AsyncMock(return_value=[locked_in_node, drifting_node])
+        mock_matrix_actor._matrix.get_drifting_nodes = AsyncMock(return_value=[drifting_node])
+        # Also set on actor for direct-access tests
         mock_matrix_actor.get_drifting_nodes = AsyncMock(return_value=[drifting_node])
 
         return librarian
@@ -220,14 +213,14 @@ class TestLibrarianRespectsLockInScores:
         mock_matrix_actor,
     ):
         """Nodes with reinforcement should not be pruned."""
-        # Setup prune with drifting nodes
+        # Setup prune with drifting nodes (on MemoryMatrix, not actor)
         drifting_node = MagicMock(
             id="node_to_maybe_prune",
             lock_in=0.1,
             reinforcement_count=5,  # Has been reinforced
             created_at=datetime(2025, 1, 1),  # Old
         )
-        mock_matrix_actor.get_drifting_nodes = AsyncMock(return_value=[drifting_node])
+        mock_matrix_actor._matrix.get_drifting_nodes = AsyncMock(return_value=[drifting_node])
 
         # Prune should preserve reinforced nodes
         result = await librarian_with_lockin_data._prune_drifting_nodes(
@@ -274,7 +267,7 @@ class TestLibrarianFilingIntegration:
         extraction = ExtractionOutput(
             objects=[
                 ExtractedObject(
-                    type="RELATION",
+                    type="CONNECTION",
                     content="Alex works on Luna Engine",
                     confidence=0.9,
                     entities=["Alex", "Luna Engine"],
@@ -348,9 +341,9 @@ class TestLibrarianEntityResolution:
         # Ensure cache miss
         librarian.alias_cache.clear()
 
-        # Mock search to return no results
-        mock_matrix_actor.search_nodes = AsyncMock(return_value=[])
-        mock_matrix_actor.add_node = AsyncMock(return_value="new_node_id")
+        # Mock MemoryMatrix (what _get_matrix() returns) to return no results
+        mock_matrix_actor._matrix.search_nodes = AsyncMock(return_value=[])
+        mock_matrix_actor._matrix.add_node = AsyncMock(return_value="new_node_id")
 
         node_id = await librarian._resolve_entity(
             name="NewEntity",
@@ -370,9 +363,9 @@ class TestLibrarianEntityResolution:
         # Clear cache
         librarian.alias_cache.clear()
 
-        # Mock search to return existing node
+        # Mock MemoryMatrix search to return existing node
         existing_node = MagicMock(id="existing_node", content="Alex")
-        mock_matrix_actor.search_nodes = AsyncMock(return_value=[existing_node])
+        mock_matrix_actor._matrix.search_nodes = AsyncMock(return_value=[existing_node])
 
         node_id = await librarian._resolve_entity(
             name="Alex",
@@ -461,9 +454,9 @@ class TestLibrarianPruning:
     @pytest.mark.asyncio
     async def test_prune_message_handling(self, librarian, mock_matrix_actor):
         """Test handling of prune message."""
-        # Setup mock returns
+        # Setup mock returns (on MemoryMatrix, not actor)
         mock_matrix_actor._graph.get_all_edges.return_value = []
-        mock_matrix_actor.get_drifting_nodes.return_value = []
+        mock_matrix_actor._matrix.get_drifting_nodes = AsyncMock(return_value=[])
 
         msg = Message(
             type="prune",

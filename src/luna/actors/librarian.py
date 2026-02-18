@@ -1281,6 +1281,10 @@ class LibrarianActor(Actor):
             f"The Dude: Amend in '{self._active_thread.topic}' "
             f"(correction_target: {signal.correction_target[:50]})"
         )
+
+        # Persist turn count to Matrix so it survives restarts
+        await self._update_thread_node(self._active_thread)
+
         self._notify_consciousness()
 
     # --- Task Resolution (Layer 4) ---

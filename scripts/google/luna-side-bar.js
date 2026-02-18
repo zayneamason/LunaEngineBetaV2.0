@@ -69,12 +69,34 @@ function askLuna(query) {
     var lowerQuery = query.toLowerCase().trim();
     var isGreeting = lowerQuery.match(/^(hey|hi|hello|sup|yo|what'?s up)/);
 
+    // Detect data room intent for document queries
+    var hasDataroomIntent = false;
     if (!isGreeting) {
-      // Prepend data room context for non-greetings so Luna's router
-      // picks up on data room intent even for casual phrasing
-      var hasDataroomIntent = lowerQuery.match(/\b(status|overview|missing|gap|recent|document|file|legal|financial|team|product|category)\b/);
+      hasDataroomIntent = !!lowerQuery.match(/\b(status|overview|missing|gap|recent|document|docs|file|legal|financial|team|product|category|show|list|partnership|investor|pitch|proposal|market)\b/);
       if (hasDataroomIntent) {
         contextMessage = '[asking from data room sidebar] ' + query;
+      }
+    }
+
+    // If this looks like a document query, also search the data room directly
+    var docResults = null;
+    if (hasDataroomIntent) {
+      try {
+        // Extract search keyword from query
+        var searchTerm = lowerQuery.replace(/show\s+me\s+(our\s+)?/g, '').replace(/what('s| is| are)\s+/g, '').replace(/\b(the|a|an|our|my)\b/g, '').trim();
+        var searchUrl = url + '/dataroom/search?query=' + encodeURIComponent(searchTerm) + '&limit=10';
+        var searchResp = UrlFetchApp.fetch(searchUrl, {
+          muteHttpExceptions: true,
+          headers: { 'Accept': 'application/json' }
+        });
+        if (searchResp.getResponseCode() === 200) {
+          var searchData = JSON.parse(searchResp.getContentText());
+          if (searchData.results && searchData.results.length > 0) {
+            docResults = searchData.results;
+          }
+        }
+      } catch (e) {
+        Logger.log('Dataroom search side-fetch failed: ' + e.message);
       }
     }
 
@@ -97,6 +119,23 @@ function askLuna(query) {
 
       if (!text) {
         return { success: false, error: 'Luna returned an empty response' };
+      }
+
+      // Append structured document results if we found any
+      if (docResults && docResults.length > 0) {
+        var docSection = '\n\n---\n**Data Room Documents:**\n';
+        for (var i = 0; i < docResults.length; i++) {
+          var doc = docResults[i];
+          var docUrl = doc.url || '';
+          var docName = (doc.name || '').replace(/ — .*$/, ''); // Strip category suffix
+          var badge = doc.status ? ' _(' + doc.status + ')_' : '';
+          if (docUrl && docUrl.indexOf('drive.google.com') > -1) {
+            docSection += '- [' + docName + '](' + docUrl + ')' + badge + '\n';
+          } else {
+            docSection += '- ' + docName + badge + '\n';
+          }
+        }
+        text += docSection;
       }
 
       return { success: true, response: text };
@@ -138,6 +177,6 @@ function setLunaApiUrl(newUrl) {
  */
 function getLunaApiUrl() {
   // This line is auto-updated by launch_luna.sh on every tunnel start
-  var url = 'https://gerald-andrea-button-robbie.trycloudflare.com';  // AUTO-TUNNEL-URL
+  var url = 'https://decent-modification-contacted-commander.trycloudflare.com';  // AUTO-TUNNEL-URL
   return url;
 }

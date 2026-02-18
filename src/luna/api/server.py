@@ -1240,6 +1240,10 @@ async def persona_stream(request: MessageRequest):
             director.on_stream(on_token)
             _engine.on_response(on_complete)
 
+            # Tell engine that this streaming endpoint owns turn recording
+            # (prevents _handle_actor_message from double-recording)
+            _engine._stream_owns_response = True
+
             # Send generation request
             msg = Message(
                 type="generate_stream",
@@ -1309,6 +1313,8 @@ async def persona_stream(request: MessageRequest):
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
         finally:
+            # Release stream ownership so engine handles non-streaming paths normally
+            _engine._stream_owns_response = False
             # Cleanup callbacks
             if director:
                 director.remove_stream_callback(on_token)
@@ -3210,6 +3216,158 @@ async def voice_stream():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ============================================================================
+# VOICE SYSTEM API: Blend Engine + Corpus observability
+# ============================================================================
+
+# Lazy-loaded voice system orchestrator
+_voice_orchestrator = None
+
+def _get_voice_orchestrator():
+    """Lazy-load the voice system orchestrator."""
+    global _voice_orchestrator
+    if _voice_orchestrator is not None:
+        return _voice_orchestrator
+    try:
+        from luna.voice.orchestrator import VoiceSystemOrchestrator
+        from luna.voice.models import VoiceSystemConfig
+        voice_config_path = Path(__file__).parent.parent / "voice" / "data" / "voice_config.yaml"
+        if voice_config_path.exists():
+            config = VoiceSystemConfig.from_yaml(str(voice_config_path))
+        else:
+            config = VoiceSystemConfig()
+        _voice_orchestrator = VoiceSystemOrchestrator(config)
+        return _voice_orchestrator
+    except Exception as e:
+        logger.warning(f"Voice system not available: {e}")
+        return None
+
+
+@app.get("/voice/system/status")
+async def voice_system_status():
+    """Get voice system status — engine modes, alpha history, config state."""
+    orch = _get_voice_orchestrator()
+    if not orch:
+        return {"active": False, "error": "Voice system not loaded"}
+
+    engine_info = None
+    if orch.engine:
+        engine_info = {
+            "mode": orch.config.blend_engine_mode.value,
+            "alpha_history": list(orch.engine._alpha_history[-20:]),
+            "turn_history": [t.value for t in orch.engine._turn_history[-20:]],
+            "line_bank_size": len(orch.engine.bank.lines),
+            "bypasses": {
+                "confidence_router": orch.config.bypass_confidence_router,
+                "fade_controller": orch.config.bypass_fade_controller,
+                "segment_planner": orch.config.bypass_segment_planner,
+                "line_sampler": orch.config.bypass_line_sampler,
+            },
+        }
+
+    corpus_info = None
+    if orch.corpus:
+        corpus_info = {
+            "mode": orch.config.voice_corpus_mode.value,
+            "corpus_size": len(orch.corpus.bank.lines),
+            "anti_pattern_count": len(orch.corpus.bank.anti_patterns),
+            "critical_anti_patterns": [a.phrase for a in orch.corpus.bank.critical_anti_patterns()],
+        }
+
+    return {
+        "active": True,
+        "engine": engine_info,
+        "corpus": corpus_info,
+        "config": {
+            "blend_engine_mode": orch.config.blend_engine_mode.value,
+            "voice_corpus_mode": orch.config.voice_corpus_mode.value,
+            "alpha_override": orch.config.alpha_override,
+            "corpus_tier_override": orch.config.corpus_tier_override,
+            "log_alpha": orch.config.log_alpha,
+            "log_line_selection": orch.config.log_line_selection,
+            "log_injection": orch.config.log_injection,
+            "log_shadow_diff": orch.config.log_shadow_diff,
+        },
+    }
+
+
+class VoiceSystemConfigUpdate(BaseModel):
+    """Partial config update for voice system."""
+    blend_engine_mode: Optional[str] = None
+    voice_corpus_mode: Optional[str] = None
+    alpha_override: Optional[float] = None
+    corpus_tier_override: Optional[str] = None
+    bypass_confidence_router: Optional[bool] = None
+    bypass_fade_controller: Optional[bool] = None
+    bypass_segment_planner: Optional[bool] = None
+    bypass_line_sampler: Optional[bool] = None
+
+
+@app.post("/voice/system/config")
+async def update_voice_system_config(update: VoiceSystemConfigUpdate):
+    """Hot-reload voice system configuration."""
+    global _voice_orchestrator
+    orch = _get_voice_orchestrator()
+    if not orch:
+        raise HTTPException(status_code=503, detail="Voice system not loaded")
+
+    try:
+        from luna.voice.models import VoiceSystemConfig, EngineMode
+        # Build new config from current + updates
+        current = orch.config.model_dump()
+        updates = update.model_dump(exclude_none=True)
+        # Convert string modes to EngineMode
+        for key in ("blend_engine_mode", "voice_corpus_mode"):
+            if key in updates:
+                updates[key] = EngineMode(updates[key])
+        current.update(updates)
+        new_config = VoiceSystemConfig(**current)
+        orch.on_config_change(new_config)
+        return {"ok": True, "config": {
+            "blend_engine_mode": new_config.blend_engine_mode.value,
+            "voice_corpus_mode": new_config.voice_corpus_mode.value,
+            "alpha_override": new_config.alpha_override,
+        }}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/voice/system/simulate")
+async def voice_system_simulate(signals: dict):
+    """Simulate alpha computation without affecting state. For the dashboard."""
+    orch = _get_voice_orchestrator()
+    if not orch or not orch.engine:
+        raise HTTPException(status_code=503, detail="Blend engine not active")
+
+    try:
+        from luna.voice.models import ConfidenceSignals, ContextType
+        cs = ConfidenceSignals(
+            memory_retrieval_score=signals.get("memory_retrieval_score", 0.2),
+            turn_number=signals.get("turn_number", 1),
+            entity_resolution_depth=signals.get("entity_resolution_depth", 0),
+            context_type=ContextType(signals.get("context_type", "cold_start")),
+            topic_continuity=signals.get("topic_continuity", 0.0),
+        )
+        result = orch.engine._compute_confidence(cs)
+        return {
+            "alpha": result.alpha,
+            "tier": result.tier.value,
+            "signal_contributions": result.signal_contributions,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/voice/system/reset")
+async def voice_system_reset():
+    """Reset conversation state (alpha history, turn history)."""
+    orch = _get_voice_orchestrator()
+    if not orch:
+        raise HTTPException(status_code=503, detail="Voice system not loaded")
+    orch.on_conversation_start()
+    return {"ok": True, "message": "Voice system conversation state reset"}
 
 
 # ============================================================================
@@ -5183,13 +5341,31 @@ async def slash_prompt():
     route = prompt_info.get("route_decision", "unknown")
     length = prompt_info.get("length", 0)
     preview = prompt_info.get("preview", "")
+    meta = prompt_info.get("assembler")
 
     # Format for display
     route_emoji = "🏠" if route == "local" else "☁️"
+
+    # Build assembler metadata summary if available
+    meta_block = ""
+    if meta:
+        check = lambda v: "✓" if v else "–"
+        identity = meta.get("identity_source", "unknown")
+        memory = meta.get("memory_source") or "none"
+        gap = meta.get("gap_category") or "unknown"
+        tokens = meta.get("prompt_tokens", 0)
+        threads = meta.get("parked_thread_count", 0)
+        meta_block = f"""
+**Assembler:**
+  Identity: **{identity}** | Memory: **{memory}** | Gap: **{gap}**
+  Temporal: {check(meta.get('temporal_injected'))} | Voice: {check(meta.get('voice_injected'))} | Tokens: ~{tokens}
+  Threads parked: {threads}
+"""
+
     formatted = f"""**{route_emoji} Last System Prompt** ({route})
 
 **Length:** {length} chars
-
+{meta_block}
 **Preview:**
 ```
 {preview}

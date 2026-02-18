@@ -21,7 +21,7 @@ class TestPiperTTS:
     def test_piper_import(self):
         """Test that Piper TTS can be imported."""
         from voice.tts.piper import PiperTTS, PIPER_FEMALE_VOICES, DEFAULT_VOICE
-        assert DEFAULT_VOICE == "en_US-lessac-medium"
+        assert DEFAULT_VOICE == "en_US-amy-medium"
         assert len(PIPER_FEMALE_VOICES) > 0
 
     def test_piper_voices_defined(self):

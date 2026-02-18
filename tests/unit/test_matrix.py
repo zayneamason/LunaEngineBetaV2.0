@@ -153,7 +153,7 @@ class TestMatrixSearch:
 
         assert len(results) == 1
         assert results[0].content == "Test fact content"
-        mock_matrix.search_nodes.assert_called_once_with(query="test query", limit=10)
+        mock_matrix.search_nodes.assert_called_once_with(query="test query", limit=10, scope=None)
 
     @pytest.mark.unit
     @pytest.mark.asyncio
