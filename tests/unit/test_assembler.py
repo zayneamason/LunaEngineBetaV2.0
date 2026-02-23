@@ -64,6 +64,7 @@ def _mock_director_with_memory_fetch():
     director._fetch_memory_context = AsyncMock(
         return_value="Ahab likes dark roast coffee. Luna remembers their first conversation about consciousness."
     )
+    director._last_memory_confidence = None  # L1: auto-fetch sets this during real calls
     return director
 
 
@@ -92,6 +93,7 @@ def _mock_director_full_stack():
     director._fetch_memory_context = AsyncMock(
         return_value="Ahab enjoys building consciousness engines."
     )
+    director._last_memory_confidence = None  # L1: auto-fetch sets this during real calls
     return director
 
 

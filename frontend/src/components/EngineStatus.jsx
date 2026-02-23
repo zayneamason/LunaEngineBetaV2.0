@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import GlassCard from './GlassCard';
 import StatusDot from './StatusDot';
 
-const EngineStatus = ({ status, isConnected, onRelaunch }) => {
+const EngineStatus = ({ status, isConnected, onRelaunch, identity }) => {
   const [isRelaunching, setIsRelaunching] = useState(false);
 
   const handleRelaunch = async () => {
@@ -115,6 +115,35 @@ const EngineStatus = ({ status, isConnected, onRelaunch }) => {
             ))}
           </div>
         </div>
+
+        {/* FaceID Identity */}
+        {identity && identity.enabled && (
+          <div className="mt-6">
+            <div className="text-xs text-kozmo-muted uppercase tracking-[2px] mb-3">FaceID</div>
+            <div className={`bg-kozmo-surface rounded p-3 border ${identity.is_present ? 'border-emerald-400/30' : 'border-white/5'}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${identity.is_present ? 'bg-emerald-400 animate-pulse' : 'bg-white/20'}`} />
+                  <span className="text-xs text-white/60">
+                    {identity.is_present ? identity.entity_name : 'No face detected'}
+                  </span>
+                </div>
+                {identity.is_present && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-kozmo-muted">{identity.luna_tier}</span>
+                    {identity.dataroom_tier != null && (
+                      <span className="text-[10px] text-white/20">DR{identity.dataroom_tier}</span>
+                    )}
+                    {identity.dataroom_categories?.length > 0 && (
+                      <span className="text-[10px] text-white/20">{identity.dataroom_categories.length} cat</span>
+                    )}
+                    <span className="text-[10px] text-white/30">{(identity.confidence * 100).toFixed(0)}%</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Agentic Processing */}
         {agentic && (

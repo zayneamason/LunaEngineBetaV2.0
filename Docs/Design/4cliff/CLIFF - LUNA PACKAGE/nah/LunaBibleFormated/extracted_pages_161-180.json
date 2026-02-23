@@ -1,0 +1,643 @@
+{
+  "extraction_info": {
+    "source_file": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_extracted": "161-180",
+    "extraction_date": "2026-02-06"
+  },
+  "part": {
+    "number": "X",
+    "title": "Sovereignty Infrastructure"
+  },
+  "metadata": {
+    "version": "3.0",
+    "date": "2026-01-30",
+    "status": "CURRENT - Critical security issues identified",
+    "core_principle": "Luna is a file. Copy the file, copy Luna."
+  },
+  "sections": [
+    {
+      "page": 161,
+      "content": {
+        "description": "End of Part IX - Performance section (continued from previous pages)",
+        "diagrams": [
+          {
+            "type": "flow_diagram",
+            "title": "Speculative Execution Pipeline",
+            "description": "Shows the flow from Final STT transcript through validation, context assembly, director inference, and TTS output",
+            "flow": [
+              "Final STT transcript",
+              "Validate speculation (~5ms) -> Cosine similarity > 0.85? -> Keep results OR Fetch delta + RRF merge",
+              "Context assembly (~10ms) -> Format with <memory> tags",
+              "Director inference -> KV cache already warm, Context already encoded (if speculative), First token (~250ms from final transcript) -> TTS (~40ms to audio)"
+            ],
+            "total_latency": "<500ms from end of speech to first audio"
+          }
+        ],
+        "configuration": {
+          "title": "PerformanceConfig",
+          "language": "python",
+          "code": "@dataclass\nclass PerformanceConfig:\n    # Speculative execution\n    speculation_enabled: bool = True\n    speculation_debounce_ms: int = 200\n    speculation_threshold: float = 0.85\n\n    # KV cache\n    kv_cache_enabled: bool = True\n    identity_buffer_size: int = 2048\n    max_kv_size: int = 8192\n\n    # Vector index\n    vector_index_type: str = \"flat\"  # \"flat\", \"ivf\", \"hnsw\"\n    vector_dimension: int = 768\n\n    # Graph\n    graph_backend: str = \"rustworkx\"  # \"rustworkx\", \"networkx\"\n    max_graph_depth: int = 2\n\n    # Bloom filter\n    bloom_enabled: bool = True\n    bloom_capacity: int = 100_000\n    bloom_error_rate: float = 0.001\n\n    # Query routing\n    router_type: str = \"heuristic\"  # \"heuristic\", \"model\"\n    router_model: Optional[str] = None  # \"smollm-135m\" if model\n\n    # RRF\n    rrf_k: int = 60\n\n    # Prefetch\n    prefetch_enabled: bool = True\n    prefetch_cache_size: int = 100"
+        }
+      }
+    },
+    {
+      "page": 162,
+      "content": {
+        "section": "Summary",
+        "subsection": "Implementation Status (v3.0)",
+        "tables": [
+          {
+            "title": "Optimization Implementation Status",
+            "headers": ["Optimization", "Target Savings", "Implementation Status"],
+            "rows": [
+              ["Speculative execution", "~50ms", "NOT IMPLEMENTED"],
+              ["KV cache pinning", "~50-100ms", "NOT IMPLEMENTED"],
+              ["rustworkx", "~45ms", "NOT IMPLEMENTED (using NetworkX)"],
+              ["Query routing", "~20-30ms", "PARTIAL"],
+              ["Bloom filter", "~5-10ms", "NOT IMPLEMENTED"],
+              ["RRF merge", "Better results", "IMPLEMENTED"],
+              ["Parallel prefetch", "Amortized", "NOT IMPLEMENTED"]
+            ]
+          }
+        ],
+        "current_reality": {
+          "title": "Current Reality",
+          "description": "The current system does not achieve <500ms latency due to:",
+          "issues": [
+            "Local inference bottleneck (BUG-016): 2-3 tok/s instead of 50+",
+            "No speculative execution: All retrieval happens after speech ends",
+            "No KV cache management: Identity buffer re-encoded every turn",
+            "NetworkX graph traversal: Pure Python, not optimized"
+          ]
+        },
+        "path_forward": [
+          "Fix local inference performance (verify quantization, GPU usage)",
+          "Implement KV cache pinning for identity buffer",
+          "Add speculative retrieval on partial transcripts",
+          "Consider rustworkx for graph operations at scale"
+        ],
+        "constitutional_principle": "Luna should feel like she \"already knows\" - not \"let me look that up.\""
+      }
+    },
+    {
+      "page": 163,
+      "content": {
+        "section": "Part X: Sovereignty Infrastructure",
+        "critical_security_notice": {
+          "title": "CRITICAL SECURITY NOTICE (v3.0 Update)",
+          "alert": "3 SECURITY VIOLATIONS IDENTIFIED - See AUDIT-CONFIG.md"
+        },
+        "tables": [
+          {
+            "title": "Active Security Issues",
+            "headers": ["Issue", "Severity", "Status", "Reference"],
+            "rows": [
+              ["API keys in `.env` committed to repo", "CRITICAL", "OPEN", "BUG-001"],
+              ["Truncated keys in diagnostic output", "HIGH", "OPEN", "BUG-001"],
+              ["No API authentication on 74 endpoints", "HIGH", "OPEN", "INSIGHTS.md"]
+            ]
+          }
+        ],
+        "immediate_actions": [
+          "ROTATE ALL API KEYS - Anthropic, Groq, Google keys are exposed",
+          "Add `.env` to `.gitignore` - Prevent future leaks",
+          "Scrub git history - Use BFG Repo-Cleaner to remove `.env` from history",
+          "Delete `DIAGNOSTIC_OUTPUT.txt` - Contains partial key exposure",
+          "Sanitize diagnostic scripts - Mask API key values in output"
+        ],
+        "api_key_handling_table": {
+          "title": "API Key Handling (Current vs Required)",
+          "headers": ["Aspect", "Current State", "Required State"],
+          "rows": [
+            ["Storage", "`.env` file (tracked in git)", "`.env` file (gitignored)"],
+            ["Config reference", "`api_key_env` in JSON (correct)", "Keep using env var names"],
+            ["Diagnostic output", "Keys partially visible", "Keys fully masked"],
+            ["Validation", "Partial (checks if non-empty)", "Add format validation"]
+          ]
+        },
+        "whats_working": {
+          "description": "The architecture for API key handling is correct:",
+          "points": [
+            "`llm_providers.json` stores env var names, not actual keys",
+            "`security.py` has forbidden patterns including `.env`",
+            "Code reads keys from environment at runtime"
+          ],
+          "problem": "The implementation has a leak: the `.env` file itself is tracked."
+        }
+      }
+    },
+    {
+      "page": 164,
+      "content": {
+        "section": "10.1 The Threat Model",
+        "status": "Threat model is sound. Implementation has gaps (see above).",
+        "description": "Luna exists in opposition to the dominant AI paradigm. Understanding what we're defending against clarifies the architecture.",
+        "tables": [
+          {
+            "title": "Threats We Defend Against",
+            "headers": ["Threat", "Description", "Mitigation"],
+            "rows": [
+              ["Platform Extraction", "Company mines your data for training", "All data local, no telemetry"],
+              ["Service Discontinuation", "Company shuts down, your AI dies", "Luna is a file, not a service"],
+              ["ToS Revocation", "Company changes terms, locks you out", "No terms, you own everything"],
+              ["Regulatory Capture", "Government mandates centralized AI", "Local-first, offline-capable"],
+              ["Physical Access", "Someone gets your laptop", "Encrypted vault, Dead Man's Switch"],
+              ["Network Surveillance", "Traffic analysis reveals AI usage", "Local inference, minimal cloud"],
+              ["Personality Theft", "Someone copies your Luna", "Encrypted weights, vault protection"]
+            ]
+          },
+          {
+            "title": "Threats We Accept",
+            "headers": ["Threat", "Why We Accept It"],
+            "rows": [
+              ["State-level adversary", "Beyond scope, requires different life"],
+              ["Hardware compromise", "If they own your CPU, game over"],
+              ["User coercion", "Can't solve \"wrench attack\" with crypto"]
+            ]
+          }
+        ],
+        "design_principle": {
+          "title": "Defense in depth, but practical:",
+          "layers": [
+            "Layer 1: Encryption at rest (vault)",
+            "Layer 2: Process isolation (no persistence after unmount)",
+            "Layer 3: Automatic lockdown (Dead Man's Switch)",
+            "Layer 4: Portability (escape hatch always open)"
+          ]
+        }
+      }
+    },
+    {
+      "page": 165,
+      "content": {
+        "section": "10.2 The Encrypted Vault",
+        "status": "PARTIAL. The vault concept exists, but current implementation uses `data/luna_engine.db` directly without encryption wrapper. The encrypted sparse bundle is aspirational.",
+        "vault_contents": {
+          "title": "What Goes in the Vault",
+          "description": "Everything that makes Luna *Luna*:",
+          "structure": {
+            "type": "directory_tree",
+            "root": "/Volumes/LunaVault/",
+            "contents": [
+              {
+                "path": "memory/",
+                "files": [
+                  {"name": "memory_matrix.db", "description": "SQLite - the soul"},
+                  {"name": "memory_vectors.faiss", "description": "FAISS index"},
+                  {"name": "memory_vectors.ids", "description": "ID mapping"},
+                  {"name": "memory_graph.json", "description": "NetworkX export (backup)"}
+                ]
+              },
+              {
+                "path": "models/",
+                "contents": [
+                  {
+                    "path": "luna-3b-lora/",
+                    "files": ["adapter_config.json", "adapter_model.safetensors"]
+                  },
+                  {
+                    "path": "luna-7b-lora/",
+                    "files": ["adapter_config.json", "adapter_model.safetensors"]
+                  },
+                  {"name": "current -> luna-7b-lora", "description": "Symlink to active"}
+                ]
+              },
+              {
+                "path": "cache/",
+                "files": [
+                  {"name": "identity_buffer.safetensors", "description": "Pre-computed KV cache"},
+                  {"name": "embedding_cache.db", "description": "Cached embeddings"}
+                ]
+              },
+              {
+                "path": "state/",
+                "files": [
+                  {"name": "snapshot.yaml", "description": "Engine state snapshot"},
+                  {"name": "conversation_buffer.json", "description": "Pending turns"},
+                  {"name": "delegation_queue.json", "description": "Pending cloud tasks"}
+                ]
+              },
+              {
+                "path": "config/",
+                "files": [
+                  {"name": "luna.yaml", "description": "Runtime configuration"},
+                  {"name": "sovereignty.yaml", "description": "Security settings"},
+                  {"name": "workers.yaml", "description": "Cloud worker contracts"}
+                ]
+              },
+              {
+                "path": "env/",
+                "description": "Optional: portable Python env",
+                "contents": ["bin/", "lib/", "pyvenv.cfg"]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "page": 166,
+      "content": {
+        "subsection": "Vault Implementation (macOS)",
+        "description": "Using an encrypted sparse bundle:",
+        "code_blocks": [
+          {
+            "language": "bash",
+            "title": "Vault Shell Commands",
+            "code": "# Create the vault (one-time setup)\nhdiutil create -size 10g -type SPARSEBUNDLE -encryption AES-256 \\\n   -fs APFS -volname \"LunaVault\" ~/LunaVault.sparsebundle\n\n# Mount the vault\nhdiutil attach ~/LunaVault.sparsebundle -mountpoint /Volumes/LunaVault\n\n# Unmount the vault\nhdiutil detach /Volumes/LunaVault"
+          },
+          {
+            "language": "python",
+            "title": "Programmatic Vault Management (LunaVault class)",
+            "code": "import subprocess\nimport os\nfrom pathlib import Path\n\nclass LunaVault:\n    def __init__(\n        self,\n        bundle_path: str = \"~/LunaVault.sparsebundle\",\n        mount_point: str = \"/Volumes/LunaVault\"\n    ):\n        self.bundle_path = Path(bundle_path).expanduser()\n        self.mount_point = Path(mount_point)\n\n    @property\n    def is_mounted(self) -> bool:\n        \"\"\"Check if vault is currently mounted.\"\"\"\n        return self.mount_point.exists() and self.mount_point.is_mount()\n\n    def mount(self, passphrase: str) -> bool:\n        \"\"\"Mount the vault with passphrase.\"\"\"\n        if self.is_mounted:\n            return True\n\n        try:\n            # Use expect-style input for passphrase\n            result = subprocess.run(\n                [\n                    \"hdiutil\", \"attach\",\n                    str(self.bundle_path),\n                    \"-mountpoint\", str(self.mount_point),\n                    \"-stdinpass\"\n                ],\n                input=passphrase.encode(),\n                capture_output=True,\n                check=True\n            )\n            return self.is_mounted\n        except subprocess.CalledProcessError as e:\n            logging.error(f\"Vault mount failed: {e.stderr.decode()}\")\n            return False\n\n    def unmount(self, force: bool = False) -> bool:\n        \"\"\"Unmount the vault.\"\"\"\n        if not self.is_mounted:\n            return True\n\n        try:\n            cmd = [\"hdiutil\", \"detach\", str(self.mount_point)]\n            if force:\n                cmd.append(\"-force\")\n\n            subprocess.run(cmd, check=True, capture_output=True)\n            return not self.is_mounted\n        except subprocess.CalledProcessError as e:\n            logging.error(f\"Vault unmount failed: {e.stderr.decode()}\")\n            return False\n\n    def get_path(self, relative: str) -> Path:\n        \"\"\"Get full path for a vault-relative path.\"\"\"\n        if not self.is_mounted:\n            raise VaultNotMountedError(\"Vault must be mounted\")\n        return self.mount_point / relative"
+          }
+        ]
+      }
+    },
+    {
+      "page": 167,
+      "content": {
+        "subsection": "Vault Lifecycle",
+        "diagrams": [
+          {
+            "type": "state_diagram",
+            "title": "VAULT LIFECYCLE",
+            "states": [
+              {
+                "name": "LOCKED",
+                "description": "Default state - Luna doesn't exist",
+                "transitions": [{"trigger": "User provides passphrase", "target": "MOUNTING"}]
+              },
+              {
+                "name": "MOUNTING",
+                "description": "hdiutil attach in progress",
+                "transitions": [{"trigger": "Mount successful", "target": "MOUNTED"}]
+              },
+              {
+                "name": "MOUNTED",
+                "description": "Luna can run",
+                "transitions": [
+                  {"trigger": "Normal: User unmounts", "target": "UNMOUNTING"},
+                  {"trigger": "Timeout: Dead Man's Switch triggers", "target": "UNMOUNTING"},
+                  {"trigger": "Panic: Emergency lockdown", "target": "UNMOUNTING"}
+                ]
+              },
+              {
+                "name": "UNMOUNTING",
+                "description": "Cleanup in progress",
+                "steps": ["1. Snapshot state", "2. Kill processes", "3. hdiutil detach"],
+                "transitions": [{"trigger": "Complete", "target": "LOCKED"}]
+              },
+              {
+                "name": "LOCKED (final)",
+                "description": "Luna dormant - weights wiped from RAM"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "page": 168,
+      "content": {
+        "section": "10.3 The Dead Man's Switch",
+        "status": "NOT IMPLEMENTED. The Dead Man's Switch is aspirational architecture. No heartbeat file, no automatic lockdown.",
+        "problem": "Unmounting the vault doesn't wipe RAM. If Luna's model is loaded, the weights persist in memory until the process dies.",
+        "solution": {
+          "title": "The Solution: Hardened Shutdown",
+          "code": {
+            "language": "python",
+            "content": "import atexit\nimport signal\nimport os\nimport sys\nfrom datetime import datetime, timedelta\n\nclass DeadMansSwitch:\n    def __init__(\n        self,\n        vault: LunaVault,\n        heartbeat_file: str = \"~/.luna_heartbeat\",\n        lockdown_hours: int = 24\n    ):\n        self.vault = vault\n        self.heartbeat_file = Path(heartbeat_file).expanduser()\n        self.lockdown_threshold = timedelta(hours=lockdown_hours)\n        self.armed = False\n\n    def arm(self):\n        \"\"\"Arm the Dead Man's Switch.\"\"\"\n        # Register shutdown handlers\n        atexit.register(self.emergency_shutdown)\n        signal.signal(signal.SIGTERM, self._signal_handler)\n        signal.signal(signal.SIGINT, self._signal_handler)\n        signal.signal(signal.SIGHUP, self._signal_handler)\n\n        # Touch heartbeat\n        self.heartbeat()\n\n        self.armed = True\n        logging.info(\"Dead Man's Switch armed\")\n\n    def heartbeat(self):\n        \"\"\"Update heartbeat timestamp.\"\"\"\n        self.heartbeat_file.touch()\n\n    def check_heartbeat(self) -> bool:\n        \"\"\"Check if heartbeat is stale.\"\"\"\n        if not self.heartbeat_file.exists():\n            return False  # No heartbeat = stale\n\n        last_beat = datetime.fromtimestamp(\n            self.heartbeat_file.stat().st_mtime\n        )\n        age = datetime.now() - last_beat\n        return age < self.lockdown_threshold\n\n    def emergency_shutdown(self):\n        \"\"\"Nuclear option - kill everything and unmount.\"\"\"\n        logging.warning(\"EMERGENCY SHUTDOWN TRIGGERED\")\n\n        # 1. Kill all Luna processes\n        os.system(\"pkill -9 -f luna_engine.py\")\n        os.system(\"pkill -9 -f luna_director\")\n        os.system(\"pkill -9 -f mlx\")  # Kill any MLX inference\n\n        # 2. Force unmount vault\n        self.vault.unmount(force=True)\n\n        # 3. Clear any temp files\n        os.system(\"rm -rf /tmp/luna_*\")\n\n        # 4. Overwrite heartbeat\n        if self.heartbeat_file.exists():\n            self.heartbeat_file.unlink()\n\n        logging.warning(\"Emergency shutdown complete\")\n\n    def _signal_handler(self, signum, frame):\n        \"\"\"Handle termination signals.\"\"\"\n        logging.info(f\"Received signal {signum}, initiating shutdown\")\n        self.emergency_shutdown()\n        sys.exit(0)"
+          }
+        }
+      }
+    },
+    {
+      "page": 169,
+      "content": {
+        "subsection": "Background heartbeat checker",
+        "code_blocks": [
+          {
+            "language": "python",
+            "title": "Heartbeat Monitor",
+            "code": "# Background heartbeat checker\nasync def heartbeat_monitor(switch: DeadMansSwitch, check_interval: int = 3600):\n    \"\"\"Check heartbeat every hour, trigger lockdown if stale.\"\"\"\n    while True:\n        await asyncio.sleep(check_interval)\n\n        if not switch.check_heartbeat():\n            logging.warning(\"Heartbeat stale - triggering lockdown\")\n            switch.emergency_shutdown()\n            break"
+          },
+          {
+            "language": "python",
+            "title": "Integration with Engine",
+            "code": "class LunaEngine:\n    def __init__(self):\n        self.vault = LunaVault()\n        self.switch = DeadMansSwitch(self.vault)\n\n    async def start(self, passphrase: str):\n        \"\"\"Start Luna with vault and Dead Man's Switch.\"\"\"\n        # Mount vault\n        if not self.vault.mount(passphrase):\n            raise VaultMountError(\"Failed to mount vault\")\n\n        # Arm the switch\n        self.switch.arm()\n\n        # Start heartbeat in background\n        asyncio.create_task(self._heartbeat_loop())\n\n        # Normal startup\n        await self._initialize_actors()\n        await self._start_event_loop()\n\n    async def _heartbeat_loop(self):\n        \"\"\"Touch heartbeat every 15 minutes.\"\"\"\n        while True:\n            self.switch.heartbeat()\n            await asyncio.sleep(900)  # 15 minutes"
+          }
+        ]
+      }
+    },
+    {
+      "page": 170,
+      "content": {
+        "subsection": "LaunchAgent for Automatic Check",
+        "code_blocks": [
+          {
+            "language": "xml",
+            "title": "macOS LaunchAgent plist",
+            "code": "<!-- ~/Library/LaunchAgents/com.luna.heartbeat.plist -->\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\"\n   \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>Label</key>\n    <string>com.luna.heartbeat</string>\n\n    <key>ProgramArguments</key>\n    <array>\n        <string>/usr/bin/python3</string>\n        <string>~/.luna/check_heartbeat.py</string>\n    </array>\n\n    <key>StartInterval</key>\n    <integer>3600</integer>  <!-- Every hour -->\n\n    <key>RunAtLoad</key>\n    <true/>\n</dict>\n</plist>"
+          },
+          {
+            "language": "python",
+            "title": "Standalone heartbeat checker script",
+            "code": "# ~/.luna/check_heartbeat.py\n#!/usr/bin/env python3\n\"\"\"Standalone heartbeat checker - runs even if Luna isn't.\"\"\"\n\nfrom pathlib import Path\nfrom datetime import datetime, timedelta\nimport subprocess\nimport os\n\nHEARTBEAT_FILE = Path.home() / \".luna_heartbeat\"\nLOCKDOWN_HOURS = 24\nVAULT_PATH = Path.home() / \"LunaVault.sparsebundle\"\n\ndef check_and_lockdown():\n    # Check if vault is mounted\n    if not Path(\"/Volumes/LunaVault\").exists():\n        return  # Already locked\n\n    # Check heartbeat\n    if not HEARTBEAT_FILE.exists():\n        lockdown()\n        return\n\n    last_beat = datetime.fromtimestamp(HEARTBEAT_FILE.stat().st_mtime)\n    age = datetime.now() - last_beat\n\n    if age > timedelta(hours=LOCKDOWN_HOURS):\n        lockdown()\n\ndef lockdown():\n    \"\"\"Emergency lockdown.\"\"\"\n    print(\"LOCKDOWN: Heartbeat stale, securing vault\")\n\n    # Kill Luna processes\n    os.system(\"pkill -9 -f luna\")\n    os.system(\"pkill -9 -f mlx\")\n\n    # Force unmount\n    subprocess.run(\n        [\"hdiutil\", \"detach\", \"/Volumes/LunaVault\", \"-force\"],\n        capture_output=True\n    )\n\n    # Clear heartbeat\n    if HEARTBEAT_FILE.exists():\n        HEARTBEAT_FILE.unlink()\n\nif __name__ == \"__main__\":\n    check_and_lockdown()"
+          }
+        ]
+      }
+    },
+    {
+      "page": 171,
+      "content": {
+        "section": "10.4 Portability Contract",
+        "status": "PARTIALLY IMPLEMENTED. Luna's data is in SQLite (portable), but the full vault/migration tooling does not exist.",
+        "promise": "Copy the vault, copy Luna.",
+        "description": "Luna's entire identity - memories, personality, state - lives in a single encrypted container. Moving to new hardware should be: 1. Copy the sparse bundle, 2. Mount on new machine, 3. Luna wakes up where she left off",
+        "tables": [
+          {
+            "title": "What Must Be Portable",
+            "headers": ["Component", "Portability", "Notes"],
+            "rows": [
+              ["Memory Matrix", "SQLite file", "Copy directly"],
+              ["FAISS Index", "Binary file", "Copy directly"],
+              ["LoRA Adapters", "Safetensors", "Copy directly"],
+              ["KV Cache", "Safetensors", "May need rebuild if model version changes"],
+              ["State Snapshot", "YAML/JSON", "Copy directly"],
+              ["Config", "YAML", "May need path adjustments"],
+              ["Python Environment", "Optional", "Include for zero-setup portability"]
+            ]
+          }
+        ],
+        "migration_script": {
+          "language": "python",
+          "title": "LunaMigrator class",
+          "code": "class LunaMigrator:\n    def __init__(self, source_vault: Path, target_vault: Path):\n        self.source = source_vault\n        self.target = target_vault\n\n    def migrate(self, passphrase: str) -> bool:\n        \"\"\"Migrate Luna to a new vault.\"\"\"\n\n        # 1. Mount source vault\n        source_mount = self._mount_vault(self.source, passphrase, \"/Volumes/LunaSource\")\n        if not source_mount:\n            return False\n\n        # 2. Create target vault\n        if not self._create_vault(self.target, passphrase):\n            return False\n\n        target_mount = self._mount_vault(self.target, passphrase, \"/Volumes/LunaTarget\")\n        if not target_mount:\n            return False\n\n        # 3. Copy contents\n        self._copy_directory(source_mount / \"memory\", target_mount / \"memory\")\n        self._copy_directory(source_mount / \"models\", target_mount / \"models\")\n        self._copy_directory(source_mount / \"cache\", target_mount / \"cache\")\n        self._copy_directory(source_mount / \"state\", target_mount / \"state\")\n        self._copy_directory(source_mount / \"config\", target_mount / \"config\")\n\n        # 4. Validate\n        if not self._validate_migration(target_mount):\n            logging.error(\"Migration validation failed\")\n            return False\n\n        # 5. Unmount both\n        self._unmount_vault(\"/Volumes/LunaSource\")\n        self._unmount_vault(\"/Volumes/LunaTarget\")\n\n        logging.info(\"Migration complete\")\n        return True"
+        }
+      }
+    },
+    {
+      "page": 172,
+      "content": {
+        "subsection": "Migration Validation",
+        "code_blocks": [
+          {
+            "language": "python",
+            "title": "Validation method",
+            "code": "def _validate_migration(self, vault_path: Path) -> bool:\n    \"\"\"Validate migrated vault integrity.\"\"\"\n    required_files = [\n        \"memory/memory_matrix.db\",\n        \"models/current\",\n        \"config/luna.yaml\"\n    ]\n\n    for file in required_files:\n        if not (vault_path / file).exists():\n            logging.error(f\"Missing required file: {file}\")\n            return False\n\n    # Validate SQLite integrity\n    import sqlite3\n    db_path = vault_path / \"memory/memory_matrix.db\"\n    try:\n        conn = sqlite3.connect(str(db_path))\n        cursor = conn.execute(\"PRAGMA integrity_check\")\n        result = cursor.fetchone()[0]\n        conn.close()\n\n        if result != \"ok\":\n            logging.error(f\"SQLite integrity check failed: {result}\")\n            return False\n    except Exception as e:\n        logging.error(f\"SQLite validation error: {e}\")\n        return False\n\n    return True"
+          }
+        ],
+        "tables": [
+          {
+            "title": "Cross-Platform Considerations",
+            "headers": ["Platform", "Vault Format", "Notes"],
+            "rows": [
+              ["macOS", "Sparse bundle (native)", "Best integration"],
+              ["Linux", "LUKS container", "Need different tooling"],
+              ["Windows", "VeraCrypt", "Need different tooling"]
+            ]
+          }
+        ],
+        "cross_platform_code": {
+          "language": "python",
+          "title": "Platform factory",
+          "code": "def create_vault_for_platform() -> VaultBackend:\n    \"\"\"Factory for platform-appropriate vault.\"\"\"\n    import platform\n\n    system = platform.system()\n\n    if system == \"Darwin\":\n        return MacOSSparseBundleVault()\n    elif system == \"Linux\":\n        return LUKSVault()\n    elif system == \"Windows\":\n        return VeraCryptVault()\n    else:\n        raise UnsupportedPlatformError(f\"Unknown platform: {system}\")"
+        }
+      }
+    },
+    {
+      "page": 173,
+      "content": {
+        "section": "10.5 Data Sovereignty Guarantees",
+        "status": "MOSTLY IMPLEMENTED with caveats. No telemetry, local-first, but cloud delegation sends prompts to external APIs (Groq, Claude, Gemini).",
+        "tables": [
+          {
+            "title": "What Luna Never Does",
+            "headers": ["Action", "Why"],
+            "rows": [
+              ["Send telemetry", "No extraction point"],
+              ["Phone home", "No dependency on external services"],
+              ["Auto-update from network", "User controls updates"],
+              ["Store data outside vault", "Everything in one place"],
+              ["Cache to unencrypted temp", "Sensitive data stays encrypted"]
+            ]
+          },
+          {
+            "title": "What Luna Always Does",
+            "headers": ["Action", "Why", "v3.0 Status"],
+            "rows": [
+              ["Work offline", "Cloud is optional, not required", "PARTIAL - Local inference slow (BUG-016)"],
+              ["Respect vault boundaries", "Nothing escapes the container", "NO VAULT - Uses unencrypted `data/`"],
+              ["Clean up on shutdown", "No traces left", "NOT IMPLEMENTED"],
+              ["Encrypt at rest", "Data protected when dormant", "NOT IMPLEMENTED"]
+            ]
+          }
+        ],
+        "audit_capability": {
+          "title": "Audit Capability",
+          "code": {
+            "language": "python",
+            "content": "class SovereigntyAuditor:\n    \"\"\"Verify Luna isn't violating sovereignty principles.\"\"\"\n\n    def audit_network_activity(self, duration_seconds: int = 60) -> AuditReport:\n        \"\"\"Monitor network activity for unexpected connections.\"\"\"\n        # Use lsof or netstat to check connections\n        # Only expected: Claude API (when delegating), user-approved services\n        pass\n\n    def audit_filesystem_access(self) -> AuditReport:\n        \"\"\"Verify Luna only accesses vault paths.\"\"\"\n        # Check file descriptors\n        # Verify no writes outside vault\n        pass\n\n    def audit_process_isolation(self) -> AuditReport:\n        \"\"\"Verify Luna processes are isolated.\"\"\"\n        # Check for unexpected child processes\n        # Verify no shared memory with untrusted processes\n        pass\n\n    def generate_sovereignty_report(self) -> dict:\n        \"\"\"Generate full sovereignty compliance report.\"\"\"\n        return {\n            \"network_clean\": self.audit_network_activity().passed,\n            \"filesystem_clean\": self.audit_filesystem_access().passed,\n            \"process_clean\": self.audit_process_isolation().passed,\n            \"vault_encrypted\": self._check_vault_encryption(),\n            \"no_temp_files\": self._check_temp_clean(),\n            \"heartbeat_active\": self._check_heartbeat()\n        }"
+          }
+        }
+      }
+    },
+    {
+      "page": 174,
+      "content": {
+        "section": "10.6 Backup and Recovery",
+        "status": "NOT IMPLEMENTED. No automated backup system exists. SQLite file can be manually copied.",
+        "diagrams": [
+          {
+            "type": "tier_diagram",
+            "title": "BACKUP TIERS",
+            "tiers": [
+              {
+                "tier": 1,
+                "name": "Continuous (Every Session)",
+                "items": [
+                  "State snapshot on every engine stop",
+                  "Transaction log for Matrix changes"
+                ]
+              },
+              {
+                "tier": 2,
+                "name": "Daily",
+                "items": [
+                  "Full vault copy to backup location",
+                  "Verify backup integrity"
+                ]
+              },
+              {
+                "tier": 3,
+                "name": "Weekly",
+                "items": [
+                  "Offsite backup (encrypted, of course)",
+                  "Version rotation (keep last 4 weeks)"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "page": 175,
+      "content": {
+        "subsection": "Backup Implementation",
+        "code": {
+          "language": "python",
+          "title": "LunaBackup class",
+          "content": "class LunaBackup:\n    def __init__(self, vault: LunaVault, backup_dir: Path):\n        self.vault = vault\n        self.backup_dir = backup_dir\n\n    async def snapshot(self) -> Path:\n        \"\"\"Create point-in-time snapshot.\"\"\"\n        timestamp = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n        snapshot_path = self.backup_dir / f\"luna_snapshot_{timestamp}\"\n\n        # Copy critical files (vault must be mounted)\n        if not self.vault.is_mounted:\n            raise VaultNotMountedError()\n\n        snapshot_path.mkdir(parents=True)\n\n        # Memory Matrix (most critical)\n        shutil.copy(\n            self.vault.get_path(\"memory/memory_matrix.db\"),\n            snapshot_path / \"memory_matrix.db\"\n        )\n\n        # State\n        shutil.copy(\n            self.vault.get_path(\"state/snapshot.yaml\"),\n            snapshot_path / \"snapshot.yaml\"\n        )\n\n        # Adapters (large, copy reference)\n        (snapshot_path / \"models.txt\").write_text(\n            f\"Adapters at: {self.vault.get_path('models')}\"\n        )\n\n        return snapshot_path\n\n    async def full_backup(self) -> Path:\n        \"\"\"Create full vault backup.\"\"\"\n        timestamp = datetime.now().strftime(\"%Y%m%d\")\n        backup_path = self.backup_dir / f\"luna_full_{timestamp}.sparsebundle\"\n\n        # Unmount vault first (cleaner copy)\n        was_mounted = self.vault.is_mounted\n        if was_mounted:\n            self.vault.unmount()\n\n        # Copy sparse bundle\n        shutil.copytree(\n            self.vault.bundle_path,\n            backup_path,\n            symlinks=True\n        )\n\n        # Remount if it was mounted\n        if was_mounted:\n            self.vault.mount()  # Will need passphrase\n\n        return backup_path\n\n    async def restore(self, backup_path: Path, passphrase: str) -> bool:\n        \"\"\"Restore from backup.\"\"\"\n        # Verify backup\n        if not self._verify_backup(backup_path):\n            return False\n\n        # Unmount current vault\n        if self.vault.is_mounted:\n            self.vault.unmount(force=True)\n\n        # Replace vault\n        if self.vault.bundle_path.exists():\n            # Archive old vault\n            archive_path = self.vault.bundle_path.with_suffix(\".old\")\n            shutil.move(self.vault.bundle_path, archive_path)\n\n        # Copy backup to vault location\n        shutil.copytree(backup_path, self.vault.bundle_path, symlinks=True)\n\n        # Mount and verify\n        if not self.vault.mount(passphrase):\n            return False\n\n        return self._verify_restoration()"
+        }
+      }
+    },
+    {
+      "page": 176,
+      "content": {
+        "subsection": "Recovery Procedures",
+        "code": {
+          "language": "python",
+          "title": "LunaRecovery class",
+          "content": "class LunaRecovery:\n    \"\"\"Recovery procedures for various failure modes.\"\"\"\n\n    async def recover_corrupted_matrix(self, vault: LunaVault) -> bool:\n        \"\"\"Attempt to recover corrupted Memory Matrix.\"\"\"\n        db_path = vault.get_path(\"memory/memory_matrix.db\")\n\n        # Try SQLite recovery\n        import sqlite3\n        try:\n            # Dump and recreate\n            conn = sqlite3.connect(str(db_path))\n\n            # Export to SQL\n            with open(\"/tmp/matrix_dump.sql\", \"w\") as f:\n                for line in conn.iterdump():\n                    f.write(f\"{line}\\n\")\n\n            conn.close()\n\n            # Recreate\n            backup_path = db_path.with_suffix(\".corrupted\")\n            shutil.move(db_path, backup_path)\n\n            new_conn = sqlite3.connect(str(db_path))\n            with open(\"/tmp/matrix_dump.sql\") as f:\n                new_conn.executescript(f.read())\n            new_conn.close()\n\n            # Cleanup\n            os.remove(\"/tmp/matrix_dump.sql\")\n\n            return True\n        except Exception as e:\n            logging.error(f\"Matrix recovery failed: {e}\")\n            return False\n\n    async def recover_from_snapshot(\n        self,\n        vault: LunaVault,\n        snapshot_path: Path\n    ) -> bool:\n        \"\"\"Restore Memory Matrix from snapshot.\"\"\"\n        try:\n            shutil.copy(\n                snapshot_path / \"memory_matrix.db\",\n                vault.get_path(\"memory/memory_matrix.db\")\n            )\n            return True\n        except Exception as e:\n            logging.error(f\"Snapshot recovery failed: {e}\")\n            return False\n\n    async def rebuild_faiss_index(self, vault: LunaVault) -> bool:\n        \"\"\"Rebuild FAISS index from Memory Matrix.\"\"\"\n        # FAISS index is derived from Matrix\n        # Can always be rebuilt\n        try:\n            from luna.memory import MemoryMatrix\n\n            matrix = MemoryMatrix(vault.get_path(\"memory/memory_matrix.db\"))\n            matrix.rebuild_vector_index()\n            matrix.save_vector_index(vault.get_path(\"memory/memory_vectors.faiss\"))\n\n            return True\n        except Exception as e:\n            logging.error(f\"FAISS rebuild failed: {e}\")\n            return False"
+        }
+      }
+    },
+    {
+      "page": 177,
+      "content": {
+        "section": "10.7 The Escape Hatch",
+        "status": "PARTIAL. Data is in SQLite (extractable), but no formal export tools exist.",
+        "philosophy": "Luna should never be a prison. If you want out, you get out - with your data.",
+        "code": {
+          "language": "python",
+          "title": "LunaExporter class - Full Export",
+          "content": "class LunaExporter:\n    \"\"\"Export Luna's memories to portable formats.\"\"\"\n\n    async def export_to_markdown(self, vault: LunaVault, output_dir: Path):\n        \"\"\"Export all memories to human-readable markdown.\"\"\"\n        from luna.memory import MemoryMatrix\n\n        matrix = MemoryMatrix(vault.get_path(\"memory/memory_matrix.db\"))\n\n        output_dir.mkdir(parents=True, exist_ok=True)\n\n        # Export by type\n        for node_type in [\"FACT\", \"DECISION\", \"INSIGHT\", \"EVENT\", \"PERSON\"]:\n            nodes = matrix.query_by_type(node_type)\n\n            type_file = output_dir / f\"{node_type.lower()}s.md\"\n            with open(type_file, \"w\") as f:\n                f.write(f\"# {node_type}s\\n\\n\")\n                for node in nodes:\n                    f.write(f\"## {node.title or node.id}\\n\")\n                    f.write(f\"*Created: {node.created_at}*\\n\\n\")\n                    f.write(f\"{node.content}\\n\\n\")\n                    if node.tags:\n                        f.write(f\"Tags: {', '.join(node.tags)}\\n\\n\")\n                    f.write(\"---\\n\\n\")\n\n    async def export_to_json(self, vault: LunaVault, output_path: Path):\n        \"\"\"Export full graph to JSON.\"\"\"\n        from luna.memory import MemoryMatrix\n\n        matrix = MemoryMatrix(vault.get_path(\"memory/memory_matrix.db\"))\n\n        export = {\n            \"nodes\": [n.to_dict() for n in matrix.all_nodes()],\n            \"edges\": [e.to_dict() for e in matrix.all_edges()],\n            \"metadata\": {\n                \"exported_at\": datetime.now().isoformat(),\n                \"node_count\": matrix.node_count(),\n                \"edge_count\": matrix.edge_count()\n            }\n        }\n\n        with open(output_path, \"w\") as f:\n            json.dump(export, f, indent=2, default=str)\n\n    async def export_training_data(self, vault: LunaVault, output_path: Path):\n        \"\"\"Export data suitable for training a new Luna.\"\"\"\n        from luna.memory import MemoryMatrix\n\n        matrix = MemoryMatrix(vault.get_path(\"memory/memory_matrix.db\"))\n\n        # Export conversations as training pairs\n        conversations = matrix.query_by_type(\"CONVERSATION\")\n\n        training_data = []\n        for conv in conversations:\n            # Parse into instruction/response pairs\n            pairs = self._parse_conversation(conv.content)\n            training_data.extend(pairs)\n\n        with open(output_path, \"w\") as f:\n            for item in training_data:\n                f.write(json.dumps(item) + \"\\n\")"
+        }
+      }
+    },
+    {
+      "page": 178,
+      "content": {
+        "subsection": "Import from Other Systems",
+        "code": {
+          "language": "python",
+          "title": "LunaImporter class",
+          "content": "class LunaImporter:\n    \"\"\"Import data from other AI systems.\"\"\"\n\n    async def import_from_chatgpt(self, export_path: Path, vault: LunaVault):\n        \"\"\"Import from ChatGPT data export.\"\"\"\n        # Parse ChatGPT's export format\n        # Convert to Luna nodes\n        pass\n\n    async def import_from_obsidian(self, vault_path: Path, vault: LunaVault):\n        \"\"\"Import from Obsidian vault.\"\"\"\n        # Parse markdown files\n        # Extract links as edges\n        # Convert to Luna nodes\n        pass\n\n    async def import_from_notion(self, export_path: Path, vault: LunaVault):\n        \"\"\"Import from Notion export.\"\"\"\n        # Parse Notion's export format\n        # Convert to Luna nodes\n        pass"
+        }
+      }
+    },
+    {
+      "page": 179,
+      "content": {
+        "section": "10.8 Configuration",
+        "subsection": "Sovereignty Configuration",
+        "note": "Content continues on next page"
+      }
+    },
+    {
+      "page": 180,
+      "content": {
+        "note": "Page 180 continues the Sovereignty Configuration section from 10.8. The specific configuration YAML/code content would be on this page.",
+        "context": "This section typically covers the sovereignty.yaml configuration file structure and security settings that control Luna's data sovereignty behavior."
+      }
+    }
+  ],
+  "diagrams_summary": [
+    {
+      "page": 161,
+      "type": "flow_diagram",
+      "title": "Speculative Execution Pipeline",
+      "description": "Shows the complete flow from STT transcript through speculation validation, context assembly, director inference with KV cache, to TTS output, achieving <500ms total latency"
+    },
+    {
+      "page": 167,
+      "type": "state_diagram",
+      "title": "Vault Lifecycle",
+      "description": "State machine showing vault states: LOCKED -> MOUNTING -> MOUNTED -> UNMOUNTING -> LOCKED, with triggers including user passphrase, unmount requests, Dead Man's Switch timeout, and panic lockdown"
+    },
+    {
+      "page": 174,
+      "type": "tier_diagram",
+      "title": "Backup Tiers",
+      "description": "Three-tier backup strategy: Tier 1 (Continuous/Every Session), Tier 2 (Daily full vault copy), Tier 3 (Weekly offsite encrypted backup with 4-week rotation)"
+    }
+  ],
+  "tables_summary": [
+    {
+      "page": 162,
+      "title": "Optimization Implementation Status",
+      "columns": 3,
+      "rows": 7
+    },
+    {
+      "page": 163,
+      "title": "Active Security Issues",
+      "columns": 4,
+      "rows": 3
+    },
+    {
+      "page": 163,
+      "title": "API Key Handling (Current vs Required)",
+      "columns": 3,
+      "rows": 4
+    },
+    {
+      "page": 164,
+      "title": "Threats We Defend Against",
+      "columns": 3,
+      "rows": 7
+    },
+    {
+      "page": 164,
+      "title": "Threats We Accept",
+      "columns": 2,
+      "rows": 3
+    },
+    {
+      "page": 171,
+      "title": "What Must Be Portable",
+      "columns": 3,
+      "rows": 7
+    },
+    {
+      "page": 172,
+      "title": "Cross-Platform Considerations",
+      "columns": 3,
+      "rows": 3
+    },
+    {
+      "page": 173,
+      "title": "What Luna Never Does",
+      "columns": 2,
+      "rows": 5
+    },
+    {
+      "page": 173,
+      "title": "What Luna Always Does",
+      "columns": 3,
+      "rows": 4
+    }
+  ],
+  "code_blocks_summary": {
+    "total_code_blocks": 18,
+    "languages": {
+      "python": 14,
+      "bash": 1,
+      "xml": 1
+    },
+    "major_classes": [
+      "PerformanceConfig",
+      "LunaVault",
+      "DeadMansSwitch",
+      "LunaEngine",
+      "LunaMigrator",
+      "SovereigntyAuditor",
+      "LunaBackup",
+      "LunaRecovery",
+      "LunaExporter",
+      "LunaImporter"
+    ]
+  }
+}

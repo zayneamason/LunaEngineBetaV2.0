@@ -180,20 +180,19 @@ class LibrarianActor(Actor):
         # Parse extraction from dict
         extraction = ExtractionOutput.from_dict(payload)
 
-        if extraction.is_empty():
-            logger.debug("The Dude: Empty extraction, nothing to file")
-            return
-
-        # File it
+        # File extraction content (safe on empty — just returns empty result)
         result = await self._wire_extraction(extraction)
 
-        logger.info(
-            f"The Dude: Filed {len(result.nodes_created)} new nodes, "
-            f"merged {len(result.nodes_merged)}, "
-            f"created {len(result.edges_created)} edges"
-        )
+        if not extraction.is_empty():
+            logger.info(
+                f"The Dude: Filed {len(result.nodes_created)} new nodes, "
+                f"merged {len(result.nodes_merged)}, "
+                f"created {len(result.edges_created)} edges"
+            )
 
         # Process flow signal (Layer 3 — thread management)
+        # MUST run even on empty extractions — the Scribe sends flow-only
+        # messages for RECALIBRATION/AMEND that carry no objects or edges.
         if extraction.flow_signal:
             try:
                 await self._process_flow_signal(extraction.flow_signal, extraction, result)

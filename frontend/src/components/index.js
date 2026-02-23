@@ -17,6 +17,8 @@ export { default as PromptInspectorPanel } from './PromptInspectorPanel';
 export { default as VoiceBlendPanel } from './VoiceBlendPanel';
 export { default as VoiceSystemSpecPanel } from './VoiceSystemSpecPanel';
 export { default as LunaOrb } from './LunaOrb';
+export { default as IdentityBadge } from './IdentityBadge';
+export { default as FaceIDCapture } from './FaceIDCapture';
 export { VoiceTuningPanel } from './VoiceTuningPanel';
 export { OrbSettingsPanel } from './OrbSettingsPanel';
 export { LLMProviderDropdown } from './LLMProviderDropdown';

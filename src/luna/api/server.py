@@ -30,9 +30,10 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Optional, AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+import httpx
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 
 from luna.services.orb_state import OrbStateManager, ExpressionConfig
@@ -45,6 +46,8 @@ from luna.actors.base import Message
 from luna.agentic.router import ExecutionPath
 from luna.diagnostics import run_startup_check, start_watchdog
 from luna.services.kozmo.routes import router as kozmo_router
+from luna.services.guardian.routes import router as guardian_router
+from luna.services.guardian.memory_bridge import GuardianMemoryBridge
 
 # QA System imports
 try:
@@ -147,6 +150,9 @@ async def _run_qa_validation_background(
 # Global engine instance
 _engine: Optional[LunaEngine] = None
 
+# Guardian memory bridge
+_guardian_bridge: Optional[GuardianMemoryBridge] = None
+
 # Global orb state manager and WebSocket connections
 _orb_state_manager: Optional[OrbStateManager] = None
 _orb_websockets: set[WebSocket] = set()
@@ -154,9 +160,66 @@ _orb_websockets: set[WebSocket] = set()
 # Global chat WebSocket connections (for shared session viewing)
 _chat_websockets: set[WebSocket] = set()
 
+# Global identity WebSocket connections (FaceID state)
+_identity_websockets: set[WebSocket] = set()
+
 # Global performance orchestrator (coordinates voice + orb)
 _performance_orchestrator: Optional[PerformanceOrchestrator] = None
 
+
+# ── Security helpers ─────────────────────────────────────────────────────────
+
+async def _resolve_current_bridge():
+    """Get the current speaker's BridgeResult from FaceID → AccessBridge."""
+    if _engine is None:
+        return None
+    identity_actor = _engine.get_actor("identity")
+    if not identity_actor or not identity_actor.current.is_present:
+        return None
+    entity_id = identity_actor.current.entity_id
+    if not entity_id:
+        return None
+    try:
+        from luna.identity.bridge import AccessBridge
+        matrix = _engine.get_actor("matrix")
+        mem = getattr(matrix, "_matrix", None) if matrix else None
+        if not mem:
+            return None
+        bridge = AccessBridge(mem.db)
+        return await bridge.lookup(entity_id)
+    except Exception:
+        return None
+
+
+async def _require_admin():
+    """Require admin identity via FaceID. Raises 403 if not admin."""
+    bridge = await _resolve_current_bridge()
+    if bridge is None or bridge.luna_tier != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Admin identity required (FaceID not recognized or insufficient tier)",
+        )
+    return bridge
+
+
+async def _gate_results(results: list, source: str = "api") -> list:
+    """Apply permission gate to a list of result dicts/nodes. Returns allowed list."""
+    from luna.identity.permissions import gate_content
+    bridge = await _resolve_current_bridge()
+    db = None
+    try:
+        if _engine:
+            matrix = _engine.get_actor("matrix")
+            mem = getattr(matrix, "_matrix", None) if matrix else None
+            if mem:
+                db = mem.db
+    except Exception:
+        pass
+    allowed, _denied = await gate_content(results, bridge, db=db, source=source)
+    return allowed
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def _broadcast_chat_message(message_type: str, data: dict) -> None:
     """
@@ -217,6 +280,15 @@ class AgenticStats(BaseModel):
     agent_loop_status: str
 
 
+class IdentityState(BaseModel):
+    """Current FaceID identity state."""
+    enabled: bool = False
+    is_present: bool = False
+    entity_name: Optional[str] = None
+    luna_tier: str = "unknown"
+    confidence: float = 0.0
+
+
 class StatusResponse(BaseModel):
     """Response from /status endpoint."""
     state: str
@@ -229,6 +301,7 @@ class StatusResponse(BaseModel):
     current_turn: int = 0  # Conversation turn counter (for context TTL)
     context: Optional[dict] = None  # Revolving context stats
     agentic: Optional[AgenticStats] = None  # Agentic processing stats
+    identity: Optional[IdentityState] = None  # FaceID identity state
 
 
 class HistoryMessage(BaseModel):
@@ -276,7 +349,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Luna Engine...")
 
     # Create and start engine
-    config = EngineConfig()
+    config = EngineConfig(
+        faceid_enabled=True,  # Always enable — IdentityActor handles init failures gracefully
+    )
     _engine = LunaEngine(config)
 
     # Start engine in background
@@ -302,6 +377,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to initialize orb state manager: {e}")
         _orb_state_manager = OrbStateManager()
+
+    # Subscribe to identity state changes (FaceID → WebSocket broadcast)
+    identity_actor = _engine.get_actor("identity")
+    if identity_actor and hasattr(identity_actor, "on_change"):
+        def _on_identity_change(current):
+            asyncio.create_task(_broadcast_identity_state())
+        identity_actor.on_change(_on_identity_change)
+        logger.info("Identity WebSocket broadcast wired")
 
     # Start runtime watchdog for continuous health monitoring
     watchdog_task = await start_watchdog(check_interval=60, engine=_engine)
@@ -346,14 +429,86 @@ app = FastAPI(
 # Add CORS middleware for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:5177", "http://localhost:5178", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5174", "http://127.0.0.1:5175", "http://127.0.0.1:5176", "http://127.0.0.1:5177", "http://127.0.0.1:5178"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def guardian_project_scope(request: Request, call_next):
+    """Auto-activate guardian project scope and sync memory bridge."""
+    global _guardian_bridge
+    path = request.url.path
+    # Skip sync/clear/status endpoints — they manage the bridge directly
+    _bridge_paths = ("/guardian/api/sync", "/guardian/api/clear")
+    if path.startswith("/guardian/") and not any(path.startswith(p) for p in _bridge_paths) and _engine is not None:
+        # Activate project scope (mirrors /project/activate pattern)
+        if _engine.active_project != "guardian-kinoni":
+            _engine.set_active_project("guardian-kinoni")
+            # Notify Librarian for thread-aware context
+            librarian = _engine.get_actor("librarian")
+            if librarian:
+                msg = Message(type="set_project_context", payload={"slug": "guardian-kinoni"})
+                await librarian.handle(msg)
+
+        # Auto-sync on first request (lazy init)
+        if _guardian_bridge is None:
+            _guardian_bridge = GuardianMemoryBridge(_engine)
+        if not _guardian_bridge.is_synced:
+            try:
+                stats = await _guardian_bridge.sync_all()
+                logger.info(f"Guardian bridge auto-synced: {stats}")
+            except Exception as e:
+                logger.error(f"Guardian bridge auto-sync failed: {e}")
+
+    response = await call_next(request)
+    return response
+
+
 # Mount KOZMO service router
 app.include_router(kozmo_router)
+
+# Mount GUARDIAN service router
+app.include_router(guardian_router)
+
+
+# ============================================
+# GUARDIAN MEMORY BRIDGE ENDPOINTS
+# ============================================
+
+@app.post("/guardian/api/sync")
+async def guardian_sync():
+    """Sync Guardian demo data into Luna's Memory Matrix."""
+    global _guardian_bridge
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    if _guardian_bridge is None:
+        _guardian_bridge = GuardianMemoryBridge(_engine)
+
+    stats = await _guardian_bridge.sync_all()
+    return {"status": "synced", **stats}
+
+
+@app.post("/guardian/api/clear")
+async def guardian_clear():
+    """Clear Guardian data from Memory Matrix."""
+    global _guardian_bridge
+    if _guardian_bridge is None:
+        return {"status": "nothing_to_clear"}
+
+    removed = await _guardian_bridge.clear()
+    return {"status": "cleared", "removed": removed}
+
+
+@app.get("/guardian/api/sync/status")
+async def guardian_sync_status():
+    """Check if Guardian data is synced."""
+    if _guardian_bridge is None:
+        return {"synced": False}
+    return {"synced": _guardian_bridge.is_synced}
+
 
 # Serve KOZMO project assets (generated reference images, etc.)
 try:
@@ -364,6 +519,17 @@ try:
     app.mount("/kozmo-assets", StaticFiles(directory=str(_kozmo_assets)), name="kozmo-assets")
 except Exception:
     pass  # Non-fatal — assets won't be served if dir is missing
+
+# Serve GUARDIAN frontend
+try:
+    _guardian_frontend = _Path(__file__).resolve().parent.parent.parent.parent.parent / "Eclissi-Guardian" / "frontend"
+    if not _guardian_frontend.exists():
+        _guardian_frontend = _Path("frontend/guardian")
+    if _guardian_frontend.exists():
+        app.mount("/guardian", StaticFiles(directory=str(_guardian_frontend), html=True), name="guardian")
+        logger.info(f"Guardian frontend mounted at /guardian from {_guardian_frontend}")
+except Exception as e:
+    logger.warning(f"Guardian frontend mount failed: {e}")
 
 
 # ============================================
@@ -467,6 +633,141 @@ async def chat_websocket(websocket: WebSocket):
         logger.info(f"Chat WebSocket disconnected. Total: {len(_chat_websockets)}")
 
 
+# ============================================
+# IDENTITY STATE WEBSOCKET (FaceID)
+# ============================================
+
+async def _broadcast_identity_state():
+    """Broadcast current identity state to all connected WebSocket clients."""
+    if _engine is None:
+        return
+
+    identity_actor = _engine.get_actor("identity")
+    if not identity_actor:
+        return
+
+    current = identity_actor.current
+    payload = {
+        "type": "identity_update",
+        "data": {
+            "is_present": current.is_present,
+            "entity_id": current.entity_id,
+            "entity_name": current.entity_name,
+            "confidence": round(current.confidence, 3),
+            "luna_tier": current.luna_tier,
+            "dataroom_tier": current.dataroom_tier,
+            "last_seen": current.last_seen,
+        },
+        "timestamp": asyncio.get_event_loop().time(),
+    }
+
+    disconnected = set()
+    for ws in _identity_websockets:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            disconnected.add(ws)
+    _identity_websockets.difference_update(disconnected)
+
+
+@app.websocket("/ws/identity")
+async def identity_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for FaceID identity state streaming.
+
+    Clients receive JSON updates when identity changes:
+    {
+        "type": "identity_update",
+        "data": {
+            "is_present": true,
+            "entity_id": "entity_2ca6b7c7",
+            "entity_name": "Ahab",
+            "confidence": 0.987,
+            "luna_tier": "admin",
+            "dataroom_tier": 1,
+            "last_seen": 1708349600.0
+        },
+        "timestamp": 1234567890
+    }
+    """
+    await websocket.accept()
+    _identity_websockets.add(websocket)
+    logger.info(f"Identity WebSocket connected. Total: {len(_identity_websockets)}")
+
+    # Send current state immediately
+    identity_actor = _engine.get_actor("identity") if _engine else None
+    if identity_actor:
+        current = identity_actor.current
+        await websocket.send_json({
+            "type": "identity_update",
+            "data": {
+                "is_present": current.is_present,
+                "entity_id": current.entity_id,
+                "entity_name": current.entity_name,
+                "confidence": round(current.confidence, 3),
+                "luna_tier": current.luna_tier,
+                "dataroom_tier": current.dataroom_tier,
+                "last_seen": current.last_seen,
+            },
+            "timestamp": asyncio.get_event_loop().time(),
+        })
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _identity_websockets.discard(websocket)
+        logger.info(f"Identity WebSocket disconnected. Total: {len(_identity_websockets)}")
+
+
+# ============================================
+# BROWSER FACE RECOGNITION ENDPOINT
+# ============================================
+
+# ============================================
+# FACEID PROXY — forwards to FaceID microservice on :8100
+# ============================================
+
+FACEID_SERVICE = "http://127.0.0.1:8101"
+
+
+async def _proxy_faceid(path: str, body: dict) -> dict:
+    """Forward a request to the FaceID microservice."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{FACEID_SERVICE}{path}", json=body)
+            return resp.json()
+    except httpx.ConnectError:
+        return {"error": "FaceID service not running (start: cd Tools/FaceID && source .venv/bin/activate && python serve.py)"}
+    except Exception as e:
+        return {"error": f"FaceID proxy error: {e}"}
+
+
+@app.post("/identity/recognize")
+async def recognize_frame(frame_data: dict):
+    """Proxy to FaceID microservice for recognition."""
+    return await _proxy_faceid("/recognize", frame_data)
+
+
+@app.post("/identity/enroll")
+async def enroll_frame(frame_data: dict):
+    """Proxy to FaceID microservice for enrollment. Admin-only."""
+    await _require_admin()
+    return await _proxy_faceid("/enroll", frame_data)
+
+
+@app.post("/identity/reset")
+async def reset_identity(data: dict):
+    """Proxy to FaceID microservice for reset. Admin-only."""
+    await _require_admin()
+    return await _proxy_faceid("/reset", data)
+
+
+
+
 @app.post("/message", response_model=MessageResponse)
 async def send_message(request: MessageRequest):
     """
@@ -567,6 +868,18 @@ async def get_status():
             agent_loop_status=agentic_data.get("agent_loop_status", "idle"),
         )
 
+    # Build identity state if available
+    identity_state = None
+    identity_actor = _engine.get_actor("identity")
+    if identity_actor:
+        identity_state = IdentityState(
+            enabled=True,
+            is_present=identity_actor.current.is_present,
+            entity_name=identity_actor.current.entity_name,
+            luna_tier=identity_actor.current.luna_tier,
+            confidence=round(identity_actor.current.confidence, 3),
+        )
+
     return StatusResponse(
         state=status["state"],
         uptime_seconds=status["uptime_seconds"],
@@ -578,6 +891,7 @@ async def get_status():
         current_turn=status.get("current_turn", 0),
         context=status.get("context"),
         agentic=agentic_stats,
+        identity=identity_state,
     )
 
 
@@ -712,11 +1026,12 @@ async def get_active_project():
 @app.post("/api/system/relaunch")
 async def relaunch_system(background_tasks: BackgroundTasks):
     """
-    Trigger a system relaunch.
+    Trigger a system relaunch. Admin-only.
 
     Executes the relaunch script in the background and returns immediately.
     The server will restart, so the client should expect a brief disconnection.
     """
+    await _require_admin()
     import subprocess
     import os
     from pathlib import Path
@@ -1778,6 +2093,33 @@ async def get_memory_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/entities")
+async def get_entities():
+    """Get all known entities from Luna's memory.
+
+    Used by Eclissi frontend for entity highlighting in chat messages.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix:
+        raise HTTPException(status_code=503, detail="Matrix actor not available")
+
+    mem = getattr(matrix, "matrix", None) or getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+    if not mem or not mem.db:
+        raise HTTPException(status_code=503, detail="Memory not initialized")
+
+    rows = await mem.db.fetchall(
+        "SELECT id, entity_type, name, aliases, full_profile FROM entities ORDER BY name"
+    )
+    entities = [
+        {"id": r[0], "type": r[1], "name": r[2], "aliases": r[3], "profile": r[4]}
+        for r in rows
+    ]
+    return {"entities": entities, "count": len(entities)}
+
+
 # ==============================================================================
 # Memory Search & Add (MCP Plugin Endpoints)
 # ==============================================================================
@@ -1984,6 +2326,9 @@ async def memory_search(request: MemorySearchRequest):
                 if query_lower in n.content.lower()
             ][:request.limit]
 
+        # Permission gate: strip DOCUMENT nodes the speaker can't see
+        results = await _gate_results(results, source="api/memory/search")
+
         return MemorySearchResponse(results=results, count=len(results))
     except Exception as e:
         logger.error(f"Memory search error: {e}")
@@ -2035,8 +2380,11 @@ async def memory_smart_fetch(request: SmartFetchRequest):
             for n in nodes
         ]
 
+        # Permission gate: strip DOCUMENT nodes the speaker can't see
+        results = await _gate_results(results, source="api/memory/smart-fetch")
+
         # Estimate tokens used (rough: ~4 chars per token)
-        total_chars = sum(len(n.content) for n in nodes)
+        total_chars = sum(len(r.get("content", "")) for r in results)
         budget_used = total_chars // 4
 
         return SmartFetchResponse(nodes=results, budget_used=budget_used)
@@ -2260,6 +2608,9 @@ async def dataroom_search_endpoint(
 
         nodes = await memory.search_nodes(query=query or "document", node_type="DOCUMENT", limit=limit * 3)
 
+        # Permission gate: strip documents the speaker can't see
+        nodes = await _gate_results(nodes, source="api/dataroom/search")
+
         results = []
         for node in nodes:
             import json as _json
@@ -2347,6 +2698,10 @@ async def dataroom_recent_endpoint(days: int = 7):
         import json as _json
 
         docs = await memory.get_nodes_by_type("DOCUMENT", limit=1000)
+
+        # Permission gate: strip documents the speaker can't see
+        docs = await _gate_results(docs, source="api/dataroom/recent")
+
         cutoff = datetime.now() - timedelta(days=days)
         recent = []
 
@@ -3100,6 +3455,64 @@ async def stop_listening():
 class SpeakRequest(BaseModel):
     """Request body for speak endpoint."""
     text: str
+
+
+class TTSRequest(BaseModel):
+    """Request body for /api/tts endpoint."""
+    text: str = Field(..., min_length=1, max_length=5000)
+    voice: str = Field(default="en_US-amy-medium", description="Piper voice name")
+
+
+_tts_manager = None
+
+
+async def _get_tts_manager():
+    global _tts_manager
+    if _tts_manager is None:
+        from voice.tts.manager import TTSManager, TTSProviderType
+        _tts_manager = TTSManager(
+            default_provider=TTSProviderType.PIPER,
+            default_voice="en_US-amy-medium",
+        )
+    return _tts_manager
+
+
+@app.post("/api/tts")
+async def text_to_speech(request: TTSRequest):
+    """
+    Convert text to speech using Piper TTS.
+
+    Returns WAV audio bytes. The frontend plays this via Audio element.
+    Uses Luna's existing Piper infrastructure — same voice as desktop.
+    """
+    try:
+        from voice.tts.preprocessing import preprocess_for_tts
+
+        clean_text = preprocess_for_tts(request.text)
+        if not clean_text.strip():
+            raise HTTPException(status_code=400, detail="No speakable text after preprocessing")
+
+        tts = await _get_tts_manager()
+        audio = await tts.synthesize(clean_text)
+
+        if not audio.data:
+            raise HTTPException(status_code=500, detail="TTS synthesis produced no audio")
+
+        return Response(
+            content=audio.data,
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": "inline",
+                "Cache-Control": "no-cache",
+            }
+        )
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Voice module not available")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/voice/speak")
@@ -4593,6 +5006,9 @@ async def slash_search(query: str, limit: int = 5):
 
         nodes = await matrix._matrix.search_nodes(query=query, limit=limit)
 
+        # Permission gate: strip DOCUMENT nodes
+        nodes = await _gate_results(nodes, source="api/slash/search")
+
         if not nodes:
             return SlashCommandResponse(
                 command=f"/search {query}",
@@ -4768,6 +5184,7 @@ async def slash_help():
         ("/llm-switch <provider>", "Switch LLM provider (groq, gemini, claude)"),
         ("/restart-backend", "Restart Luna backend server"),
         ("/restart-frontend", "Reload frontend UI"),
+        ("/faceid", "FaceID status, set-pin, or reset"),
         ("/help", "Show this help"),
     ]
 
@@ -4781,6 +5198,164 @@ async def slash_help():
         data={"commands": [{"command": c, "description": d} for c, d in commands]},
         formatted="\n".join(lines),
     )
+
+
+# =============================================================================
+# FACEID SLASH COMMANDS
+# =============================================================================
+
+def _get_face_db():
+    """Get FaceDatabase instance (lazy import from Tools/FaceID).
+
+    Uses importlib to load database.py directly, bypassing __init__.py
+    which imports cv2/torch dependencies not available in the main venv.
+    """
+    import importlib.util
+    from pathlib import Path
+    faceid_root = Path(__file__).parent.parent.parent.parent / "Tools" / "FaceID"
+    db_module_path = faceid_root / "src" / "database.py"
+    spec = importlib.util.spec_from_file_location("faceid_database", str(db_module_path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    db_path = faceid_root / "data" / "faces.db"
+    return mod.FaceDatabase(db_path)
+
+
+@app.get("/slash/faceid", response_model=SlashCommandResponse)
+async def slash_faceid_status():
+    """
+    /faceid — Show FaceID status (enrolled entities, embeddings, PIN state).
+    """
+    try:
+        with _get_face_db() as db:
+            entities = db.list_entities()
+            total = db.count_embeddings()
+            has_pin = db.has_pin()
+
+        lines = ["**FaceID Status**", ""]
+        lines.append(f"Entities: **{len(entities)}**")
+        lines.append(f"Total embeddings: **{total}**")
+        lines.append(f"Admin PIN: **{'set' if has_pin else 'not set'}**")
+
+        if entities:
+            lines.append("")
+            lines.append("| Name | Tier | DR Tier | Faces |")
+            lines.append("|------|------|---------|-------|")
+            for e in entities:
+                lines.append(f"| {e['entity_name']} | {e['luna_tier']} | {e['dataroom_tier']} | {e['face_count']} |")
+
+        lines.append("")
+        lines.append("Commands: `/faceid set-pin <4digits>` | `/faceid reset <pin>`")
+
+        return SlashCommandResponse(
+            command="/faceid",
+            success=True,
+            data={"entities": entities, "total_embeddings": total, "has_pin": has_pin},
+            formatted="\n".join(lines),
+        )
+    except Exception as e:
+        return SlashCommandResponse(
+            command="/faceid",
+            success=False,
+            data={"error": str(e)},
+            formatted=f"**FaceID Error:** {e}",
+        )
+
+
+@app.post("/slash/faceid/{action}")
+async def slash_faceid_action(action: str):
+    """
+    /faceid set-pin <pin> — Set or change the admin PIN.
+    /faceid reset <pin>   — Wipe face embeddings (requires PIN).
+    """
+    parts = action.split(maxsplit=1)
+    sub = parts[0].lower()
+    arg = parts[1] if len(parts) > 1 else ""
+
+    try:
+        with _get_face_db() as db:
+            # ── SET PIN ──
+            if sub == "set-pin":
+                pin = arg.strip()
+                if len(pin) != 4 or not pin.isdigit():
+                    return SlashCommandResponse(
+                        command="/faceid set-pin",
+                        success=False,
+                        data={},
+                        formatted="PIN must be exactly 4 digits. Usage: `/faceid set-pin 1234`",
+                    )
+
+                if db.has_pin():
+                    return SlashCommandResponse(
+                        command="/faceid set-pin",
+                        success=False,
+                        data={},
+                        formatted="PIN already set. To change it, use the CLI: `python cli/reset.py --name Ahab --set-pin`",
+                    )
+
+                db.set_pin(pin)
+                return SlashCommandResponse(
+                    command="/faceid set-pin",
+                    success=True,
+                    data={},
+                    formatted="Admin PIN has been set. Use `/faceid reset <pin>` to reset face data.",
+                )
+
+            # ── RESET ──
+            if sub == "reset":
+                pin = arg.strip()
+                if not pin:
+                    return SlashCommandResponse(
+                        command="/faceid reset",
+                        success=False,
+                        data={},
+                        formatted="Usage: `/faceid reset <4-digit-pin>`",
+                    )
+
+                if not db.has_pin():
+                    return SlashCommandResponse(
+                        command="/faceid reset",
+                        success=False,
+                        data={},
+                        formatted="No PIN set yet. Run `/faceid set-pin <pin>` first.",
+                    )
+
+                if not db.verify_pin(pin):
+                    db._log("reset_denied", details="Failed PIN attempt via /faceid")
+                    return SlashCommandResponse(
+                        command="/faceid reset",
+                        success=False,
+                        data={},
+                        formatted="Incorrect PIN. Reset denied.",
+                    )
+
+                # Wipe all face embeddings for all entities
+                entities = db.list_entities()
+                total_deleted = 0
+                for e in entities:
+                    total_deleted += db.reset_entity(e["entity_id"])
+
+                return SlashCommandResponse(
+                    command="/faceid reset",
+                    success=True,
+                    data={"deleted": total_deleted},
+                    formatted=f"FaceID reset complete. Deleted **{total_deleted}** embeddings.\n\nRe-enroll via CLI: `python cli/enroll.py --name Ahab --captures 10`",
+                )
+
+            return SlashCommandResponse(
+                command="/faceid",
+                success=False,
+                data={},
+                formatted=f"Unknown subcommand: `{sub}`\n\nUsage: `/faceid` | `/faceid set-pin <pin>` | `/faceid reset <pin>`",
+            )
+
+    except Exception as e:
+        return SlashCommandResponse(
+            command="/faceid",
+            success=False,
+            data={"error": str(e)},
+            formatted=f"**FaceID Error:** {e}",
+        )
 
 
 # =============================================================================
@@ -6244,6 +6819,98 @@ async def get_vk_latest_results():
             return json.load(f)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load results: {e}")
+
+
+# ============================================
+# OBSERVATORY REVERSE PROXY  (port 8100)
+# ============================================
+# Mirrors the Vite dev-server proxy: strip /observatory prefix, forward to :8100.
+
+_OBSERVATORY_TARGET = os.environ.get("LUNA_OBSERVATORY_URL", "http://127.0.0.1:8100")
+_observatory_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_observatory_client() -> httpx.AsyncClient:
+    global _observatory_client
+    if _observatory_client is None or _observatory_client.is_closed:
+        _observatory_client = httpx.AsyncClient(base_url=_OBSERVATORY_TARGET, timeout=30.0)
+    return _observatory_client
+
+
+@app.api_route("/observatory/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def observatory_proxy(request: Request, path: str):
+    """Reverse-proxy HTTP requests to Observatory server on port 8100."""
+    client = _get_observatory_client()
+    url = f"/{path}"
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+    try:
+        resp = await client.request(
+            method=request.method,
+            url=url,
+            headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")},
+            content=await request.body(),
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+            media_type=resp.headers.get("content-type"),
+        )
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail="Observatory server not reachable on port 8100")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Observatory proxy error: {e}")
+
+
+@app.websocket("/observatory/ws/{path:path}")
+async def observatory_ws_proxy(websocket: WebSocket, path: str):
+    """Reverse-proxy WebSocket connections to Observatory server."""
+    await websocket.accept()
+    proto = "wss" if _OBSERVATORY_TARGET.startswith("https") else "ws"
+    host = _OBSERVATORY_TARGET.replace("http://", "").replace("https://", "")
+    ws_url = f"{proto}://{host}/ws/{path}"
+
+    try:
+        import websockets
+        async with websockets.connect(ws_url) as upstream:
+            async def forward_to_client():
+                try:
+                    async for msg in upstream:
+                        await websocket.send_text(msg)
+                except Exception:
+                    pass
+
+            async def forward_to_upstream():
+                try:
+                    while True:
+                        data = await websocket.receive_text()
+                        await upstream.send(data)
+                except Exception:
+                    pass
+
+            await asyncio.gather(forward_to_client(), forward_to_upstream())
+    except ImportError:
+        # Fallback: websockets not installed — WS proxy unavailable
+        logger.warning("websockets package not installed; Observatory WS proxy disabled")
+        await websocket.close(code=1011, reason="WebSocket proxy unavailable")
+    except Exception as e:
+        logger.debug(f"Observatory WS proxy closed: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# Serve main Eclissi frontend at / (MUST be last — catch-all mount)
+try:
+    _eclissi_frontend = _Path("frontend/dist")
+    if _eclissi_frontend.exists():
+        app.mount("/", StaticFiles(directory=str(_eclissi_frontend), html=True), name="eclissi-frontend")
+        logger.info(f"Eclissi frontend mounted at / from {_eclissi_frontend}")
+except Exception as e:
+    logger.warning(f"Eclissi frontend mount failed: {e}")
 
 
 def create_app() -> FastAPI:

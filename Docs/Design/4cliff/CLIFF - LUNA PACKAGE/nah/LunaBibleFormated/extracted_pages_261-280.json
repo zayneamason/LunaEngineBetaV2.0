@@ -1,0 +1,808 @@
+{
+  "extraction_metadata": {
+    "source_file": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_extracted": "261-280",
+    "extraction_date": "2026-02-06",
+    "total_pages": 20
+  },
+  "part_info": {
+    "part_number": "Part continues from previous section",
+    "title": "API Reference (continued) - Chapters covering REST API endpoints",
+    "note": "Pages 261-280 continue the API Reference documentation with sections 4-9 of the endpoint specifications"
+  },
+  "sections": [
+    {
+      "section_number": 4,
+      "title": "Memory Operations Endpoints",
+      "description": "These endpoints manage Luna's memory substrate directly.",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/memory/nodes",
+          "description": "Create a new memory node directly (bypasses extraction pipeline).",
+          "request_body": {
+            "fields": [
+              {"name": "node_type", "type": "string", "required": true, "default": "-", "description": "Node type: `FACT`, `DECISION`, `PROBLEM`, `BELIEF`, `PREFERENCE`, `RELATIONSHIP`"},
+              {"name": "content", "type": "string", "required": true, "default": "-", "description": "Node content (min 1 char)"},
+              {"name": "source", "type": "string", "required": false, "default": "null", "description": "Source identifier"},
+              {"name": "confidence", "type": "float", "required": false, "default": "1.0", "description": "Confidence level (0.0-1.0)"},
+              {"name": "importance", "type": "float", "required": false, "default": "0.5", "description": "Importance level (0.0-1.0)"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "id", "type": "string", "description": "Generated node ID"},
+              {"name": "node_type", "type": "string", "description": "Node type"},
+              {"name": "content", "type": "string", "description": "Node content"},
+              {"name": "source", "type": "string", "description": "Source identifier"},
+              {"name": "confidence", "type": "float", "description": "Confidence level"},
+              {"name": "importance", "type": "float", "description": "Importance level"},
+              {"name": "access_count", "type": "int", "description": "Access count (starts at 0)"},
+              {"name": "reinforcement_count", "type": "int", "description": "Reinforcement count (starts at 0)"},
+              {"name": "lock_in", "type": "float", "description": "Lock-in coefficient"},
+              {"name": "lock_in_state", "type": "string", "description": "`drifting`, `fluid`, or `settled`"},
+              {"name": "created_at", "type": "string", "description": "ISO timestamp"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/memory/nodes \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"node_type\": \"FACT\",\n    \"content\": \"The user prefers dark mode interfaces\",\n    \"confidence\": 0.9,\n    \"importance\": 0.7\n  }'",
+          "example_response": {
+            "id": "node_abc123",
+            "node_type": "FACT",
+            "content": "The user prefers dark mode interfaces",
+            "source": null,
+            "confidence": 0.9,
+            "importance": 0.7,
+            "access_count": 0,
+            "reinforcement_count": 0,
+            "lock_in": 0.0,
+            "lock_in_state": "drifting",
+            "created_at": "2026-01-25T14:30:00Z"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/memory/nodes/{node_id}",
+          "description": "Get a specific memory node by ID.",
+          "path_parameters": [
+            {"name": "node_id", "type": "string", "description": "Node identifier"}
+          ],
+          "response": "Same schema as POST /memory/nodes response",
+          "curl_example": "curl http://localhost:8000/memory/nodes/node_abc123"
+        },
+        {
+          "method": "GET",
+          "path": "/memory/nodes",
+          "description": "List memory nodes with optional filtering.",
+          "query_parameters": [
+            {"name": "node_type", "type": "string", "default": "null", "description": "Filter by type (`FACT`, `DECISION`, etc.)"},
+            {"name": "lock_in_state", "type": "string", "default": "null", "description": "Filter by state (`drifting`, `fluid`, `settled`)"},
+            {"name": "limit", "type": "int", "default": "50", "description": "Maximum nodes to return"}
+          ],
+          "response": "Array of node objects (same schema as individual node)",
+          "curl_example": "curl \"http://localhost:8000/memory/nodes?node_type=FACT&lock_in_state=settled&limit=10\""
+        },
+        {
+          "method": "POST",
+          "path": "/memory/nodes/{node_id}/access",
+          "description": "Record an access to a memory node. Increases access count and updates lock-in coefficient.",
+          "path_parameters": [
+            {"name": "node_id", "type": "string", "description": "Node identifier"}
+          ],
+          "response": {
+            "fields": [
+              {"name": "status", "type": "string", "description": "\"accessed\""},
+              {"name": "node_id", "type": "string", "description": "Node ID"},
+              {"name": "new_access_count", "type": "int", "description": "Updated access count"},
+              {"name": "new_lock_in", "type": "float", "description": "Updated lock-in coefficient"},
+              {"name": "new_lock_in_state", "type": "string", "description": "Updated lock-in state"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/memory/nodes/node_abc123/access",
+          "example_response": {
+            "status": "accessed",
+            "node_id": "node_abc123",
+            "new_access_count": 5,
+            "new_lock_in": 0.35,
+            "new_lock_in_state": "fluid"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/memory/nodes/{node_id}/reinforce",
+          "description": "Reinforce a memory node. Boosts the lock-in coefficient significantly. Reinforced nodes are protected from pruning.",
+          "path_parameters": [
+            {"name": "node_id", "type": "string", "description": "Node identifier"}
+          ],
+          "response": {
+            "fields": [
+              {"name": "status", "type": "string", "description": "\"reinforced\""},
+              {"name": "node_id", "type": "string", "description": "Node ID"},
+              {"name": "reinforcement_count", "type": "int", "description": "Updated reinforcement count"},
+              {"name": "new_lock_in", "type": "float", "description": "Updated lock-in coefficient"},
+              {"name": "new_lock_in_state", "type": "string", "description": "Updated lock-in state"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/memory/nodes/node_abc123/reinforce",
+          "example_response": {
+            "status": "reinforced",
+            "node_id": "node_abc123",
+            "reinforcement_count": 2,
+            "new_lock_in": 0.85,
+            "new_lock_in_state": "settled"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/memory/stats",
+          "description": "Get memory statistics including lock-in distribution.",
+          "response": {
+            "fields": [
+              {"name": "total_nodes", "type": "int", "description": "Total node count"},
+              {"name": "nodes_by_type", "type": "dict", "description": "Nodes grouped by type"},
+              {"name": "nodes_by_lock_in", "type": "dict", "description": "Nodes grouped by lock-in state"},
+              {"name": "avg_lock_in", "type": "float", "description": "Average lock-in coefficient"},
+              {"name": "total_edges", "type": "int", "description": "Total relationship edge count"},
+              {"name": "drifting_nodes", "type": "int", "description": "Count of drifting nodes"},
+              {"name": "fluid_nodes", "type": "int", "description": "Count of fluid nodes"},
+              {"name": "settled_nodes", "type": "int", "description": "Count of settled nodes"}
+            ]
+          },
+          "curl_example": "curl http://localhost:8000/memory/stats",
+          "example_response": {
+            "total_nodes": 1547,
+            "nodes_by_type": {
+              "FACT": 823,
+              "DECISION": 245,
+              "BELIEF": 312,
+              "PREFERENCE": 167
+            },
+            "nodes_by_lock_in": {
+              "drifting": 456,
+              "fluid": 678,
+              "settled": 413
+            },
+            "avg_lock_in": 0.42,
+            "total_edges": 3892,
+            "drifting_nodes": 456,
+            "fluid_nodes": 678,
+            "settled_nodes": 413
+          }
+        }
+      ]
+    },
+    {
+      "section_number": 5,
+      "title": "Extraction Endpoints",
+      "description": "These endpoints manage the extraction pipeline (Scribe and Librarian actors).",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/extraction/trigger",
+          "description": "Trigger extraction on content via the Scribe actor.",
+          "request_body": {
+            "fields": [
+              {"name": "content", "type": "string", "required": true, "default": "-", "description": "Content to extract from"},
+              {"name": "role", "type": "string", "required": false, "default": "\"user\"", "description": "Role (`user` or `assistant`)"},
+              {"name": "session_id", "type": "string", "required": false, "default": "null", "description": "Session identifier"},
+              {"name": "immediate", "type": "bool", "required": false, "default": "true", "description": "Process immediately without batching"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "objects_extracted", "type": "int", "description": "Number of knowledge objects extracted"},
+              {"name": "edges_extracted", "type": "int", "description": "Number of relationship edges created"},
+              {"name": "nodes_created", "type": "list[string]", "description": "IDs of created memory nodes"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/extraction/trigger \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"content\": \"I prefer Python over JavaScript for backend development\",\n    \"role\": \"user\"\n  }'",
+          "example_response": {
+            "objects_extracted": 2,
+            "edges_extracted": 1,
+            "nodes_created": ["node_xyz789", "node_abc456"]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/extraction/prune",
+          "description": "Trigger synaptic pruning. Removes low-value edges and optionally prunes drifting nodes.",
+          "request_body": {
+            "fields": [
+              {"name": "age_days", "type": "int", "required": false, "default": "30", "description": "Age threshold in days (min 1)"},
+              {"name": "confidence_threshold", "type": "float", "required": false, "default": "0.3", "description": "Confidence threshold (0.0-1.0)"},
+              {"name": "prune_nodes", "type": "bool", "required": false, "default": "true", "description": "Also prune drifting nodes"},
+              {"name": "max_prune_nodes", "type": "int", "required": false, "default": "100", "description": "Maximum nodes to prune (min 1)"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "edges_pruned", "type": "int", "description": "Number of edges removed"},
+              {"name": "nodes_pruned", "type": "int", "description": "Number of nodes removed"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/extraction/prune \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"age_days\": 14,\n    \"confidence_threshold\": 0.2,\n    \"prune_nodes\": true,\n    \"max_prune_nodes\": 50\n  }'",
+          "example_response": {
+            "edges_pruned": 127,
+            "nodes_pruned": 23
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/extraction/stats",
+          "description": "Get extraction statistics from Scribe and Librarian actors.",
+          "response": {
+            "fields": [
+              {"name": "scribe", "type": "dict", "description": "Scribe actor statistics"},
+              {"name": "librarian", "type": "dict", "description": "Librarian actor statistics"}
+            ]
+          },
+          "curl_example": "curl http://localhost:8000/extraction/stats",
+          "example_response": {
+            "scribe": {
+              "extractions_total": 1547,
+              "objects_extracted": 4231,
+              "edges_created": 2856,
+              "avg_objects_per_extraction": 2.73
+            },
+            "librarian": {
+              "prune_cycles": 12,
+              "total_pruned_edges": 892,
+              "total_pruned_nodes": 156,
+              "last_prune": "2026-01-25T12:00:00Z"
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/extraction/history",
+          "description": "Get recent extraction history from Scribe.",
+          "query_parameters": [
+            {"name": "limit", "type": "int", "default": "20", "description": "Maximum extractions to return"}
+          ],
+          "response": {
+            "fields": [
+              {"name": "extractions", "type": "list", "description": "Recent extraction records"},
+              {"name": "total", "type": "int", "description": "Total extraction count"}
+            ]
+          },
+          "curl_example": "curl \"http://localhost:8000/extraction/history?limit=5\""
+        }
+      ]
+    },
+    {
+      "section_number": 6,
+      "title": "History Management (Hub API) Endpoints",
+      "description": "These endpoints manage conversation history with tiered storage.",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/hub/session/create",
+          "description": "Create a new conversation session.",
+          "request_body": {
+            "fields": [
+              {"name": "app_context", "type": "string", "required": false, "default": "\"terminal\"", "description": "Application context identifier"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "session_id", "type": "string", "description": "Session identifier"},
+              {"name": "started_at", "type": "float", "description": "Start timestamp"},
+              {"name": "ended_at", "type": "float", "description": "End timestamp (null if active)"},
+              {"name": "app_context", "type": "string", "description": "Application context"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/hub/session/create \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"app_context\": \"web_app\"}'",
+          "example_response": {
+            "session_id": "sess_abc123",
+            "started_at": 1737817200.0,
+            "ended_at": null,
+            "app_context": "web_app"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/hub/session/end",
+          "description": "End a conversation session.",
+          "query_parameters": [
+            {"name": "session_id", "type": "string", "description": "Session to end"}
+          ],
+          "response": {
+            "fields": [
+              {"name": "success", "type": "bool", "description": "Operation success"},
+              {"name": "session_id", "type": "string", "description": "Ended session ID"}
+            ]
+          },
+          "curl_example": "curl -X POST \"http://localhost:8000/hub/session/end?session_id=sess_abc123\""
+        },
+        {
+          "method": "GET",
+          "path": "/hub/session/active",
+          "description": "Get the currently active session.",
+          "response": "Session object or `null` if no active session",
+          "curl_example": "curl http://localhost:8000/hub/session/active"
+        },
+        {
+          "method": "POST",
+          "path": "/hub/turn/add",
+          "description": "Add a turn to conversation history.",
+          "request_body": {
+            "fields": [
+              {"name": "session_id", "type": "string", "required": false, "default": "null", "description": "Session ID (uses active if null)"},
+              {"name": "role", "type": "string", "required": true, "default": "-", "description": "Role (`user` or `assistant`)"},
+              {"name": "content", "type": "string", "required": true, "default": "-", "description": "Turn content"},
+              {"name": "tokens", "type": "int", "required": true, "default": "-", "description": "Token count"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "turn_id", "type": "int", "description": "Turn identifier"},
+              {"name": "tier", "type": "string", "description": "Tier assigned (`active`, `recent`, `archive`)"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/hub/turn/add \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"role\": \"user\",\n    \"content\": \"What is machine learning?\",\n    \"tokens\": 6\n  }'"
+        },
+        {
+          "method": "GET",
+          "path": "/hub/active_window",
+          "description": "Get the Active Window turns (most recent, highest priority).",
+          "query_parameters": [
+            {"name": "session_id", "type": "string", "default": "null", "description": "Filter by session"},
+            {"name": "limit", "type": "int", "default": "10", "description": "Maximum turns to return"}
+          ],
+          "response": {
+            "fields": [
+              {"name": "turns", "type": "list", "description": "Active window turn objects"},
+              {"name": "total_tokens", "type": "int", "description": "Total token count"},
+              {"name": "turn_count", "type": "int", "description": "Number of turns"}
+            ]
+          },
+          "curl_example": "curl \"http://localhost:8000/hub/active_window?limit=5\""
+        },
+        {
+          "method": "GET",
+          "path": "/hub/active_token_count",
+          "description": "Get token count for Active tier.",
+          "query_parameters": [
+            {"name": "session_id", "type": "string", "default": "null", "description": "Filter by session"}
+          ],
+          "response": {
+            "fields": [
+              {"name": "total_tokens", "type": "int", "description": "Total token count"},
+              {"name": "turn_count", "type": "int", "description": "Number of turns"}
+            ]
+          },
+          "curl_example": "curl http://localhost:8000/hub/active_token_count"
+        },
+        {
+          "method": "POST",
+          "path": "/hub/tier/rotate",
+          "description": "Rotate a turn to a new tier.",
+          "request_body": {
+            "fields": [
+              {"name": "turn_id", "type": "int", "description": "Turn to rotate"},
+              {"name": "new_tier", "type": "string", "description": "Target tier (`active`, `recent`, `archive`)"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "success", "type": "bool", "description": "Operation success"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/hub/tier/rotate \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"turn_id\": 42, \"new_tier\": \"archive\"}'"
+        },
+        {
+          "method": "GET",
+          "path": "/hub/tier/oldest_active",
+          "description": "Get the oldest turn in Active tier.",
+          "query_parameters": [
+            {"name": "session_id", "type": "string", "default": "null", "description": "Filter by session"}
+          ],
+          "response": "Turn object or `null`",
+          "curl_example": "curl http://localhost:8000/hub/tier/oldest_active"
+        },
+        {
+          "method": "POST",
+          "path": "/hub/search",
+          "description": "Search conversation history.",
+          "request_body": {
+            "fields": [
+              {"name": "query", "type": "string", "required": true, "default": "-", "description": "Search query"},
+              {"name": "tier", "type": "string", "required": false, "default": "\"recent\"", "description": "Tier to search"},
+              {"name": "session_id", "type": "string", "required": false, "default": "null", "description": "Filter by session"},
+              {"name": "limit", "type": "int", "required": false, "default": "3", "description": "Maximum results"},
+              {"name": "search_type", "type": "string", "required": false, "default": "\"hybrid\"", "description": "Search type (`keyword`, `semantic`, `hybrid`)"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "results", "type": "list", "description": "Search result objects"},
+              {"name": "total", "type": "int", "description": "Total matching results"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/hub/search \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"query\": \"machine learning\",\n    \"tier\": \"recent\",\n    \"limit\": 5\n  }'"
+        },
+        {
+          "method": "GET",
+          "path": "/hub/stats",
+          "description": "Get history manager statistics.",
+          "response": "Dictionary with history manager statistics",
+          "curl_example": "curl http://localhost:8000/hub/stats"
+        }
+      ]
+    },
+    {
+      "section_number": 7,
+      "title": "Debug Endpoints",
+      "description": "These endpoints provide detailed insight into Luna's internal state for debugging.",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/debug/conversation-cache",
+          "description": "Get Luna's conversation cache - the conversation history she is currently aware of.",
+          "response": {
+            "fields": [
+              {"name": "current_turn", "type": "int", "description": "Current turn number"},
+              {"name": "max_turns", "type": "int", "description": "TTL for conversation items"},
+              {"name": "items", "type": "list", "description": "Cached conversation items"},
+              {"name": "total_tokens", "type": "int", "description": "Total token count"}
+            ]
+          },
+          "conversation_cache_item_schema": {
+            "fields": [
+              {"name": "role", "type": "string", "description": "`user`, `assistant`, or `unknown`"},
+              {"name": "content", "type": "string", "description": "Message content"},
+              {"name": "turn", "type": "int", "description": "Turn number"},
+              {"name": "relevance", "type": "float", "description": "Relevance score"},
+              {"name": "age_turns", "type": "int", "description": "Age in turns"}
+            ]
+          },
+          "curl_example": "curl http://localhost:8000/debug/conversation-cache",
+          "example_response": {
+            "current_turn": 42,
+            "max_turns": 10,
+            "items": [
+              {
+                "role": "user",
+                "content": "What is machine learning?",
+                "turn": 41,
+                "relevance": 1.0,
+                "age_turns": 1
+              },
+              {
+                "role": "assistant",
+                "content": "Machine learning is a subset of AI...",
+                "turn": 41,
+                "relevance": 1.0,
+                "age_turns": 1
+              }
+            ],
+            "total_tokens": 450
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/debug/personality",
+          "description": "Get Luna's personality system state for debugging.",
+          "response": {
+            "fields": [
+              {"name": "stats", "type": "object", "description": "Personality statistics"},
+              {"name": "patches", "type": "list", "description": "Personality patches"},
+              {"name": "maintenance", "type": "object", "description": "Maintenance statistics"},
+              {"name": "session", "type": "object", "description": "Session reflection stats"},
+              {"name": "mood_state", "type": "string", "description": "Current mood"},
+              {"name": "bootstrap_status", "type": "string", "description": "Bootstrap status"}
+            ]
+          },
+          "personality_stats_schema": {
+            "fields": [
+              {"name": "total_patches", "type": "int", "description": "Total patch count"},
+              {"name": "active_patches", "type": "int", "description": "Active patch count"},
+              {"name": "average_lock_in", "type": "float", "description": "Average lock-in coefficient"},
+              {"name": "patches_by_topic", "type": "dict", "description": "Patches grouped by topic"},
+              {"name": "patches_by_lock_in_state", "type": "dict", "description": "Patches grouped by lock-in state"}
+            ]
+          },
+          "curl_example": "curl http://localhost:8000/debug/personality"
+        },
+        {
+          "method": "GET",
+          "path": "/debug/context",
+          "description": "Get Luna's current context window for debugging.",
+          "response": {
+            "fields": [
+              {"name": "current_turn", "type": "int", "description": "Current turn number"},
+              {"name": "token_budget", "type": "int", "description": "Maximum tokens allowed"},
+              {"name": "total_tokens", "type": "int", "description": "Total tokens currently used"},
+              {"name": "items", "type": "list", "description": "Context items"},
+              {"name": "keywords", "type": "list[string]", "description": "Keywords Luna is aware of"},
+              {"name": "ring_stats", "type": "dict", "description": "Statistics per ring"}
+            ]
+          },
+          "context_item_schema": {
+            "fields": [
+              {"name": "id", "type": "string", "description": "Item ID"},
+              {"name": "content", "type": "string", "description": "Item content"},
+              {"name": "source", "type": "string", "description": "`IDENTITY`, `CONVERSATION`, `MEMORY`, etc."},
+              {"name": "ring", "type": "string", "description": "`CORE`, `INNER`, `MIDDLE`, `OUTER`"},
+              {"name": "relevance", "type": "float", "description": "Relevance score"},
+              {"name": "tokens", "type": "int", "description": "Token count"},
+              {"name": "age_turns", "type": "int", "description": "Age in turns"},
+              {"name": "ttl_turns", "type": "int", "description": "Time-to-live in turns"},
+              {"name": "is_expired", "type": "bool", "description": "Whether item is expired"}
+            ]
+          },
+          "curl_example": "curl http://localhost:8000/debug/context",
+          "example_response": {
+            "current_turn": 42,
+            "token_budget": 8000,
+            "total_tokens": 2450,
+            "items": [
+              {
+                "id": "ctx_001",
+                "content": "You are Luna, an AI assistant...",
+                "source": "IDENTITY",
+                "ring": "CORE",
+                "relevance": 1.0,
+                "tokens": 150,
+                "age_turns": 0,
+                "ttl_turns": -1,
+                "is_expired": false
+              }
+            ],
+            "keywords": ["machine learning", "python", "backend"],
+            "ring_stats": {
+              "CORE": {"items": 3, "tokens": 450},
+              "INNER": {"items": 8, "tokens": 1200},
+              "MIDDLE": {"items": 5, "tokens": 600},
+              "OUTER": {"items": 2, "tokens": 200}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "section_number": 8,
+      "title": "Voice Integration Endpoints",
+      "description": "These endpoints control voice interaction (speech-to-text and text-to-speech).",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/voice/start",
+          "description": "Start the voice system.",
+          "request_body": {
+            "fields": [
+              {"name": "hands_free", "type": "bool", "required": false, "default": "false", "description": "Enable hands-free mode (continuous listening)"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "status", "type": "string", "description": "`\"started\"` or `\"already_running\"`"},
+              {"name": "message", "type": "string", "description": "Status message"},
+              {"name": "hands_free", "type": "bool", "description": "Hands-free mode enabled"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/voice/start \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"hands_free\": true}'",
+          "example_response": {
+            "status": "started",
+            "message": "Voice system started in hands-free mode",
+            "hands_free": true
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/voice/stop",
+          "description": "Stop the voice system.",
+          "response": {
+            "fields": [
+              {"name": "status", "type": "string", "description": "`\"stopped\"` or `\"not_running\"`"},
+              {"name": "message", "type": "string", "description": "Status message"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/voice/stop"
+        },
+        {
+          "method": "GET",
+          "path": "/voice/status",
+          "description": "Get voice system status.",
+          "response": {
+            "fields": [
+              {"name": "running", "type": "bool", "description": "Voice system is running"},
+              {"name": "recording", "type": "bool", "description": "Currently recording audio"},
+              {"name": "hands_free", "type": "bool", "description": "Hands-free mode enabled"},
+              {"name": "stt_provider", "type": "string", "description": "Speech-to-text provider name"},
+              {"name": "tts_provider", "type": "string", "description": "Text-to-speech provider name"},
+              {"name": "persona_connected", "type": "bool", "description": "Connected to Luna persona"},
+              {"name": "turn_count", "type": "int", "description": "Voice conversation turn count"}
+            ]
+          },
+          "curl_example": "curl http://localhost:8000/voice/status",
+          "example_response": {
+            "running": true,
+            "recording": false,
+            "hands_free": false,
+            "stt_provider": "whisper",
+            "tts_provider": "elevenlabs",
+            "persona_connected": true,
+            "turn_count": 12
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/voice/listen/start",
+          "description": "Start recording user speech (push-to-talk press).",
+          "response": {
+            "fields": [
+              {"name": "status", "type": "string", "description": "`\"listening\"` or `\"hands_free\"`"},
+              {"name": "message", "type": "string", "description": "Status message"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/voice/listen/start"
+        },
+        {
+          "method": "POST",
+          "path": "/voice/listen/stop",
+          "description": "Stop recording and process speech (push-to-talk release).",
+          "response": {
+            "fields": [
+              {"name": "status", "type": "string", "description": "`\"processing\"`, `\"no_speech\"`, or `\"hands_free\"`"},
+              {"name": "message", "type": "string", "description": "Status message"},
+              {"name": "transcription", "type": "string", "description": "Transcribed text (if speech detected)"},
+              {"name": "hint", "type": "string", "description": "Help hint (when no speech detected)"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/voice/listen/stop",
+          "example_response": {
+            "status": "processing",
+            "message": "Processing your speech",
+            "transcription": "What is the weather like today?"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/voice/speak",
+          "description": "Speak the given text using TTS.",
+          "request_body": {
+            "fields": [
+              {"name": "text", "type": "string", "description": "Text to speak"}
+            ]
+          },
+          "response": {
+            "fields": [
+              {"name": "status", "type": "string", "description": "`\"speaking\"`, `\"not_running\"`, or `\"error\"`"},
+              {"name": "text", "type": "string", "description": "Text being spoken"},
+              {"name": "message", "type": "string", "description": "Error message (on error)"}
+            ]
+          },
+          "curl_example": "curl -X POST http://localhost:8000/voice/speak \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"text\": \"Hello, how can I help you today?\"}'"
+        },
+        {
+          "method": "GET",
+          "path": "/voice/stream",
+          "description": "Stream voice status updates via SSE.",
+          "sse_events": [
+            {"event": "status", "data_fields": "`connected`, `status`, `running`", "description": "Status update"},
+            {"event": "transcription", "data_fields": "`type`, `text`", "description": "User speech transcribed"},
+            {"event": "response", "data_fields": "`type`, `text`", "description": "Luna's response ready"},
+            {"event": "ping", "data_fields": "`running`", "description": "Keepalive (every 10 seconds)"}
+          ],
+          "curl_example": "curl http://localhost:8000/voice/stream \\\n  -H \"Accept: text/event-stream\"",
+          "example_response_stream": "event: status\ndata: {\"connected\": true, \"status\": \"idle\", \"running\": true}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"listening\"}\n\nevent: transcription\ndata: {\"type\": \"transcription\", \"text\": \"Hello Luna\"}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"thinking\"}\n\nevent: response\ndata: {\"type\": \"response\", \"text\": \"Hello! How can I help you?\"}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"speaking\"}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"idle\"}\n\nevent: ping\ndata: {\"running\": true}"
+        }
+      ]
+    },
+    {
+      "section_number": 9,
+      "title": "Tuning Endpoints",
+      "description": "These endpoints allow runtime parameter tuning and evaluation.",
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/tuning/params",
+          "description": "List all tunable parameters.",
+          "query_parameters": [
+            {"name": "category", "type": "string", "default": "null", "description": "Filter by category"}
+          ],
+          "response": {
+            "fields": [
+              {"name": "params", "type": "list", "description": "Parameter list with metadata"},
+              {"name": "categories", "type": "list", "description": "Available categories"},
+              {"name": "count", "type": "int", "description": "Total parameter count"}
+            ]
+          },
+          "curl_example": "curl \"http://localhost:8000/tuning/params?category=memory\""
+        },
+        {
+          "method": "GET",
+          "path": "/tuning/params/{name}",
+          "description": "Get details for a specific parameter.",
+          "path_parameters": [
+            {"name": "name", "type": "string", "description": "Parameter name"}
+          ],
+          "note": "Page 280 ends mid-section; additional endpoint details likely continue on subsequent pages"
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "location": "Section 4 - GET /consciousness Response",
+      "page_reference": "261",
+      "headers": ["Field", "Type", "Description"],
+      "rows": [
+        ["`mood`", "string", "Current mood state"],
+        ["`coherence`", "float", "Coherence score (0.0-1.0)"],
+        ["`attention_topics`", "int", "Number of topics in attention"],
+        ["`focused_topics`", "list[dict]", "Currently focused topics with weights"],
+        ["`top_traits`", "list[tuple]", "Top personality traits with scores"],
+        ["`tick_count`", "int", "Consciousness tick counter"],
+        ["`last_updated`", "string", "ISO timestamp of last update"]
+      ]
+    },
+    {
+      "location": "Section 4 - POST /memory/nodes Request Body",
+      "page_reference": "261-262",
+      "headers": ["Field", "Type", "Required", "Default", "Description"],
+      "rows": [
+        ["`node_type`", "string", "Yes", "-", "Node type: FACT, DECISION, PROBLEM, BELIEF, PREFERENCE, RELATIONSHIP"],
+        ["`content`", "string", "Yes", "-", "Node content (min 1 char)"],
+        ["`source`", "string", "No", "null", "Source identifier"],
+        ["`confidence`", "float", "No", "1.0", "Confidence level (0.0-1.0)"],
+        ["`importance`", "float", "No", "0.5", "Importance level (0.0-1.0)"]
+      ]
+    },
+    {
+      "location": "Section 7 - Context Item Schema",
+      "page_reference": "276-277",
+      "headers": ["Field", "Type", "Description"],
+      "rows": [
+        ["`id`", "string", "Item ID"],
+        ["`content`", "string", "Item content"],
+        ["`source`", "string", "`IDENTITY`, `CONVERSATION`, `MEMORY`, etc."],
+        ["`ring`", "string", "`CORE`, `INNER`, `MIDDLE`, `OUTER`"],
+        ["`relevance`", "float", "Relevance score"],
+        ["`tokens`", "int", "Token count"],
+        ["`age_turns`", "int", "Age in turns"],
+        ["`ttl_turns`", "int", "Time-to-live in turns"],
+        ["`is_expired`", "bool", "Whether item is expired"]
+      ]
+    },
+    {
+      "location": "Section 8 - Voice Stream SSE Events",
+      "page_reference": "279",
+      "headers": ["Event", "Data Fields", "Description"],
+      "rows": [
+        ["`status`", "`connected`, `status`, `running`", "Status update"],
+        ["`transcription`", "`type`, `text`", "User speech transcribed"],
+        ["`response`", "`type`, `text`", "Luna's response ready"],
+        ["`ping`", "`running`", "Keepalive (every 10 seconds)"]
+      ]
+    }
+  ],
+  "diagrams": [],
+  "code_blocks": [
+    {
+      "location": "Section 4 - GET /consciousness curl example",
+      "language": "bash",
+      "code": "curl http://localhost:8000/consciousness"
+    },
+    {
+      "location": "Section 4 - GET /consciousness example response",
+      "language": "json",
+      "code": "{\n  \"mood\": \"curious\",\n  \"coherence\": 0.87,\n  \"attention_topics\": 5,\n  \"focused_topics\": [\n    {\"topic\": \"quantum computing\", \"weight\": 0.85},\n    {\"topic\": \"user project\", \"weight\": 0.72}\n  ],\n  \"top_traits\": [\n    [\"helpful\", 0.95],\n    [\"curious\", 0.88],\n    [\"thoughtful\", 0.82]\n  ],\n  \"tick_count\": 1250,\n  \"last_updated\": \"2026-01-25T14:30:00Z\"\n}"
+    },
+    {
+      "location": "Section 4 - POST /memory/nodes curl example",
+      "language": "bash",
+      "code": "curl -X POST http://localhost:8000/memory/nodes \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"node_type\": \"FACT\",\n    \"content\": \"The user prefers dark mode interfaces\",\n    \"confidence\": 0.9,\n    \"importance\": 0.7\n  }'"
+    },
+    {
+      "location": "Section 7 - Debug context example response",
+      "language": "json",
+      "code": "{\n  \"current_turn\": 42,\n  \"token_budget\": 8000,\n  \"total_tokens\": 2450,\n  \"items\": [\n    {\n      \"id\": \"ctx_001\",\n      \"content\": \"You are Luna, an AI assistant...\",\n      \"source\": \"IDENTITY\",\n      \"ring\": \"CORE\",\n      \"relevance\": 1.0,\n      \"tokens\": 150,\n      \"age_turns\": 0,\n      \"ttl_turns\": -1,\n      \"is_expired\": false\n    }\n  ],\n  \"keywords\": [\"machine learning\", \"python\", \"backend\"],\n  \"ring_stats\": {\n    \"CORE\": {\"items\": 3, \"tokens\": 450},\n    \"INNER\": {\"items\": 8, \"tokens\": 1200},\n    \"MIDDLE\": {\"items\": 5, \"tokens\": 600},\n    \"OUTER\": {\"items\": 2, \"tokens\": 200}\n  }\n}"
+    },
+    {
+      "location": "Section 8 - Voice stream SSE example",
+      "language": "text",
+      "code": "event: status\ndata: {\"connected\": true, \"status\": \"idle\", \"running\": true}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"listening\"}\n\nevent: transcription\ndata: {\"type\": \"transcription\", \"text\": \"Hello Luna\"}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"thinking\"}\n\nevent: response\ndata: {\"type\": \"response\", \"text\": \"Hello! How can I help you?\"}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"speaking\"}\n\nevent: status\ndata: {\"type\": \"status\", \"status\": \"idle\"}\n\nevent: ping\ndata: {\"running\": true}"
+    }
+  ]
+}

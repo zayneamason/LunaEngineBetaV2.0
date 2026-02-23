@@ -94,7 +94,7 @@ export function KozmoProvider({ children }) {
   const checkHealth = useCallback(async () => {
     // Luna Engine health
     try {
-      const res = await fetch('/api/health');
+      const res = await fetch('/health');
       const data = await res.json();
       const connected = data.status === 'healthy';
       setEngineConnected(connected);

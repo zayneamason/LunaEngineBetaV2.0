@@ -1,0 +1,496 @@
+{
+  "pages": "141-160",
+  "sections": [
+    {
+      "page": 141,
+      "part": "Part VIII (continued)",
+      "section": "8.7 Context Assembly (continued)",
+      "subsections": [
+        {
+          "title": "Context Assembly Code (continued)",
+          "type": "code_block",
+          "language": "python",
+          "content": "        context_tokens += node_tokens\n\n    return {\n        \"relevant_context\": [n.to_dict() for n in included],\n        \"context_tokens\": context_tokens\n    }"
+        },
+        {
+          "title": "Audit Trail",
+          "type": "code_block",
+          "language": "python",
+          "content": "@dataclass\nclass DelegationAudit:\n    timestamp: datetime\n    task_type: str\n    query_hash: str  # Don't log raw query\n    worker: str\n    success: bool\n    latency_ms: int\n    tokens_sent: int\n    tokens_received: int\n\n# Stored in Memory Matrix for transparency\nasync def log_delegation(audit: DelegationAudit):\n    await matrix.insert_node(\n        node_type=\"DELEGATION_LOG\",\n        content=audit.to_json(),\n        metadata={\"internal\": True}\n    )"
+        }
+      ]
+    },
+    {
+      "page": 141,
+      "part": "Part VIII (continued)",
+      "section": "8.8 Future Workers",
+      "content": "The delegation protocol is designed to be **worker-agnostic**. Claude is the primary today, but the architecture supports:",
+      "tables": [
+        {
+          "title": "Future Workers",
+          "headers": ["Worker", "Potential Use"],
+          "rows": [
+            ["Gemini", "Optimization, large context"],
+            ["Local 70B", "Privacy-critical delegation"],
+            ["Specialized models", "Code (Codestral), math (Minerva)"],
+            ["Tool APIs", "Web search, calculators, databases"]
+          ]
+        }
+      ],
+      "subsections": [
+        {
+          "title": "Adding a New Worker (v3.0)",
+          "note": "**Note:** In the actual implementation, workers are managed via ProviderRegistry in `src/luna/llm/registry.py`, not via an Oven actor.",
+          "type": "code_block",
+          "language": "python",
+          "content": "# 1. Create provider class implementing LLMProvider protocol\nclass GeminiProvider:\n    \"\"\"Provider for Gemini API.\"\"\"\n    name = \"gemini\"\n    capabilities = [\"optimization\", \"benchmarking\", \"large_context\"]\n    ..."
+        }
+      ]
+    },
+    {
+      "page": 142,
+      "part": "Part VIII (continued)",
+      "section": "8.8 Future Workers (continued)",
+      "subsections": [
+        {
+          "title": "Adding a New Worker (continued)",
+          "type": "code_block",
+          "language": "python",
+          "content": "# 2. Register with ProviderRegistry\nfrom luna.llm.registry import ProviderRegistry\n\nregistry = ProviderRegistry()\nregistry.register(\"gemini\", GeminiProvider())\n\n# 3. Director uses _should_delegate() to route\n# Providers are selected based on availability and task type\n\n# 4. Training data for local model delegation (optional)\n{\n    \"instruction\": \"Analyze the performance characteristics of these three algorithms\",\n    \"response\": \"<REQ_CLAUDE>This is an analysis task. Let me look into that.</REQ_CLAUDE>\"\n}"
+        },
+        {
+          "title": "Implementation Note",
+          "type": "note",
+          "content": "The current `_should_delegate()` method routes to Claude as the primary cloud provider. Multi-provider routing is supported via ProviderRegistry."
+        }
+      ]
+    },
+    {
+      "page": 142,
+      "part": "Part VIII",
+      "section": "Summary",
+      "content": "The Delegation Protocol defines how Luna's sovereign mind collaborates with cloud workers:",
+      "tables": [
+        {
+          "title": "Summary Table",
+          "headers": ["Component", "Role", "Implementation Status (v3.0)"],
+          "rows": [
+            ["Delegation Boundary", "What Luna handles vs. delegates", "Implemented in `_should_delegate()`"],
+            ["`<REQ_CLAUDE>` Token", "Learned delegation signal", "Implemented as class constants"],
+            ["Shadow Reasoner", "Background execution, foreground narration", "Inline in Director (no Oven Actor)"],
+            ["Filler & Continuity", "No awkward silence", "Partial (acknowledgment only)"],
+            ["Worker Contracts", "Standardized request/response", "Via ProviderRegistry"],
+            ["Privacy Controls", "Minimal data sent to cloud", "Implemented"]
+          ]
+        }
+      ],
+      "subsections": [
+        {
+          "title": "Key Implementation Notes (v3.0)",
+          "type": "list",
+          "items": [
+            "**No Oven Actor:** Delegation handled directly in DirectorActor",
+            "**Stats field:** `_delegated_generations` (not `cloud_generations`)",
+            "**Token detection:** Uses `REQ_CLAUDE_START` and `REQ_CLAUDE_END` constants",
+            "**Provider system:** Multi-provider support via `src/luna/llm/registry.py`"
+          ]
+        },
+        {
+          "title": "Constitutional Principle",
+          "type": "emphasis",
+          "content": "Luna's mind is local. Cloud workers are contractors. The user always hears Luna's voice."
+        }
+      ],
+      "next_section": "Part IX — Performance Optimizations"
+    },
+    {
+      "page": 143,
+      "type": "blank_page"
+    },
+    {
+      "page": 144,
+      "part": "Part IX",
+      "title": "Performance Optimizations",
+      "metadata": {
+        "version": "3.0",
+        "date": "2026-01-30",
+        "status": "CURRENT — Honest assessment of targets vs reality",
+        "primary_contributor": "Gemini (Algorithms), Claude (Integration)",
+        "target": "<500ms to first token on Apple Silicon"
+      },
+      "section": "Reality Check (v3.0 Update)",
+      "note": "**IMPORTANT:** This chapter describes performance *targets* and *architecture*. Current implementation does not meet these targets.",
+      "subsections": [
+        {
+          "title": "Current vs Target Performance",
+          "type": "table",
+          "headers": ["Operation", "Current (Actual)", "Target", "Gap", "Status"],
+          "rows": [
+            ["Local inference", "**2-3 tok/s**", "50+ tok/s", "CRITICAL", "BUG-016"],
+            ["First response latency", "**>5 seconds**", "<500ms", "CRITICAL", "Blocked by inference"],
+            ["Memory search", "~10ms", "~10ms", "OK", "Working"],
+            ["Context assembly", "~50ms", "~50ms", "OK", "Working"]
+          ]
+        },
+        {
+          "title": "Why Local Inference Is Slow (BUG-016)",
+          "content": "The local inference bottleneck (2-3 tok/s instead of 50+ tok/s) has several possible causes:",
+          "type": "list",
+          "items": [
+            "1. **Model may not be 4-bit quantized** — Running float16 instead of int4",
+            "2. **MLX may be using CPU** — Check `mx.default_device()` returns GPU",
+            "3. **Context window overhead** — Large context slows generation",
+            "4. **Model size** — 7B may be too large for available unified memory"
+          ],
+          "workaround": "**Current Workaround:** System defaults to cloud delegation (Groq/Claude) for most responses."
+        },
+        {
+          "title": "Speculative Execution — NOT YET IMPLEMENTED",
+          "type": "note",
+          "content": "The speculative retrieval and KV cache warming described in this chapter are **aspirational architecture**, not current implementation. The codebase has TODO comments for these features."
+        }
+      ]
+    },
+    {
+      "page": 144,
+      "part": "Part IX",
+      "section": "9.1 The Latency Budget (Target Architecture)",
+      "content": "Luna's voice interface requires **<500ms to first token**. That's the threshold where conversation feels natural rather than laggy.",
+      "subsections": [
+        {
+          "title": "The Budget Breakdown",
+          "type": "diagram",
+          "description": "ASCII diagram showing 500ms latency budget breakdown across phases",
+          "diagram_content": "500ms LATENCY BUDGET\n\nSTT Final Transcript ────────────────────────────── ~0ms\n(already complete when we start)\n\nRETRIEVAL PHASE ──────────────────────────────── ~50ms\n  Bloom filter check ─────────────────────────── ~1ms\n  Query routing ──────────────────────────────── ~2ms\n  FTS5 OR FAISS (not both) ───────────────────── ~30ms\n  Graph hop (rustworkx) ──────────────────────── ~5ms\n  RRF merge (if needed) ──────────────────────── ~2ms\n  Context assembly ───────────────────────────── ~10ms\n\nINFERENCE PHASE ──────────────────────────────── ~250ms\n  KV cache load (pre-computed) ───────────────── ~5ms\n  Context encoding ───────────────────────────── ~50ms\n  First token generation ─────────────────────── ~195ms\n\nOUTPUT PHASE ─────────────────────────────────── ~50ms\n  Token to TTS ───────────────────────────────── ~10ms\n  TTS processing ─────────────────────────────── ~40ms\n\nBUFFER ───────────────────────────────────────── ~150ms\n\nTOTAL ────────────────────────────────────────── <500ms ✓"
+        }
+      ]
+    },
+    {
+      "page": 146,
+      "part": "Part IX",
+      "section": "9.1 (continued)",
+      "subsections": [
+        {
+          "title": "The Cheat: Speculative Execution",
+          "content": "The budget above assumes we start retrieval *after* the user finishes speaking. But we don't have to wait:",
+          "type": "diagram",
+          "description": "Flow diagram showing speculative retrieval during user speech",
+          "diagram_content": "User speaking: \"What did we decide about the runtime...\"\n        |\n        | Partial transcript arrives\n        ▼\n┌─────────────────────────┐\n│ SPECULATIVE   │ ← Start retrieval NOW\n│ RETRIEVAL     │\n└─────────────────────────┘\n        |\nUser finishes: \"...runtime engine?\"\n        |\n        | Final transcript\n        ▼\n┌─────────────────────────┐\n│ VALIDATE      │ ← Is speculation still valid?\n│ SPECULATION   │\n└─────────────────────────┘\n        |\n        | Yes (>0.85 similarity)\n        ▼\n┌─────────────────────────┐\n│ RETRIEVAL     │ ← Already done!\n│ COMPLETE      │   Saved ~50ms\n└─────────────────────────┘",
+          "result": "**Result:** Retrieval is often *already complete* when the user finishes speaking."
+        }
+      ]
+    },
+    {
+      "page": 146,
+      "part": "Part IX",
+      "section": "9.2 Speculative Execution (NOT YET IMPLEMENTED)",
+      "status": "**Status:** Aspirational architecture. No implementation exists.",
+      "subsections": [
+        {
+          "title": "The Pattern",
+          "content": "Start retrieval on partial STT transcripts. Validate when the final transcript arrives."
+        },
+        {
+          "title": "Implementation",
+          "type": "code_block",
+          "language": "python",
+          "content": "class SpeculativeRetriever:\n    def __init__(self, matrix: MatrixActor, embedder: Embedder):\n        self.matrix = matrix\n        self.embedder = embedder\n        self.speculative_task: Optional[asyncio.Task] = None\n        self.speculative_query: Optional[str] = None\n        self.speculative_embedding: Optional[np.ndarray] = None\n\n    async def on_partial_transcript(self, text: str):\n        \"\"\"Start speculative retrieval on partial transcript.\"\"\"\n        # Cancel previous speculation if exists\n        if self.speculative_task and not self.speculative_task.done():\n            self.speculative_task.cancel()\n\n        # Store for validation\n        self.speculative_query = text\n        self.speculative_embedding = await self.embedder.embed(text)\n\n        # Fire speculative search\n        self.speculative_task = asyncio.create_task(\n            self._speculative_search(text)\n        )\n\n    async def on_final_transcript(self, text: str) -> RetrievalResults:\n        \"\"\"Validate speculation or fetch fresh.\"\"\"\n        if not self.speculative_task:\n            # No speculation, fetch fresh\n            return await self.matrix.search(text)\n\n        # Wait for speculation to complete\n        try:\n            speculative_results = await asyncio.wait_for(\n                self.speculative_task,\n                timeout=0.1  # Don't wait long\n            )\n        except asyncio.TimeoutError:\n            # Speculation not ready, fetch fresh\n            return await self.matrix.search(text)\n\n        # Validate speculation\n        final_embedding = await self.embedder.embed(text)\n        similarity = cosine_similarity(\n            self.speculative_embedding,\n            final_embedding\n        )\n\n        if similarity > 0.85:\n            # Speculation valid, use cached results\n            return speculative_results\n        else:\n            # Transcript changed significantly, fetch delta\n            fresh_results = await self.matrix.search(text)\n            return self._merge_results(speculative_results, fresh_results)"
+        }
+      ]
+    },
+    {
+      "page": 148,
+      "part": "Part IX",
+      "section": "9.2 (continued)",
+      "subsections": [
+        {
+          "title": "Implementation (continued)",
+          "type": "code_block",
+          "language": "python",
+          "content": "    async def _speculative_search(self, text: str) -> RetrievalResults:\n        \"\"\"Execute the speculative search.\"\"\"\n        return await self.matrix.search(text)\n\n    def _merge_results(\n        self,\n        speculative: RetrievalResults,\n        fresh: RetrievalResults\n    ) -> RetrievalResults:\n        \"\"\"Merge speculative and fresh results using RRF.\"\"\"\n        return rrf_merge([speculative.nodes, fresh.nodes])"
+        },
+        {
+          "title": "Validation Threshold",
+          "type": "table",
+          "headers": ["Similarity", "Action"],
+          "rows": [
+            [">0.85", "Keep speculative results"],
+            ["0.70-0.85", "Merge speculative + fresh"],
+            ["<0.70", "Discard speculation, use fresh"]
+          ]
+        },
+        {
+          "title": "Debouncing",
+          "content": "Don't fire on every partial — debounce to avoid thrashing:",
+          "type": "code_block",
+          "language": "python",
+          "content": "class DebouncedSpeculation:\n    def __init__(self, delay_ms: int = 200):\n        self.delay = delay_ms / 1000\n        self.pending_task: Optional[asyncio.Task] = None\n\n    async def on_partial(self, text: str, retriever: SpeculativeRetriever):\n        \"\"\"Debounced speculation trigger.\"\"\"\n        # Cancel pending\n        if self.pending_task:\n            self.pending_task.cancel()\n\n        # Schedule new\n        self.pending_task = asyncio.create_task(\n            self._delayed_trigger(text, retriever)\n        )\n\n    async def _delayed_trigger(self, text: str, retriever: SpeculativeRetriever):\n        await asyncio.sleep(self.delay)\n        await retriever.on_partial_transcript(text)"
+        }
+      ]
+    },
+    {
+      "page": 148,
+      "part": "Part IX",
+      "section": "9.3 KV Cache Management (NOT YET IMPLEMENTED)",
+      "status": "**Status:** Aspirational architecture. KV cache pinning is not implemented. The `identity_buffer.safetensors` file mentioned does not exist.",
+      "subsections": [
+        {
+          "title": "The Problem",
+          "content": "The Identity Buffer is ~2048 tokens. Re-encoding it every turn wastes ~50-100ms."
+        },
+        {
+          "title": "The Solution: Pre-computed KV Cache",
+          "type": "code_block",
+          "language": "python",
+          "content": "from mlx_lm import cache_prompt, load_kv_cache\n\nclass KVCacheManager:\n    def __init__(self, model_path: str):\n        self.model_path = model_path\n        self.identity_cache_path = Path(\"~/.luna/identity_buffer.safetensors\")\n        self.identity_cache: Optional[KVCache] = None\n\n    async def initialize(self):\n        \"\"\"Load or create identity buffer cache.\"\"\"\n        if self.identity_cache_path.exists():\n            self.identity_cache = load_kv_cache(self.identity_cache_path)\n        else:\n            await self.rebuild_identity_cache()\n\n    async def rebuild_identity_cache(self):\n        \"\"\"Rebuild identity buffer KV cache.\"\"\"\n        identity_prompt = await self._load_identity_buffer()\n\n        cache_prompt(\n            model=self.model_path,\n            prompt=identity_prompt,\n            output_path=str(self.identity_cache_path)\n        )\n\n        self.identity_cache = load_kv_cache(self.identity_cache_path)\n\n    def get_cache_for_turn(self, conversation_history: str) -> KVCache:\n        \"\"\"Get KV cache with identity buffer pinned.\"\"\"\n        # Start with identity buffer (pre-computed)\n        cache = self.identity_cache.copy()\n\n        # Extend with conversation history if needed\n        # (This part is computed fresh, but identity is free)\n\n        return cache"
+        }
+      ]
+    },
+    {
+      "page": 149,
+      "part": "Part IX",
+      "section": "9.3 (continued)",
+      "subsections": [
+        {
+          "title": "Rolling Cache Strategy",
+          "content": "When conversation exceeds context window:",
+          "type": "code_block",
+          "language": "python",
+          "content": "class RollingKVCache:\n    def __init__(self, max_kv_size: int = 8192):\n        self.max_kv_size = max_kv_size\n        self.identity_size = 2048  # Pinned, never rotated\n        self.available_size = max_kv_size - self.identity_size\n\n    def rotate(self, cache: KVCache, new_tokens: int) -> KVCache:\n        \"\"\"Rotate out old turns while keeping identity pinned.\"\"\"\n        current_size = cache.size()\n\n        if current_size + new_tokens <= self.max_kv_size:\n            return cache  # No rotation needed\n\n        # Calculate how much to remove\n        remove_tokens = (current_size + new_tokens) - self.max_kv_size\n\n        # Remove from middle (after identity, before recent)\n        # Identity: [0:2048] — PINNED\n        # History:  [2048:X] — Rotate oldest\n        # Recent:   [X:end]  — Keep\n\n        return self._rotate_middle(cache, remove_tokens)"
+        },
+        {
+          "title": "Cache Warming",
+          "content": "Start cache operations before they're needed:",
+          "type": "code_block",
+          "language": "python",
+          "content": "async def warm_cache_on_partial(self, partial: str):\n    \"\"\"Pre-warm cache while user is still speaking.\"\"\"\n    # Speculative context assembly\n    speculative_context = await self.assemble_context(partial)\n\n    # Start encoding (but don't block on it)\n    self.warm_task = asyncio.create_task(\n        self.model.encode(speculative_context)\n    )"
+        }
+      ]
+    },
+    {
+      "page": 150,
+      "part": "Part IX",
+      "section": "9.4 Vector Index Selection",
+      "status": "**Status:** PARTIAL. sqlite-vec is implemented for vector search, but FAISS is not used. The codebase uses 384-dimension local embeddings.",
+      "subsections": [
+        {
+          "title": "The Goldilocks Zone",
+          "content": "At Luna's scale (~60K nodes as of 2026-01-30), index selection matters.",
+          "type": "table",
+          "headers": ["Node Count", "Recommended Index", "Why"],
+          "rows": [
+            ["<10K", "`IndexFlatIP`", "Brute force fits in cache"],
+            ["10K-50K", "`IndexFlatIP` or `IVF`", "Test both"],
+            ["50K+", "`HNSW32`", "Graph navigation pays off"]
+          ]
+        },
+        {
+          "title": "Why Brute Force Wins at Small Scale",
+          "content": "IndexFlatIP (Brute Force):\n- 10K vectors × 768 dims × 4 bytes = 30MB\n- Fits entirely in L3/SLC cache on Apple Silicon\n- No graph navigation overhead\n- Exact results (no approximation)\n- ~10-20ms for 10K vectors\n\nHNSW at 10K:\n- Graph structure overhead\n- Navigation overhead per query\n- Often slower than brute force at this scale\n- Approximation errors"
+        },
+        {
+          "title": "Implementation",
+          "type": "code_block",
+          "language": "python",
+          "content": "import faiss\nimport numpy as np\n\nclass VectorIndex:\n    def __init__(self, dimension: int = 768):\n        self.dimension = dimension\n        self.index: Optional[faiss.Index] = None\n        self.id_map: dict[int, str] = {}  # FAISS ID -> Node ID\n\n    def build(self, vectors: np.ndarray, node_ids: list[str]):\n        \"\"\"Build index with appropriate algorithm.\"\"\"\n        n_vectors = len(vectors)\n\n        if n_vectors < 10_000:\n            # Brute force — fastest at this scale\n            self.index = faiss.IndexFlatIP(self.dimension)\n        elif n_vectors < 50_000:\n            # IVF — good middle ground\n            n_clusters = int(np.sqrt(n_vectors))\n            quantizer = faiss.IndexFlatIP(self.dimension)\n            self.index = faiss.IndexIVFFlat(\n                quantizer, self.dimension, n_clusters\n            )\n            self.index.train(vectors)\n        else:\n            # HNSW — best for large scale\n            self.index = faiss.IndexHNSWFlat(self.dimension, 32)\n\n        # Add vectors\n        self.index.add(vectors)\n\n        # Build ID map\n        self.id_map = {i: nid for i, nid in enumerate(node_ids)}\n\n    def search(self, query: np.ndarray, k: int = 10) -> list[tuple[str, float]]:\n        \"\"\"Search for nearest neighbors.\"\"\"\n        distances, indices = self.index.search(\n            query.reshape(1, -1), k\n        )\n\n        results = []\n        for dist, idx in zip(distances[0], indices[0]):\n            if idx >= 0:  # Valid result\n                node_id = self.id_map[idx]\n                results.append((node_id, float(dist)))\n\n        return results"
+        }
+      ]
+    },
+    {
+      "page": 152,
+      "part": "Part IX",
+      "section": "9.4 (continued)",
+      "subsections": [
+        {
+          "title": "Apple Silicon Optimization",
+          "type": "code_block",
+          "language": "python",
+          "content": "# Use float16 for memory efficiency on Apple Silicon\nvectors = vectors.astype(np.float16)\n\n# MLX can also do similarity search on GPU\nimport mlx.core as mx\n\ndef mlx_similarity_search(query: mx.array, index: mx.array, k: int = 10):\n    \"\"\"GPU-accelerated similarity search using MLX.\"\"\"\n    # Cosine similarity\n    similarities = mx.matmul(query, index.T)\n\n    # Top-k\n    top_k_indices = mx.argpartition(-similarities, k)[:k]\n    top_k_scores = similarities[top_k_indices]\n\n    return top_k_indices, top_k_scores"
+        }
+      ]
+    },
+    {
+      "page": 152,
+      "part": "Part IX",
+      "section": "9.5 Graph Traversal Speed",
+      "status": "**Status:** NOT IMPLEMENTED. The codebase uses NetworkX. rustworkx migration has not occurred.",
+      "subsections": [
+        {
+          "title": "The Problem",
+          "content": "NetworkX is pure Python. Graph operations that should take microseconds take milliseconds."
+        },
+        {
+          "title": "The Solution: rustworkx (PROPOSED)",
+          "content": "Drop-in replacement with 10-100x speedup:",
+          "type": "code_block",
+          "language": "python",
+          "content": "# Before (NetworkX) — ~50ms for 1-hop on 10K nodes\nimport networkx as nx\n\ndef get_neighbors_nx(graph: nx.DiGraph, node_id: str, depth: int = 1):\n    neighbors = list(nx.bfs_tree(graph, node_id, depth_limit=depth))\n    return neighbors\n\n# After (rustworkx) — ~0.5ms for same operation\nimport rustworkx as rx\n\ndef get_neighbors_rx(graph: rx.PyDiGraph, node_idx: int, depth: int = 1):\n    neighbors = rx.bfs_successors(graph, node_idx)\n    return [n for d, nodes in neighbors if d <= depth for n in nodes]"
+        },
+        {
+          "title": "Migration Guide",
+          "type": "table",
+          "headers": ["NetworkX", "rustworkx", "Notes"],
+          "rows": [
+            ["`nx.DiGraph()`", "`rx.PyDiGraph()`", "Same interface"],
+            ["`G.add_node(id)`", "`G.add_node(data)`", "Returns index"],
+            ["`G.add_edge(u, v)`", "`G.add_edge(u_idx, v_idx, data)`", "Uses indices"],
+            ["`nx.bfs_tree()`", "`rx.bfs_successors()`", "Different return format"],
+            ["`nx.shortest_path()`", "`rx.dijkstra_shortest_paths()`", "Same concept"]
+          ]
+        },
+        {
+          "title": "Hybrid Approach",
+          "content": "Keep NetworkX for complex algorithms not in rustworkx, use rustworkx for hot path:",
+          "type": "code_block",
+          "language": "python",
+          "content": "class HybridGraph:\n    def __init__(self):\n        self.rx_graph = rx.PyDiGraph()  # Hot path\n        self.nx_graph = nx.DiGraph()     # Complex ops\n        self.node_map: dict[str, int] = {}  # ID -> rustworkx index\n\n    def add_node(self, node_id: str, data: dict):\n        # Add to both\n        idx = self.rx_graph.add_node(data)\n        self.nx_graph.add_node(node_id, **data)\n        self.node_map[node_id] = idx\n\n    def get_neighbors_fast(self, node_id: str, depth: int = 1) -> list[str]:\n        \"\"\"Fast neighbor lookup using rustworkx.\"\"\"\n        idx = self.node_map[node_id]\n        return rx.bfs_successors(self.rx_graph, idx)\n\n    def get_complex_paths(self, source: str, target: str):\n        \"\"\"Complex pathfinding using NetworkX.\"\"\"\n        return nx.all_simple_paths(self.nx_graph, source, target)"
+        }
+      ]
+    },
+    {
+      "page": 154,
+      "part": "Part IX",
+      "section": "9.6 Bloom Filter Pre-check (NOT YET IMPLEMENTED)",
+      "status": "**Status:** Aspirational architecture. No Bloom filter implementation exists.",
+      "subsections": [
+        {
+          "title": "The Pattern",
+          "content": "Before searching, check if the entity even exists. O(1) check can skip O(n) search."
+        },
+        {
+          "title": "Implementation",
+          "type": "code_block",
+          "language": "python",
+          "content": "from pybloom_live import BloomFilter\n\nclass EntityFilter:\n    def __init__(self, capacity: int = 100_000, error_rate: float = 0.001):\n        self.filter = BloomFilter(capacity=capacity, error_rate=error_rate)\n\n    def add(self, entity: str):\n        \"\"\"Add entity to filter.\"\"\"\n        self.filter.add(entity.lower())\n\n    def might_exist(self, entity: str) -> bool:\n        \"\"\"Check if entity might exist (false positives possible).\"\"\"\n        return entity.lower() in self.filter\n\n    def definitely_missing(self, entity: str) -> bool:\n        \"\"\"Check if entity definitely doesn't exist (no false negatives).\"\"\"\n        return entity.lower() not in self.filter\n\n\nclass OptimizedRetrieval:\n    def __init__(self, matrix: MemoryMatrix, entity_filter: EntityFilter):\n        self.matrix = matrix\n        self.entity_filter = entity_filter\n\n    async def search(self, query: str) -> list[Node]:\n        \"\"\"Search with Bloom filter pre-check.\"\"\"\n        # Extract entities from query\n        entities = extract_entities(query)\n\n        # Check which entities might exist\n        possible_entities = [\n            e for e in entities\n            if self.entity_filter.might_exist(e)\n        ]\n\n        if not possible_entities:\n            # No entities exist, skip graph traversal\n            # Fall back to pure semantic search\n            return await self.matrix.semantic_search(query)\n\n        # Entities might exist, do full search\n        return await self.matrix.hybrid_search(query, entities=possible_entities)"
+        },
+        {
+          "title": "When to Use",
+          "type": "table",
+          "headers": ["Scenario", "Bloom Filter Helps?"],
+          "rows": [
+            ["\"What did we decide about X?\"", "Yes — check if X exists"],
+            ["\"How are you feeling?\"", "No — no entity to check"],
+            ["\"Tell me about Project Luna\"", "Yes — check if \"Project Luna\" exists"],
+            ["Conceptual/vague queries", "No — use semantic search directly"]
+          ]
+        }
+      ]
+    },
+    {
+      "page": 156,
+      "part": "Part IX",
+      "section": "9.7 Query Routing (PARTIAL)",
+      "status": "**Status:** Basic routing exists in the codebase, but the sophisticated heuristic router and TinyModel router are not implemented.",
+      "subsections": [
+        {
+          "title": "The Problem",
+          "content": "Running every search path every time wastes cycles:\n- FTS5 for keywords\n- FAISS for semantics\n- Graph for relationships\n\nMost queries only need one path."
+        },
+        {
+          "title": "Heuristic Router",
+          "type": "code_block",
+          "language": "python",
+          "content": "from enum import Enum\n\nclass SearchPath(Enum):\n    FTS5 = \"fts5\"\n    FAISS = \"faiss\"\n    GRAPH = \"graph\"\n    HYBRID = \"hybrid\"\n\nclass QueryRouter:\n    def __init__(self):\n        self.entity_extractor = EntityExtractor()\n\n    def route(self, query: str) -> SearchPath:\n        \"\"\"Determine optimal search path.\"\"\"\n        # Extract features\n        entities = self.entity_extractor.extract(query)\n        keyword_density = self._keyword_density(query)\n        is_conceptual = self._is_conceptual(query)\n\n        # Routing logic\n        if entities and len(entities) >= 2:\n            # Multiple entities — relationship query\n            return SearchPath.GRAPH\n\n        if keyword_density > 0.6:\n            # High keyword density — exact match\n            return SearchPath.FTS5\n\n        if is_conceptual:\n            # Conceptual/vague — semantic search\n            return SearchPath.FAISS\n\n        # Default to hybrid\n        return SearchPath.HYBRID\n\n    def _keyword_density(self, query: str) -> float:\n        \"\"\"Ratio of content words to total words.\"\"\"\n        words = query.split()\n        stopwords = {\"the\", \"a\", \"an\", \"is\", \"are\", \"what\", \"how\", \"did\", \"we\"}\n        content_words = [w for w in words if w.lower() not in stopwords]\n        return len(content_words) / len(words) if words else 0\n\n    def _is_conceptual(self, query: str) -> bool:\n        \"\"\"Check if query is conceptual/abstract.\"\"\"\n        conceptual_markers = [\n            \"how does\", \"what is\", \"explain\", \"describe\",\n            \"concept\", \"idea\", \"theory\", \"approach\"\n        ]\n        return any(marker in query.lower() for marker in conceptual_markers)"
+        }
+      ]
+    },
+    {
+      "page": 157,
+      "part": "Part IX",
+      "section": "9.7 (continued)",
+      "subsections": [
+        {
+          "title": "Tiny Model Router (Optional Upgrade)",
+          "content": "For more nuanced routing, use a small classifier:",
+          "type": "code_block",
+          "language": "python",
+          "content": "class TinyModelRouter:\n    def __init__(self, model_path: str = \"smollm-135m\"):\n        self.model = load_model(model_path)\n        self.prompt_template = \"\"\"Classify this query's search type:\nQuery: {query}\n\nTypes:\n- KEYWORD: Looking for specific terms/names\n- SEMANTIC: Conceptual or vague\n- RELATIONSHIP: Asking about connections between things\n- HYBRID: Needs multiple approaches\n\nType:\"\"\"\n\n    async def route(self, query: str) -> SearchPath:\n        prompt = self.prompt_template.format(query=query)\n        response = await self.model.generate(prompt, max_tokens=10)\n\n        # Parse response\n        response_lower = response.lower()\n        if \"keyword\" in response_lower:\n            return SearchPath.FTS5\n        elif \"semantic\" in response_lower:\n            return SearchPath.FAISS\n        elif \"relationship\" in response_lower:\n            return SearchPath.GRAPH\n        else:\n            return SearchPath.HYBRID"
+        }
+      ]
+    },
+    {
+      "page": 158,
+      "part": "Part IX",
+      "section": "9.8 Reciprocal Rank Fusion (RRF)",
+      "status": "**Status:** IMPLEMENTED. RRF merge is available in the hybrid search path.",
+      "subsections": [
+        {
+          "title": "The Problem",
+          "content": "When you run multiple search paths, how do you merge results?\n\nNaive approaches fail:\n- Raw score combination (scales differ)\n- Weighted average (need to tune weights)\n- Union (no ranking)"
+        },
+        {
+          "title": "The Solution: RRF",
+          "content": "Documents appearing in multiple result lists rank higher. Battle-tested at Google and Perplexity."
+        },
+        {
+          "title": "Formula",
+          "content": "RRF_score(doc) = Σ (1 / (k + rank_in_list))\n\nwhere k = 60 (tunable constant)"
+        },
+        {
+          "title": "Implementation",
+          "type": "code_block",
+          "language": "python",
+          "content": "def rrf_merge(\n    result_lists: list[list[str]],\n    k: int = 60\n) -> list[str]:\n    \"\"\"\n    Merge multiple ranked result lists using RRF.\n\n    Args:\n        result_lists: List of ranked document ID lists\n        k: Ranking constant (default 60)\n\n    Returns:\n        Merged, re-ranked list of document IDs\n    \"\"\"\n    scores: dict[str, float] = {}\n\n    for result_list in result_lists:\n        for rank, doc_id in enumerate(result_list):\n            if doc_id not in scores:\n                scores[doc_id] = 0.0\n            scores[doc_id] += 1.0 / (k + rank)\n\n    # Sort by score descending\n    ranked = sorted(scores.keys(), key=lambda d: scores[d], reverse=True)\n\n    return ranked\n\n# Usage\nfts5_results = [\"doc1\", \"doc3\", \"doc5\", \"doc7\"]\nfaiss_results = [\"doc2\", \"doc1\", \"doc4\", \"doc3\"]\n\nmerged = rrf_merge([fts5_results, faiss_results])\n# Result: [\"doc1\", \"doc3\", \"doc2\", \"doc5\", \"doc4\", \"doc7\"]\n# doc1 and doc3 rank highest because they appear in both lists"
+        }
+      ]
+    },
+    {
+      "page": 159,
+      "part": "Part IX",
+      "section": "9.8 (continued)",
+      "subsections": [
+        {
+          "title": "With Scores",
+          "type": "code_block",
+          "language": "python",
+          "content": "def rrf_merge_with_scores(\n    result_lists: list[list[tuple[str, float]]],\n    k: int = 60\n) -> list[tuple[str, float]]:\n    \"\"\"RRF merge preserving scores for downstream use.\"\"\"\n    scores: dict[str, float] = {}\n    original_scores: dict[str, list[float]] = {}\n\n    for result_list in result_lists:\n        for rank, (doc_id, score) in enumerate(result_list):\n            if doc_id not in scores:\n                scores[doc_id] = 0.0\n                original_scores[doc_id] = []\n            scores[doc_id] += 1.0 / (k + rank)\n            original_scores[doc_id].append(score)\n\n    # Sort by RRF score\n    ranked = sorted(scores.keys(), key=lambda d: scores[d], reverse=True)\n\n    # Return with RRF scores\n    return [(doc_id, scores[doc_id]) for doc_id in ranked]"
+        }
+      ]
+    },
+    {
+      "page": 159,
+      "part": "Part IX",
+      "section": "9.9 Parallel Prefetching (NOT YET IMPLEMENTED)",
+      "status": "**Status:** Aspirational architecture. No prefetching implementation exists.",
+      "subsections": [
+        {
+          "title": "The Pattern",
+          "content": "While the Director generates tokens, prefetch context for the next turn."
+        },
+        {
+          "title": "Implementation",
+          "type": "code_block",
+          "language": "python",
+          "content": "class PrefetchingRetriever:\n    def __init__(self, matrix: MatrixActor):\n        self.matrix = matrix\n        self.prefetch_cache: dict[str, list[Node]] = {}\n\n    async def retrieve_with_prefetch(\n        self,\n        query: str,\n        active_entities: list[str]\n    ) -> list[Node]:\n        \"\"\"Retrieve for current query, prefetch for next.\"\"\"\n        # Check prefetch cache\n        cache_key = self._cache_key(query)\n        if cache_key in self.prefetch_cache:\n            results = self.prefetch_cache.pop(cache_key)\n        else:\n            results = await self.matrix.search(query)\n\n        # Start prefetch for likely next queries\n        asyncio.create_task(\n            self._prefetch_neighbors(active_entities)\n        )\n\n        return results\n\n    async def _prefetch_neighbors(self, entities: list[str]):\n        \"\"\"Prefetch 1-hop neighbors of active entities.\"\"\"\n        for entity in entities[:3]:  # Limit to top 3\n            neighbors = await self.matrix.get_neighbors(entity, depth=1)\n\n            # Cache for potential next query\n            for neighbor in neighbors:\n                cache_key = self._cache_key(neighbor.content[:50])\n                self.prefetch_cache[cache_key] = [neighbor]\n\n        # Prune old cache entries\n        if len(self.prefetch_cache) > 100:\n            # Remove oldest half\n            keys = list(self.prefetch_cache.keys())\n            for key in keys[:50]:\n                del self.prefetch_cache[key]\n\n    def _cache_key(self, text: str) -> str:\n        \"\"\"Generate cache key from text.\"\"\"\n        return hashlib.md5(text.encode()).hexdigest()[:16]"
+        }
+      ]
+    },
+    {
+      "page": 160,
+      "part": "Part IX",
+      "section": "9.9 (continued)",
+      "subsections": [
+        {
+          "title": "When to Prefetch",
+          "type": "code_block",
+          "language": "python",
+          "content": "class DirectorActor(Actor):\n    async def generate_with_prefetch(self, prompt: str, context: list[Node]):\n        \"\"\"Generate response while prefetching.\"\"\"\n        # Extract entities from current context\n        active_entities = self._extract_entities(context)\n\n        # Start prefetch task\n        prefetch_task = asyncio.create_task(\n            self.retriever.prefetch_neighbors(active_entities)\n        )\n\n        # Generate response (doesn't wait for prefetch)\n        async for token in self.model.generate_stream(prompt):\n            yield token\n\n        # Prefetch completes in background\n        # Results cached for next turn"
+        }
+      ]
+    },
+    {
+      "page": 160,
+      "part": "Part IX",
+      "section": "9.10 The Complete Optimized Pipeline (TARGET ARCHITECTURE)",
+      "status": "**Status:** This is the target architecture. Current implementation uses a simpler pipeline with cloud delegation as the primary path.",
+      "subsections": [
+        {
+          "title": "Flow Diagram (Aspirational)",
+          "type": "diagram",
+          "description": "Complete optimized pipeline showing parallel operations during user speech",
+          "diagram_content": "User starts speaking (t=0ms)\n        |\n        |──────► [PARALLEL] Pre-warm KV cache\n        |            └─── Load identity_buffer.safetensors (~5ms)\n        |\n        |──────► [PARALLEL] Speculative retrieval (debounced)\n        |            |\n        |            |─── Bloom filter: entities exist? (~1ms)\n        |            |\n        |            |─── Query router: which path? (~2ms)\n        |            |        |\n        |            |        |─── KEYWORD → FTS5 only\n        |            |        |─── SEMANTIC → FAISS only\n        |            |        |─── RELATIONSHIP → Graph only\n        |            |        └─── HYBRID → FTS5 + FAISS + RRF\n        |            |\n        |            |─── Execute search (~30ms)\n        |            └─── rustworkx graph hop (~5ms)\n        |\nUser finishes speaking (t≈800ms)\n        |"
+        }
+      ]
+    }
+  ]
+}

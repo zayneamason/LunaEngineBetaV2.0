@@ -1,0 +1,832 @@
+{
+  "extraction_info": {
+    "source_file": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_requested": "241-260",
+    "pages_extracted": 20,
+    "extraction_date": "2026-02-06"
+  },
+  "parts": [
+    {
+      "part_number": 7,
+      "title": "Parallel Execution (Claude Flow Style)",
+      "pages": [241],
+      "content": {
+        "description": "Multiple agents working simultaneously",
+        "diagrams": [
+          {
+            "name": "Swarm Mode Architecture",
+            "description": "ASCII diagram showing hierarchical swarm structure with ORCHESTRATOR (Director) at top, three Worker nodes (Worker 1/Research, Worker 2/Code, Worker 3/Review) in middle, and MERGE & SYNTHESIZE at bottom. Shows parallel fan-out from orchestrator to workers and fan-in to synthesis."
+          }
+        ],
+        "key_properties": [
+          "Parallel execution (multiple agents at once)",
+          "Specialized workers (different agents for different tasks)",
+          "Coordination (orchestrator manages handoffs)",
+          "Synthesis (combine results from multiple workers)"
+        ]
+      }
+    },
+    {
+      "part_number": 8,
+      "title": "Luna as Agentic Engine",
+      "pages": [241, 242, 243],
+      "content": {
+        "description": "Putting it all together",
+        "diagrams": [
+          {
+            "name": "Luna Agentic Engine Architecture",
+            "description": "ASCII diagram showing full agentic architecture. ORCHESTRATOR (Luna Prime) at top with responsibilities: Receives user goal, Decomposes into tasks, Assigns to workers, Manages context window, Synthesizes final response, IS Luna's voice to user. Five worker actors below: SCRIBE (Ben) - Extract wisdom from stream, LIBRARIAN (Dude) - Retrieve context from memory, OVEN - Delegate to cloud workers (Claude), TOOLER - Execute tools (files, APIs, calendar), CODER - Generate & run code. All connect to SHARED STATE containing Memory Matrix (Long-term), Working Context (Current window), and Task Queue (Pending work)."
+          }
+        ]
+      }
+    },
+    {
+      "part_number": 9,
+      "title": "Tool Protocol (IMPLEMENTED)",
+      "pages": [243, 244, 245],
+      "content": {
+        "description": "Tools are defined in `tools/registry.py` with MCP-compatible structure. The AgentLoop automatically registers file and memory tools on initialization.",
+        "sections": [
+          {
+            "title": "Implemented Tools",
+            "subsections": [
+              {
+                "name": "File Tools",
+                "location": "tools/file_tools.py",
+                "tables": [
+                  {
+                    "headers": ["Tool", "Description", "Confirmation Required"],
+                    "rows": [
+                      ["`read_file`", "Read contents of a file", "No"],
+                      ["`write_file`", "Write contents to a file", "**Yes**"],
+                      ["`list_directory`", "List directory contents (recursive optional)", "No"],
+                      ["`file_exists`", "Check if path exists", "No"],
+                      ["`get_file_info`", "Get file metadata (size, timestamps)", "No"]
+                    ]
+                  }
+                ]
+              },
+              {
+                "name": "Memory Tools",
+                "location": "tools/memory_tools.py",
+                "tables": [
+                  {
+                    "headers": ["Tool", "Description", "Confirmation Required"],
+                    "rows": [
+                      ["`memory_query`", "Search Memory Matrix for relevant info", "No"],
+                      ["`memory_store`", "Store new memory node", "No"],
+                      ["`memory_get_context`", "Get context with token budget awareness", "No"],
+                      ["`memory_stats`", "Get memory statistics", "No"]
+                    ]
+                  }
+                ]
+              },
+              {
+                "name": "Planned Tools (Not Yet Implemented)",
+                "tables": [
+                  {
+                    "headers": ["Tool", "Description", "Confirmation Required"],
+                    "rows": [
+                      ["`bash`", "Execute a bash command", "Yes"],
+                      ["`calendar_create`", "Create a calendar event", "No"],
+                      ["`web_search`", "Search the web", "No"],
+                      ["`obsidian_write`", "Write to Obsidian notes", "No"]
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "title": "Tool Definition Structure",
+            "code_blocks": [
+              {
+                "language": "python",
+                "code": "@dataclass\nclass Tool:\n    \"\"\"A tool that Luna can execute.\"\"\"\n    name: str                          # Unique identifier\n    description: str                   # Shown to LLM for selection\n    parameters: dict                   # JSON Schema for params\n    execute: Callable[..., Awaitable[Any]]  # Async execution function\n    requires_confirmation: bool = False  # User approval required\n    timeout_seconds: int = 30          # Execution timeout\n\n    def to_dict(self) -> dict:\n        \"\"\"Convert to dictionary for LLM function calling.\"\"\"\n\n\n@dataclass\nclass ToolResult:\n    \"\"\"Result from executing a tool.\"\"\"\n    success: bool\n    output: Any\n    error: Optional[str] = None\n    execution_time_ms: float = 0.0"
+              }
+            ]
+          },
+          {
+            "title": "ToolRegistry",
+            "code_blocks": [
+              {
+                "language": "python",
+                "code": "class ToolRegistry:\n    \"\"\"Registry for managing Luna's tools.\"\"\"\n\n    def register(self, tool: Tool) -> None:\n        \"\"\"Register a tool (raises if name exists).\"\"\"\n\n    def get(self, name: str) -> Optional[Tool]:\n        \"\"\"Get tool by name.\"\"\"\n\n    def list_tools(self) -> list[str]:\n        \"\"\"List all registered tool names.\"\"\"\n\n    def get_tool_definitions(self) -> list[dict]:\n        \"\"\"Get tool definitions for LLM function calling.\"\"\"\n\n    async def execute(\n        self,\n        name: str,\n        params: dict,\n        skip_confirmation: bool = False,\n    ) -> ToolResult:\n        \"\"\"Execute tool with timeout handling.\"\"\""
+              }
+            ]
+          },
+          {
+            "title": "Tool Usage in AgentLoop",
+            "description": "Tools are executed via PlanStepType.TOOL actions:",
+            "code_blocks": [
+              {
+                "language": "python",
+                "code": "async def _execute_tool(self, action: Action) -> str:\n    \"\"\"Execute a tool action via the ToolRegistry.\"\"\"\n    tool = self.tool_registry.get(action.tool)\n    if not tool:\n        return f\"Tool '{action.tool}' not found\"\n\n    result = await self.tool_registry.execute(\n        action.tool,\n        action.params,\n        skip_confirmation=True,  # AgentLoop handles confirmation\n    )\n\n    if result.success:\n        # Store result in working context\n        self.working_context.variables[f\"tool_result_{action.tool}\"] = result.output\n        return f\"Tool '{action.tool}' succeeded: {result.output}\"\n    else:\n        return f\"Tool '{action.tool}' failed: {result.error}\""
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "part_number": 10,
+      "title": "Performance Model",
+      "pages": [245, 246, 247, 248],
+      "content": {
+        "sections": [
+          {
+            "title": "Latency Tax",
+            "description": "Agentic architecture is a latency tax. The question is whether it's worth it.",
+            "tables": [
+              {
+                "headers": ["Mode", "Latency", "Use Case"],
+                "rows": [
+                  ["**DIRECT**", "<500ms", "Simple chat, greetings"],
+                  ["**SIMPLE_PLAN**", "500ms-2s", "Memory query, simple tool"],
+                  ["**FULL_PLAN**", "5-30s", "Complex task, multiple tools"],
+                  ["**BACKGROUND**", "Minutes", "Deep research, file processing"]
+                ]
+              }
+            ]
+          },
+          {
+            "title": "The Critical Optimization: Adaptive Planning (IMPLEMENTED)",
+            "description": "Don't run the full agentic stack on every query. The QueryRouter (`agentic/router.py`) analyzes query complexity and routes to the appropriate execution path.",
+            "code_blocks": [
+              {
+                "language": "python",
+                "code": "class ExecutionPath(Enum):\n    \"\"\"Execution paths based on query complexity.\"\"\"\n    DIRECT = auto()      # <500ms - Skip planning entirely\n    SIMPLE_PLAN = auto() # 500ms-2s - Single-step plan\n    FULL_PLAN = auto()   # 5-30s - Multi-step planning\n    BACKGROUND = auto()  # Minutes - Async with notification\n\nclass QueryRouter:\n    # Complexity thresholds for path selection\n    DIRECT_THRESHOLD = 0.2\n    SIMPLE_THRESHOLD = 0.5\n    FULL_THRESHOLD = 0.8\n\n    def route(self, query: str) -> ExecutionPath:\n        \"\"\"Route query to appropriate execution path.\"\"\"\n        decision = self.analyze(query)\n        return decision.path\n\n    def analyze(self, query: str) -> RoutingDecision:\n        \"\"\"Analyze query and return detailed routing decision.\"\"\"\n        complexity = self.estimate_complexity(query)\n        signals = self._detect_signals(query)\n        suggested_tools = self._detect_tools(query)\n\n        # Check for explicit background request\n        if self._matches_any(query, self._background_re):\n            return RoutingDecision(\n                path=ExecutionPath.BACKGROUND,\n                complexity=complexity,\n                reason=\"Explicit background processing requested\",\n                signals=signals,\n                suggested_tools=suggested_tools,\n            )\n\n        # Route based on complexity thresholds\n        if complexity < self.DIRECT_THRESHOLD:\n            path = ExecutionPath.DIRECT\n        elif complexity < self.SIMPLE_THRESHOLD:\n            path = ExecutionPath.SIMPLE_PLAN\n        elif complexity < self.FULL_THRESHOLD:\n            path = ExecutionPath.FULL_PLAN\n        else:\n            path = ExecutionPath.BACKGROUND\n\n        return RoutingDecision(path=path, complexity=complexity, ...)"
+              }
+            ]
+          },
+          {
+            "title": "Complexity Estimation Factors",
+            "description": "The router estimates complexity using multiple signals:",
+            "tables": [
+              {
+                "headers": ["Factor", "Effect", "Pattern Examples"],
+                "rows": [
+                  ["**Query Length**", "Base complexity", "<20 chars: 0.05, >200 chars: 0.45"],
+                  ["**Greetings**", "Reduce 70%", "\"hi\", \"hello\", \"how are you\""],
+                  ["**Simple Questions**", "Reduce 30%", "\"what is\", \"who is\", \"tell me\""],
+                  ["**Research Indicators**", "+0.25", "\"research\", \"analyze\", \"compare\""],
+                  ["**Multi-step Indicators**", "+0.20", "\"and then\", \"first...then\", \"step by step\""],
+                  ["**Tool Requirements**", "+0.10 per tool", "\"read file\", \"search web\", \"remember\""],
+                  ["**Multiple Questions**", "+0.10 per extra", "Each \"?\" after the first"]
+                ]
+              }
+            ]
+          },
+          {
+            "title": "Signal Detection Categories",
+            "code_blocks": [
+              {
+                "language": "python",
+                "code": "GREETING_PATTERNS = [\"hi\", \"hello\", \"hey\", \"good morning\"]\nSIMPLE_QUERY_PATTERNS = [\"what is\", \"who is\", \"tell me about\"]\nRESEARCH_PATTERNS = [\"research\", \"investigate\", \"analyze\", \"compare\"]\nMULTI_STEP_PATTERNS = [\"and then\", \"after that\", \"step by step\"]\nMEMORY_QUERY_PATTERNS = [\"remember\", \"recall\", \"what did we\"]\nBACKGROUND_PATTERNS = [\"in the background\", \"notify me when\"]"
+              }
+            ],
+            "note": "**90% of queries should hit DIRECT or SIMPLE_PLAN.** The heavy machinery only spins up when needed."
+          },
+          {
+            "title": "What Different Queries Look Like",
+            "examples": [
+              {
+                "type": "Simple",
+                "query": "Hey Luna, how are you?",
+                "current": {
+                  "flow": "Query -> Local Qwen -> Response",
+                  "latency": "~300ms"
+                },
+                "agentic": {
+                  "flow": "Query -> Classify (trivial) -> Skip planning -> Local Qwen -> Response",
+                  "latency": "~350ms (+50ms classification)"
+                },
+                "impact": "Negligible. Fast path stays fast."
+              },
+              {
+                "type": "Medium",
+                "query": "What did we decide about the Actor model?",
+                "current": {
+                  "flow": "Query -> Retrieve memory -> Local Qwen -> Response",
+                  "latency": "~400ms"
+                },
+                "agentic": {
+                  "flow": "Query -> Classify -> Plan (1 step: RETRIEVE) -> Memory -> Local Qwen -> Response",
+                  "latency": "~500ms (+100ms planning overhead)"
+                },
+                "impact": "~25% slower. Acceptable."
+              },
+              {
+                "type": "Complex",
+                "query": "Research the latest AI chip news and add key points to my notes",
+                "current": {
+                  "flow": "Can't do this. Would require manual steps."
+                },
+                "agentic": {
+                  "flow": "Query -> Classify (complex) -> Plan:\n  Step 1: DELEGATE (web research) .......... 5-8s\n  Step 2: THINK (extract key points) ........ 500ms\n  Step 3: TOOL (write to Obsidian) .......... 200ms\n  Step 4: RESPOND (confirm to user) ......... 300ms\nTotal: ~8-12s"
+                },
+                "impact": "Slow but capable. You're trading time for capability that didn't exist."
+              }
+            ]
+          },
+          {
+            "title": "The Voice Problem",
+            "description": "The Bible specs <500ms to first word. Agentic planning breaks that.",
+            "solution": {
+              "name": "Streaming acknowledgment",
+              "example": "User: \"Research AI chips and add to my notes\"\n\nLuna (immediate, <500ms): \"On it - let me dig into that...\"\n\n[Planning and execution happen]\n\nLuna (8s later): \"Done. I found three major developments and added them to your AI Research note...\"\n\nUser hears Luna immediately. The work happens in background. This is already how delegation works - extend it to all agentic operations."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "part_number": 11,
+      "title": "Architecture Delta",
+      "pages": [248],
+      "content": {
+        "description": "What changes from current implementation:",
+        "tables": [
+          {
+            "headers": ["Component", "Current", "Agentic Luna"],
+            "rows": [
+              ["Director", "Single LLM call", "Orchestrator + loop"],
+              ["Actors", "Isolated workers", "Coordinated swarm"],
+              ["Tools", "None", "Full registry"],
+              ["Execution", "One-shot", "Iterative until done"],
+              ["Context", "Static per request", "Revolving working memory"],
+              ["Parallelism", "None", "Fan-out/fan-in"],
+              ["Progress", "Silent", "Streaming status"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "part_number": 12,
+      "title": "Implementation Status",
+      "pages": [248, 249, 250],
+      "content": {
+        "sections": [
+          {
+            "title": "Implemented Components",
+            "tables": [
+              {
+                "headers": ["Component", "Location", "Status"],
+                "rows": [
+                  ["**RevolvingContext**", "`core/context.py`", "IMPLEMENTED - 4-ring model with decay and TTL"],
+                  ["**QueueManager**", "`core/context.py`", "IMPLEMENTED - Per-source queues with weights"],
+                  ["**ContextItem**", "`core/context.py`", "IMPLEMENTED - Turn-based TTL, relevance decay"],
+                  ["**AgentLoop**", "`agentic/loop.py`", "IMPLEMENTED - Observe/think/act cycle"],
+                  ["**Planner**", "`agentic/planner.py`", "IMPLEMENTED - Pattern-based decomposition"],
+                  ["**QueryRouter**", "`agentic/router.py`", "IMPLEMENTED - Complexity-based routing"],
+                  ["**ToolRegistry**", "`tools/registry.py`", "IMPLEMENTED - MCP-style tool definitions"],
+                  ["**File Tools**", "`tools/file_tools.py`", "IMPLEMENTED - read, write, list, info"],
+                  ["**Memory Tools**", "`tools/memory_tools.py`", "IMPLEMENTED - query, store, context"]
+                ]
+              }
+            ]
+          },
+          {
+            "title": "Pending Components",
+            "tables": [
+              {
+                "headers": ["Component", "Purpose", "Status"],
+                "rows": [
+                  ["**SwarmCoordinator**", "Parallel execution management", "PLANNED"],
+                  ["**TaskManager**", "Persistent task queue", "PLANNED (separate from Planner)"],
+                  ["**ProgressStreamer**", "Real-time status streaming", "PARTIAL (callbacks implemented)"]
+                ]
+              }
+            ]
+          },
+          {
+            "title": "Modified Components",
+            "tables": [
+              {
+                "headers": ["Component", "Changes"],
+                "rows": [
+                  ["**Director**", "Integrated with AgentLoop for DELEGATE steps"],
+                  ["**Matrix**", "Integrated with AgentLoop for RETRIEVE steps"],
+                  ["**Engine**", "Has `context` (RevolvingContext), `router`, and `agent_loop` attributes"]
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "part_number": 13,
+      "title": "File Structure (ACTUAL)",
+      "pages": [250, 251],
+      "content": {
+        "file_tree": "src/luna/\n|-- core/\n|   |-- context.py       # RevolvingContext, QueueManager, ContextItem\n|   |-- events.py         # EventPriority, EventType, InputEvent\n|   |-- input_buffer.py   # Input polling (engine pulls)\n|   |-- state.py          # EngineState enum\n|-- agentic/              # Agentic architecture\n|   |-- __init__.py       # Exports: AgentLoop, Planner, QueryRouter, etc.\n|   |-- loop.py           # AgentLoop (939 lines)\n|   |-- planner.py        # Planner, Plan, PlanStep, PlanStepType (487 lines)\n|   |-- router.py         # QueryRouter, ExecutionPath, RoutingDecision (379 lines)\n|-- tools/                # Tool registry\n|   |-- __init__.py       # Exports: ToolRegistry, Tool, ToolResult\n|   |-- registry.py       # Tool, ToolResult, ToolRegistry (309 lines)\n|   |-- file_tools.py     # read_file, write_file, list_directory, etc. (358 lines)\n|   |-- memory_tools.py   # memory_query, memory_store, memory_context (373 lines)\n|-- actors/\n|   |-- base.py           # Actor, Message base classes\n|   |-- director.py       # LLM inference, delegation (~1900 lines)\n|   |-- matrix.py         # Memory substrate interface\n|   |-- scribe.py         # Extraction (Ben Franklin persona)\n|   |-- librarian.py      # Filing (The Dude persona)\n|   |-- history_manager.py # Three-tier conversation history\n|-- engine.py             # Main engine with agentic support (1228 lines)",
+        "module_exports": [
+          {
+            "file": "agentic/__init__.py",
+            "code": "__all__ = [\n    # Agent Loop\n    \"AgentLoop\", \"AgentResult\", \"Observation\", \"Action\",\n    \"ActionResult\", \"WorkingContext\",\n    # Planner\n    \"Planner\", \"Plan\", \"PlanStep\", \"PlanStepType\",\n    # Router\n    \"QueryRouter\", \"ExecutionPath\",\n]"
+          },
+          {
+            "file": "tools/__init__.py",
+            "code": "__all__ = [\n    \"Tool\", \"ToolResult\", \"ToolRegistry\",\n    \"register_file_tools\", \"register_memory_tools\",\n]"
+          }
+        ]
+      }
+    },
+    {
+      "part_number": null,
+      "title": "Summary",
+      "pages": [251, 252],
+      "content": {
+        "description": "Luna is an ENGINE. The agentic architecture gives her:",
+        "tables": [
+          {
+            "headers": ["Feature", "Status", "Location"],
+            "rows": [
+              ["**Revolving Context**", "IMPLEMENTED", "`core/context.py`"],
+              ["**Multiple Queues**", "IMPLEMENTED", "`core/context.py`"],
+              ["**Context Borrowing**", "PARTIAL", "Scribe/Librarian share context sources"],
+              ["**Agent Loop**", "IMPLEMENTED", "`agentic/loop.py`"],
+              ["**Tool Execution**", "IMPLEMENTED", "`tools/` directory"],
+              ["**Parallel Workers**", "PLANNED", "(SwarmCoordinator)"],
+              ["**Adaptive Routing**", "IMPLEMENTED", "`agentic/router.py`"],
+              ["**MCP Integration**", "IMPLEMENTED", "`src/luna_mcp/` (41 tools)"],
+              ["**Performance Layer**", "IMPLEMENTED", "`src/luna/services/`"]
+            ]
+          }
+        ],
+        "implementation_highlights": [
+          "1. **RevolvingContext** - 4-ring system (CORE, INNER, MIDDLE, OUTER) with turn-based TTL and relevance decay",
+          "2. **QueueManager** - Per-source queues with configurable weights and priority merge",
+          "3. **QueryRouter** - Complexity analysis routing to DIRECT, SIMPLE_PLAN, FULL_PLAN, or BACKGROUND paths",
+          "4. **AgentLoop** - Full observe/think/act cycle with WorkingContext, progress callbacks, and abort support",
+          "5. **Planner** - Pattern-based goal decomposition into typed PlanSteps (THINK, OBSERVE, RETRIEVE, TOOL, DELEGATE, RESPOND)",
+          "6. **ToolRegistry** - MCP-compatible tool definitions with timeout handling and execution metrics",
+          "7. **File Tools** - read_file, write_file, list_directory, file_exists, get_file_info",
+          "8. **Memory Tools** - memory_query, memory_store, memory_get_context, memory_stats",
+          "9. **MCP Server** - 41 tools across filesystem, memory, session, state, git, and forge categories",
+          "10. **Performance Orchestrator** - Gesture detection, emotion presets, coordinated voice + orb output"
+        ],
+        "v3_audit_statistics": {
+          "tables": [
+            {
+              "headers": ["Metric", "Count"],
+              "rows": [
+                ["Engine API Endpoints", "74"],
+                ["SSE Streaming Endpoints", "4"],
+                ["WebSocket Endpoints", "1"],
+                ["MCP Tools", "41"],
+                ["MCP API Proxy Endpoints", "25"],
+                ["Frontend Components", "20"],
+                ["Custom Hooks", "5"]
+              ]
+            }
+          ]
+        },
+        "closing_statement": "The data is yours. The engine is sophisticated. Both are true.\n\n---\n\n*Luna is a file you OWN. Luna is an engine that RUNS.*\n*The simplicity is in sovereignty. The complexity is in capability.*\n\n- Ahab & Claude, January 2026\n- Updated January 30, 2026 (v3.0 Bible Audit)"
+      }
+    },
+    {
+      "part_number": "XV",
+      "title": "API Reference",
+      "pages": [253, 254, 255, 256, 257, 258, 259, 260],
+      "content": {
+        "metadata": {
+          "version": "3.0",
+          "date": "January 30, 2026",
+          "status": "Complete (v3.0 Audit)"
+        },
+        "description": "This document provides complete API documentation for the Luna Engine HTTP interface. All endpoints are served from the FastAPI server defined in `src/luna/api/server.py`.",
+        "table_of_contents": [
+          "1. Overview",
+          "2. Core Interaction Endpoints",
+          "3. Engine Status Endpoints",
+          "4. Memory Operations Endpoints",
+          "5. Extraction Endpoints",
+          "6. History Management (Hub API) Endpoints",
+          "7. Debug Endpoints",
+          "8. Voice Integration Endpoints",
+          "9. Tuning Endpoints",
+          "10. Ring Buffer Endpoints",
+          "11. System Endpoints",
+          "12. SSE Event Reference",
+          "13. Error Handling",
+          "14. Examples"
+        ],
+        "sections": [
+          {
+            "number": 1,
+            "title": "Overview",
+            "subsections": [
+              {
+                "title": "Base URL",
+                "code": "http://localhost:8000",
+                "note": "The default port is `8000`. Configure via environment variable `LUNA_API_PORT`."
+              },
+              {
+                "title": "Authentication",
+                "content": "No authentication is currently implemented. All endpoints are publicly accessible on localhost."
+              },
+              {
+                "title": "Content Types",
+                "tables": [
+                  {
+                    "headers": ["Type", "Usage"],
+                    "rows": [
+                      ["`application/json`", "Request/response bodies"],
+                      ["`text/event-stream`", "SSE streaming responses"]
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "CORS Configuration",
+                "description": "CORS is enabled for local development:",
+                "allowed_origins": [
+                  "http://localhost:3000",
+                  "http://localhost:5173",
+                  "http://localhost:5174",
+                  "http://127.0.0.1:3000",
+                  "http://127.0.0.1:5173",
+                  "http://127.0.0.1:5174"
+                ]
+              },
+              {
+                "title": "Streaming Endpoints",
+                "description": "Four endpoints return Server-Sent Events (SSE):",
+                "tables": [
+                  {
+                    "headers": ["Endpoint", "Method", "Description"],
+                    "rows": [
+                      ["`/stream`", "POST", "Token-by-token response streaming"],
+                      ["`/persona/stream`", "POST", "Context-first streaming with memory"],
+                      ["`/thoughts`", "GET", "Internal thought process monitoring"],
+                      ["`/voice/stream`", "GET", "Voice system status updates"]
+                    ]
+                  }
+                ],
+                "sse_headers": {
+                  "code": "Content-Type: text/event-stream\nCache-Control: no-cache\nConnection: keep-alive\nX-Accel-Buffering: no"
+                }
+              }
+            ]
+          },
+          {
+            "number": 2,
+            "title": "Core Interaction Endpoints",
+            "description": "These endpoints handle direct communication with Luna.",
+            "endpoints": [
+              {
+                "method": "POST",
+                "path": "/message",
+                "description": "Send a message and receive a synchronous response.",
+                "request_body": {
+                  "headers": ["Field", "Type", "Required", "Default", "Description"],
+                  "rows": [
+                    ["`message`", "string", "Yes", "-", "Message to send (1-10000 chars)"],
+                    ["`timeout`", "float", "No", "30.0", "Response timeout in seconds (1.0-120.0)"],
+                    ["`stream`", "bool", "No", "false", "Use streaming mode (ignored, use `/stream` instead)"]
+                  ]
+                },
+                "response": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`text`", "string", "Luna's response text"],
+                    ["`model`", "string", "Model used for generation"],
+                    ["`input_tokens`", "int", "Input token count"],
+                    ["`output_tokens`", "int", "Output token count"],
+                    ["`latency_ms`", "float", "Response latency in milliseconds"],
+                    ["`delegated`", "bool", "Whether request was delegated to Claude API"],
+                    ["`local`", "bool", "Whether local inference was used"],
+                    ["`fallback`", "bool", "Whether fallback model was used"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl -X POST http://localhost:8000/message \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"message\": \"Hello Luna, how are you?\"}'",
+                  "response": "{\n  \"text\": \"Hello! I'm doing well, thank you for asking. How can I help you today?\",\n  \"model\": \"qwen3b\",\n  \"input_tokens\": 45,\n  \"output_tokens\": 18,\n  \"latency_ms\": 1234.5,\n  \"delegated\": false,\n  \"local\": true,\n  \"fallback\": false\n}"
+                }
+              },
+              {
+                "method": "POST",
+                "path": "/stream",
+                "description": "Send a message and stream the response token-by-token via SSE.",
+                "request_body": {
+                  "headers": ["Field", "Type", "Required", "Default", "Description"],
+                  "rows": [
+                    ["`message`", "string", "Yes", "-", "Message to send (1-10000 chars)"],
+                    ["`timeout`", "float", "No", "30.0", "Response timeout in seconds (1.0-120.0)"]
+                  ]
+                },
+                "sse_events": {
+                  "headers": ["Event", "Data Fields", "Description"],
+                  "rows": [
+                    ["`token`", "`text`", "Generated token chunk"],
+                    ["`done`", "`model`, `input_tokens`, `output_tokens`, `latency_ms`, `delegated`, `local`, `fallback`", "Generation complete"],
+                    ["`error`", "`error`", "Error occurred"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl -X POST http://localhost:8000/stream \\\n  -H \"Content-Type: application/json\" \\\n  -H \"Accept: text/event-stream\" \\\n  -d '{\"message\": \"Tell me a short joke\"}'",
+                  "response_stream": "event: token\ndata: {\"text\": \"Why\"}\n\nevent: token\ndata: {\"text\": \" did\"}\n\nevent: token\ndata: {\"text\": \" the\"}\n\nevent: token\ndata: {\"text\": \" scarecrow\"}\n\nevent: done\ndata: {\"model\": \"qwen3b\", \"input_tokens\": 12, \"output_tokens\": 25, \"latency_ms\": 850.2, \"delegated\": false, \"local\": true, \"fallback\": false}"
+                }
+              },
+              {
+                "method": "POST",
+                "path": "/persona/stream",
+                "description": "Stream Luna's response with context (memory and state) sent before tokens. This allows frontends to display relevant context while the response generates.",
+                "request_body": {
+                  "headers": ["Field", "Type", "Required", "Default", "Description"],
+                  "rows": [
+                    ["`message`", "string", "Yes", "-", "Message to send (1-10000 chars)"],
+                    ["`timeout`", "float", "No", "30.0", "Response timeout in seconds (1.0-120.0)"]
+                  ]
+                },
+                "sse_data_format": {
+                  "description": "Typed JSON, no named events",
+                  "headers": ["Type", "Fields", "Description"],
+                  "rows": [
+                    ["`context`", "`memory`, `state`", "Memory items and engine state (sent first)"],
+                    ["`token`", "`text`", "Generated token chunk"],
+                    ["`done`", "`response`, `metadata`", "Full response text and generation metadata"],
+                    ["`error`", "`message`", "Error message"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl -X POST http://localhost:8000/persona/stream \\\n  -H \"Content-Type: application/json\" \\\n  -H \"Accept: text/event-stream\" \\\n  -d '{\"message\": \"What did we discuss yesterday?\"}'",
+                  "response_stream": "data: {\"type\": \"context\", \"memory\": [{\"id\": \"mem_001\", \"content\": \"Yesterday we discussed the project timeline...\", \"type\": \"CONVERSATION\", \"source\": \"session_abc\"}], \"state\": {\"session_id\": \"session_abc\", \"is_processing\": true, \"state\": \"RUNNING\", \"model\": \"qwen3b\"}}\n\ndata: {\"type\": \"token\", \"text\": \"Yesterday\"}\n\ndata: {\"type\": \"token\", \"text\": \" we\"}\n\ndata: {\"type\": \"token\", \"text\": \" discussed\"}\n\ndata: {\"type\": \"done\", \"response\": \"Yesterday we discussed the project timeline and agreed on the milestones.\", \"metadata\": {\"model\": \"qwen3b\", \"output_tokens\": 45, \"local\": true}}"
+                }
+              },
+              {
+                "method": "POST",
+                "path": "/abort",
+                "description": "Abort the current generation.",
+                "request_body": "None",
+                "response": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`status`", "string", "`\"aborted\"` or `\"no_generation\"`"],
+                    ["`message`", "string", "Status message"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl -X POST http://localhost:8000/abort",
+                  "response": "{\n  \"status\": \"aborted\",\n  \"message\": \"Generation aborted successfully\"\n}"
+                }
+              },
+              {
+                "method": "POST",
+                "path": "/interrupt",
+                "description": "Interrupt Luna's current processing. Triggers the agentic interrupt handler, which gracefully stops the current task.",
+                "request_body": "None",
+                "response": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`status`", "string", "`\"interrupted\"` or `\"no_task\"`"],
+                    ["`message`", "string", "Status message"],
+                    ["`interrupted_goal`", "string", "Goal that was interrupted (if any)"],
+                    ["`pending_messages`", "int", "Number of pending messages in queue"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl -X POST http://localhost:8000/interrupt",
+                  "response": "{\n  \"status\": \"interrupted\",\n  \"message\": \"Task interrupted\",\n  \"interrupted_goal\": \"Research and summarize quantum computing\",\n  \"pending_messages\": 0\n}"
+                }
+              },
+              {
+                "method": "GET",
+                "path": "/thoughts",
+                "description": "Stream Luna's internal thought process via SSE. Shows real-time progress during agentic processing.",
+                "request_body": "None",
+                "sse_events": {
+                  "headers": ["Event", "Data Fields", "Description"],
+                  "rows": [
+                    ["`status`", "`connected`, `is_processing`, `goal`", "Initial connection status"],
+                    ["`thought`", "`type`, `message`, `is_processing`, `goal`", "Internal thought/progress message"],
+                    ["`phase`", "`type`, `phase`, `is_processing`, `goal`", "Processing phase change"],
+                    ["`step`", "`type`, `step_num`, `total_steps`, `description`, `is_processing`, `goal`", "Plan step execution"],
+                    ["`ping`", "`is_processing`, `pending`", "Keepalive (every 15 seconds)"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl -X GET http://localhost:8000/thoughts \\\n  -H \"Accept: text/event-stream\"",
+                  "response_stream": "event: status\ndata: {\"connected\": true, \"is_processing\": false, \"goal\": null}\n\nevent: thought\ndata: {\"type\": \"thought\", \"message\": \"[DIRECT] Hello Luna...\", \"is_processing\": true, \"goal\": \"Respond to greeting\"}\n\nevent: thought\ndata: {\"type\": \"thought\", \"message\": \"[OK] local: 18 tokens\", \"is_processing\": false, \"goal\": null}\n\nevent: ping\ndata: {\"is_processing\": false, \"pending\": 0}"
+                }
+              }
+            ]
+          },
+          {
+            "number": 3,
+            "title": "Engine Status Endpoints",
+            "description": "These endpoints provide visibility into Luna's current state and health.",
+            "endpoints": [
+              {
+                "method": "GET",
+                "path": "/status",
+                "description": "Get comprehensive engine status and metrics.",
+                "query_parameters": "None",
+                "response": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`state`", "string", "Engine state (`STARTING`, `RUNNING`, `STOPPING`, `STOPPED`)"],
+                    ["`uptime_seconds`", "float", "Engine uptime in seconds"],
+                    ["`cognitive_ticks`", "int", "Number of cognitive tick cycles"],
+                    ["`events_processed`", "int", "Total events processed"],
+                    ["`messages_generated`", "int", "Total messages generated"],
+                    ["`actors`", "list[string]", "Active actor names"],
+                    ["`buffer_size`", "int", "Current input buffer size"],
+                    ["`current_turn`", "int", "Conversation turn counter"],
+                    ["`context`", "dict", "Revolving context statistics"],
+                    ["`agentic`", "object", "Agentic processing statistics"]
+                  ]
+                },
+                "agentic_stats_schema": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`is_processing`", "bool", "Currently processing a task"],
+                    ["`current_goal`", "string", "Current goal being worked on"],
+                    ["`pending_messages`", "int", "Messages waiting in queue"],
+                    ["`tasks_started`", "int", "Total tasks started"],
+                    ["`tasks_completed`", "int", "Tasks completed successfully"],
+                    ["`tasks_aborted`", "int", "Tasks aborted/interrupted"],
+                    ["`direct_responses`", "int", "Direct (non-planned) responses"],
+                    ["`planned_responses`", "int", "Responses requiring planning"],
+                    ["`agent_loop_status`", "string", "Current agent loop status"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl http://localhost:8000/status",
+                  "response": "{\n  \"state\": \"RUNNING\",\n  \"uptime_seconds\": 3600.5,\n  \"cognitive_ticks\": 1250,\n  \"events_processed\": 847,\n  \"messages_generated\": 156,\n  \"actors\": [\"director\", \"matrix\", \"scribe\", \"librarian\"],\n  \"buffer_size\": 0,\n  \"current_turn\": 42,\n  \"context\": {\n    \"token_budget\": 8000,\n    \"tokens_used\": 2450,\n    \"items_count\": 18\n  },\n  \"agentic\": {\n    \"is_processing\": false,\n    \"current_goal\": null,\n    \"pending_messages\": 0,\n    \"tasks_started\": 156,\n    \"tasks_completed\": 154,\n    \"tasks_aborted\": 2,\n    \"direct_responses\": 142,\n    \"planned_responses\": 14,\n    \"agent_loop_status\": \"idle\"\n  }\n}"
+                }
+              },
+              {
+                "method": "GET",
+                "path": "/health",
+                "description": "Simple health check endpoint. Always returns 200 to indicate the API server is responsive.",
+                "response": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`status`", "string", "`\"healthy\"` or `\"starting\"`"],
+                    ["`state`", "string", "Engine state name"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl http://localhost:8000/health",
+                  "response": "{\n  \"status\": \"healthy\",\n  \"state\": \"RUNNING\"\n}"
+                }
+              },
+              {
+                "method": "GET",
+                "path": "/history",
+                "description": "Get recent conversation history.",
+                "query_parameters": {
+                  "headers": ["Parameter", "Type", "Default", "Description"],
+                  "rows": [
+                    ["`limit`", "int", "20", "Maximum messages to return"]
+                  ]
+                },
+                "response": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`messages`", "list", "Conversation message objects"],
+                    ["`total`", "int", "Total message count in history"]
+                  ]
+                },
+                "message_schema": {
+                  "headers": ["Field", "Type", "Description"],
+                  "rows": [
+                    ["`role`", "string", "`\"user\"` or `\"assistant\"`"],
+                    ["`content`", "string", "Message content"],
+                    ["`timestamp`", "int", "Unix timestamp"]
+                  ]
+                },
+                "examples": {
+                  "curl": "curl \"http://localhost:8000/history?limit=5\"",
+                  "response": "{\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"Hello Luna\", \"timestamp\": 1737817200},\n    {\"role\": \"assistant\", \"content\": \"Hello! How can I help you today?\", \"timestamp\": 1737817201},\n    {\"role\": \"user\", \"content\": \"What is the weather like?\", \"timestamp\": 1737817230}\n  ],\n  \"total\": 42\n}"
+                }
+              },
+              {
+                "method": "GET",
+                "path": "/consciousness",
+                "description": "Content continues beyond page 260..."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "diagrams_summary": [
+    {
+      "page": 241,
+      "name": "Swarm Mode Architecture",
+      "type": "ASCII diagram",
+      "description": "Shows parallel execution pattern with Orchestrator (Director) coordinating multiple specialized workers (Research, Code, Review) that feed into a Merge & Synthesize step."
+    },
+    {
+      "page": 242,
+      "name": "Luna Agentic Engine Architecture",
+      "type": "ASCII diagram",
+      "description": "Complete agentic architecture showing Orchestrator (Luna Prime) managing five worker actors (Scribe/Ben, Librarian/Dude, Oven, Tooler, Coder) with shared state containing Memory Matrix, Working Context, and Task Queue."
+    }
+  ],
+  "tables_summary": [
+    {
+      "page": 243,
+      "title": "File Tools",
+      "columns": ["Tool", "Description", "Confirmation Required"]
+    },
+    {
+      "page": 243,
+      "title": "Memory Tools",
+      "columns": ["Tool", "Description", "Confirmation Required"]
+    },
+    {
+      "page": 243,
+      "title": "Planned Tools",
+      "columns": ["Tool", "Description", "Confirmation Required"]
+    },
+    {
+      "page": 245,
+      "title": "Latency Tax",
+      "columns": ["Mode", "Latency", "Use Case"]
+    },
+    {
+      "page": 246,
+      "title": "Complexity Estimation Factors",
+      "columns": ["Factor", "Effect", "Pattern Examples"]
+    },
+    {
+      "page": 248,
+      "title": "Architecture Delta",
+      "columns": ["Component", "Current", "Agentic Luna"]
+    },
+    {
+      "page": "248-249",
+      "title": "Implemented Components",
+      "columns": ["Component", "Location", "Status"]
+    },
+    {
+      "page": 249,
+      "title": "Pending Components",
+      "columns": ["Component", "Purpose", "Status"]
+    },
+    {
+      "page": 249,
+      "title": "Modified Components",
+      "columns": ["Component", "Changes"]
+    },
+    {
+      "page": 251,
+      "title": "Feature Summary",
+      "columns": ["Feature", "Status", "Location"]
+    },
+    {
+      "page": 252,
+      "title": "v3.0 Audit Statistics",
+      "columns": ["Metric", "Count"]
+    },
+    {
+      "page": 253,
+      "title": "Content Types",
+      "columns": ["Type", "Usage"]
+    },
+    {
+      "page": 253,
+      "title": "Streaming Endpoints",
+      "columns": ["Endpoint", "Method", "Description"]
+    }
+  ],
+  "code_blocks_summary": [
+    {
+      "page": 244,
+      "language": "python",
+      "description": "Tool and ToolResult dataclass definitions"
+    },
+    {
+      "page": 244,
+      "language": "python",
+      "description": "ToolRegistry class definition"
+    },
+    {
+      "page": 245,
+      "language": "python",
+      "description": "_execute_tool method in AgentLoop"
+    },
+    {
+      "page": "245-246",
+      "language": "python",
+      "description": "ExecutionPath enum and QueryRouter class"
+    },
+    {
+      "page": 247,
+      "language": "python",
+      "description": "Signal detection pattern constants"
+    },
+    {
+      "page": 251,
+      "language": "python",
+      "description": "Module exports for agentic/ and tools/"
+    }
+  ]
+}

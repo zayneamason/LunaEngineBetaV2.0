@@ -1,0 +1,741 @@
+{
+  "pages": "41-60",
+  "sections": [
+    {
+      "part_number": "III (continued)",
+      "part_title": "The Memory Matrix (continued)",
+      "sections": [
+        {
+          "section_number": "3.6",
+          "section_title": "sqlite-vec Details (continued)",
+          "content": "This section continues from previous pages covering the EmbeddingStore class methods.",
+          "tables": [
+            {
+              "title": "EmbeddingStore Methods",
+              "headers": ["Method", "Purpose"],
+              "rows": [
+                ["`initialize()`", "Load sqlite-vec extension, create virtual table"],
+                ["`store(node_id, embedding)`", "Insert or replace embedding"],
+                ["`delete(node_id)`", "Remove embedding"],
+                ["`search(query_embedding)`", "KNN search with cosine similarity"],
+                ["`count()`", "Total embeddings count"]
+              ]
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Installation",
+              "code_blocks": [
+                {
+                  "language": "bash",
+                  "code": "pip install sqlite-vec"
+                }
+              ]
+            },
+            {
+              "title": "Loading the Extension",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "import sqlite3\nimport sqlite_vec\n\nconn = sqlite3.connect(\"luna_engine.db\")\nconn.enable_load_extension(True)\nsqlite_vec.load(conn)\nconn.enable_load_extension(False)"
+                }
+              ]
+            },
+            {
+              "title": "Vector Search Syntax",
+              "code_blocks": [
+                {
+                  "language": "sql",
+                  "code": "-- Basic similarity search\nSELECT id, vec_distance_cosine(embedding, ?) as distance\nFROM memory_embeddings\nORDER BY distance\nLIMIT 10;"
+                }
+              ]
+            },
+            {
+              "title": "Performance Notes",
+              "tables": [
+                {
+                  "headers": ["Operation", "sqlite-vec", "Notes"],
+                  "rows": [
+                    ["Pure ANN (no filter)", "~5-10ms", "Fast for <50K vectors"],
+                    ["ANN + filter", "~5-10ms", "No post-filtering needed"],
+                    ["Insert (atomic)", "~1ms", "Single transaction"],
+                    ["Storage", "Single file", "No external dependencies"]
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3.7",
+          "section_title": "Time Decay",
+          "content": "Recent memories matter more. Decay is computed at query time.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "import math\nfrom datetime import datetime\n\ndef compute_freshness(\n    created_at: datetime,\n    half_life_days: float = 60.0\n) -> float:\n    \"\"\"\n    Exponential decay based on age.\n    \n    Returns:\n        1.0 for brand new\n        0.5 at half_life_days\n        Approaches 0 over time\n    \"\"\"\n    age_days = (datetime.now() - created_at).total_seconds() / 86400\n    return math.exp(-math.log(2) * age_days / half_life_days)"
+            }
+          ]
+        },
+        {
+          "section_number": "3.8",
+          "section_title": "Graph Operations",
+          "content": "Graph traversal uses NetworkX for flexible algorithms.",
+          "subsections": [
+            {
+              "title": "Implementation",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "import networkx as nx\n\nclass MemoryGraph:\n    def __init__(self):\n        self.graph = nx.DiGraph()  # In-memory for fast traversal\n    \n    async def load_from_db(self, db):\n        \"\"\"Load graph from graph_edges table.\"\"\"\n        edges = await db.execute(\"SELECT from_id, to_id, relationship, strength FROM graph_edges\")\n        for row in edges:\n            self.graph.add_edge(\n                row[\"from_id\"],\n                row[\"to_id\"],\n                relationship=row[\"relationship\"],\n                strength=row[\"strength\"]\n            )\n    \n    def get_neighbors(self, node_id: str, depth: int = 2) -> set[str]:\n        \"\"\"BFS traversal to find connected nodes.\"\"\"\n        if node_id not in self.graph:\n            return set()\n        \n        visited = set()\n        current_level = {node_id}\n        \n        for _ in range(depth):\n            next_level = set()\n            for n in current_level:\n                for neighbor in self.graph.neighbors(n):\n                    if neighbor not in visited:\n                        next_level.add(neighbor)\n                        visited.add(neighbor)\n            current_level = next_level\n        \n        return visited\n    \n    def spreading_activation(\n        self,\n        start_nodes: list[str],\n        decay: float = 0.7,\n        max_depth: int = 3\n    ) -> dict[str, float]:\n        \"\"\"\n        Compute relevance scores via spreading activation.\n        \n        Nodes closer to start_nodes get higher scores.\n        Score decays exponentially with distance.\n        \"\"\"\n        scores = {n: 1.0 for n in start_nodes}\n        current = set(start_nodes)\n        \n        for depth in range(1, max_depth + 1):\n            next_level = set()\n            for node in current:\n                for neighbor in self.graph.neighbors(node):\n                    if neighbor not in scores:\n                        edge_strength = self.graph[node][neighbor].get('strength', 1.0)\n                        scores[neighbor] = scores[node] * decay * edge_strength\n                        next_level.add(neighbor)\n        \n        return scores"
+                }
+              ]
+            },
+            {
+              "title": "Relationship Types",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "class RelationshipType(str, Enum):\n    DEPENDS_ON = \"DEPENDS_ON\"\n    RELATES_TO = \"RELATES_TO\"\n    CAUSED_BY = \"CAUSED_BY\"\n    FOLLOWED_BY = \"FOLLOWED_BY\"\n    CONTRADICTS = \"CONTRADICTS\"\n    SUPPORTS = \"SUPPORTS\""
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3.9",
+          "section_title": "Entity Resolution",
+          "content": "The Librarian's first job: \"Mark,\" \"Zuck,\" and \"The Landlord\" should be the same node.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def resolve_entity(self, name: str, entity_type: str) -> str:\n    \"\"\"Resolve entity to existing node or create new.\"\"\"\n    \n    # 1. Exact name match\n    existing = await self.find_by_name(name, entity_type)\n    if existing:\n        return existing.id\n    \n    # 2. Alias match\n    existing = await self.find_by_alias(name, entity_type)\n    if existing:\n        return existing.id\n    \n    # 3. Semantic similarity match\n    similar = await self.vector_search(name, threshold=0.95)\n    if similar and similar.node_type == entity_type:\n        await self.add_alias(similar.id, name)\n        return similar.id\n    \n    # 4. Create new\n    return await self.create_entity(name, entity_type)"
+            }
+          ]
+        },
+        {
+          "section_number": "3.10",
+          "section_title": "Spreading Activation",
+          "content": "When filing new information, proactively find hidden connections.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def discover_hidden_links(self, new_entity_ids: list[str]):\n    \"\"\"Find non-obvious relationships between new and existing entities.\"\"\"\n    \n    for eid in new_entity_ids:\n        neighbors = await self.graph.get_neighbors(eid)\n        \n        for neighbor in neighbors:\n            for other_eid in new_entity_ids:\n                if other_eid != eid:\n                    similarity = await self.compute_similarity(other_eid, neighbor)\n                    \n                    if similarity > 0.7:\n                        await self.create_edge(\n                            from_id=other_eid,\n                            to_id=neighbor,\n                            relationship=\"RELATES_TO\",\n                            strength=similarity * 0.5,\n                        )"
+            }
+          ],
+          "examples": [
+            {
+              "title": "Spreading Activation Example",
+              "steps": [
+                "1. You say: \"Alex is joining the Pi Project\"",
+                "2. Librarian files: Alex -> works_on -> Pi Project",
+                "3. Spreading activation finds: Sarah also works on Pi Project",
+                "4. Librarian infers: Alex -> likely_teammate -> Sarah (low confidence)",
+                "5. Next time you ask, Luna can say: \"Should I introduce Alex to Sarah?\""
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3.11",
+          "section_title": "Synaptic Pruning",
+          "content": "Periodically clean low-value connections.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def prune_stale_edges(self):\n    \"\"\"Remove low-strength, old edges.\"\"\"\n    \n    await self.conn.execute(\"\"\"\n        DELETE FROM graph_edges\n        WHERE strength < 0.3\n        AND created_at < datetime('now', '-30 days')\n    \"\"\")"
+            }
+          ]
+        },
+        {
+          "section_number": "3.12",
+          "section_title": "Entity System",
+          "content": "Luna v2.0 includes a first-class entity system for tracking people, places, and projects.",
+          "subsections": [
+            {
+              "title": "Entity Tables",
+              "code_blocks": [
+                {
+                  "language": "sql",
+                  "code": "-- Entities: First-class objects Luna knows about\nCREATE TABLE IF NOT EXISTS entities (\n    id TEXT PRIMARY KEY,                -- Slug: 'ahab', 'marzipan', 'ben-franklin'\n    entity_type TEXT NOT NULL,          -- 'person' | 'persona' | 'place' | 'project'\n    name TEXT NOT NULL,\n    aliases TEXT,                        -- JSON array: [\"Zayne\", \"Ahab\"]\n    core_facts TEXT,                     -- JSON blob (~500 tokens max)\n    full_profile TEXT,                   -- Markdown, can be lengthy\n    voice_config TEXT,                   -- JSON: tone, patterns, constraints (for personas)\n    current_version INTEGER DEFAULT 1,\n    metadata TEXT,\n    created_at TEXT DEFAULT (datetime('now')),\n    updated_at TEXT DEFAULT (datetime('now'))\n);\n\n-- Entity relationships: Graph of connections\nCREATE TABLE IF NOT EXISTS entity_relationships (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    from_entity TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,\n    to_entity TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,\n    relationship TEXT NOT NULL,          -- 'creator', 'friend', 'collaborator'\n    strength REAL DEFAULT 0.5,\n    bidirectional INTEGER DEFAULT 0,\n    context TEXT,\n    created_at TEXT DEFAULT (datetime('now')),\n    updated_at TEXT DEFAULT (datetime('now')),\n    UNIQUE(from_entity, to_entity, relationship)\n);\n\n-- Entity versions: Append-only history\nCREATE TABLE IF NOT EXISTS entity_versions (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,\n    version INTEGER NOT NULL,\n    core_facts TEXT,\n    full_profile TEXT,\n    voice_config TEXT,\n    change_type TEXT NOT NULL,           -- 'create' | 'update' | 'rollback'\n    change_summary TEXT,\n    changed_by TEXT NOT NULL,            -- 'scribe' | 'librarian' | 'manual'\n    change_source TEXT,\n    created_at TEXT DEFAULT (datetime('now')),\n    UNIQUE(entity_id, version)\n);"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "Summary",
+          "section_title": "Memory Matrix Summary",
+          "content": "The Memory Matrix is Luna's soul - a single SQLite database that makes personal history queryable.",
+          "tables": [
+            {
+              "headers": ["Component", "Purpose"],
+              "rows": [
+                ["SQLite Core", "Nodes, edges, metadata (WAL mode, 64MB cache)"],
+                ["sqlite-vec", "Vector similarity search"],
+                ["FTS5", "Full-text search with Porter stemmer, BM25 ranking"],
+                ["NetworkX", "Graph traversal (in-memory)"],
+                ["Query Router", "Optimal path selection"],
+                ["Entity System", "People, places, projects with versioning"],
+                ["RRF Fusion", "Merge multi-path results"],
+                ["Entity Resolution", "Deduplicate \"Mark\" = \"Zuck\""],
+                ["Spreading Activation", "Infer hidden connections"],
+                ["Synaptic Pruning", "Remove stale edges"],
+                ["Memory Economy", "Cluster-level organization (see below)"]
+              ]
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Memory Economy (v3.0)",
+              "content": "The Memory Economy provides cluster-level organization on top of individual memory nodes.",
+              "tables": [
+                {
+                  "headers": ["Component", "Purpose", "Implementation"],
+                  "rows": [
+                    ["`ClusterManager`", "CRUD for semantic clusters", "`memory/cluster_manager.py`"],
+                    ["`ClusteringEngine`", "Keyword-based grouping (Jaccard similarity)", "`memory/clustering_engine.py`"],
+                    ["`LockInCalculator`", "Cluster-level lock-in with decay", "`memory/lock_in.py`"],
+                    ["`ConstellationAssembler`", "Token-budgeted context assembly", "`memory/constellation.py`"]
+                  ]
+                },
+                {
+                  "title": "Cluster-Level Lock-In States",
+                  "headers": ["State", "Threshold", "Decay Lambda", "Half-Life"],
+                  "rows": [
+                    ["drifting", "L < 0.20", "0.01", "~17 minutes"],
+                    ["fluid", "0.20 <= L < 0.70", "0.001", "~2.8 hours"],
+                    ["settled", "0.70 <= L < 0.85", "0.0001", "~1.15 days"],
+                    ["crystallized", "L >= 0.85", "0.00001", "~11.5 days"]
+                  ]
+                }
+              ],
+              "notes": [
+                "Cluster-level thresholds differ from node-level thresholds. See Part III-A for node-level lock-in (0.30/0.70 boundaries).",
+                "Configuration: `config/memory_economy_config.json`"
+              ]
+            },
+            {
+              "title": "Known Limitations (v3.0)",
+              "tables": [
+                {
+                  "headers": ["Limitation", "Impact", "Status"],
+                  "rows": [
+                    ["Tag siblings not implemented", "10% of node lock-in weight missing", "NOT IMPLEMENTED"],
+                    ["Network effects hardcoded to 0", "20% of node lock-in weight uses estimate", "Partial (uses neighbor count / 3)"],
+                    ["History compression queues exist but not activated", "Manual archival only", "Planned"],
+                    ["Memory Economy tables not in schema.sql", "Auto-created by ClusterManager", "Schema fragmentation"]
+                  ]
+                }
+              ],
+              "constitutional_principle": "Luna is a file. Copy it, Luna moves. Delete it, Luna dies. Everything in one place."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "part_number": "III-A",
+      "part_title": "The Lock-In Coefficient",
+      "version": "v3.0",
+      "metadata": {
+        "status": "IMPLEMENTED (90%)",
+        "replaces": "v2.2 (January 25, 2026)",
+        "last_updated": "January 30, 2026",
+        "implementation": {
+          "node_level": "`src/luna/substrate/lock_in.py`",
+          "cluster_level": "`src/luna/memory/lock_in.py`"
+        },
+        "change_log": "v3.0: Documented BOTH node-level AND cluster-level thresholds; marked tag siblings as NOT IMPLEMENTED; accuracy pass from Phase 5 audit"
+      },
+      "sections": [
+        {
+          "section_number": "3A.1",
+          "section_title": "Overview",
+          "content": "The Lock-In Coefficient (L) represents how \"settled\" a memory is in Luna's consciousness. It determines whether a memory persists, fades, or remains fluid.",
+          "quote": "\"Memories that matter get reinforced. Memories that don't, drift away.\"",
+          "description": "This is not simple recency - it's an activity-based persistence model that considers:\n- How often you retrieve the memory\n- Whether you explicitly reinforce it\n- How connected it is to other settled memories\n- ~~Whether it shares tags with settled memories~~ (NOT YET IMPLEMENTED)"
+        },
+        {
+          "section_number": "3A.2",
+          "section_title": "Lock-In States",
+          "important_note": "There are TWO different threshold systems in the codebase. Node-level and cluster-level use different boundaries.",
+          "subsections": [
+            {
+              "title": "Node-Level States (Individual Memory Nodes)",
+              "tables": [
+                {
+                  "headers": ["State", "Range", "Meaning", "Behavior"],
+                  "rows": [
+                    ["**DRIFTING**", "L < 0.30", "Rarely accessed, may fade", "Candidate for pruning"],
+                    ["**FLUID**", "0.30 <= L < 0.70", "Active but not settled", "Normal memory"],
+                    ["**SETTLED**", "L >= 0.70", "Core knowledge, persistent", "Protected from decay"]
+                  ]
+                }
+              ],
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "# From src/luna/substrate/lock_in.py\nclass LockInState(str, Enum):\n    DRIFTING = \"drifting\"   # L < 0.30\n    FLUID = \"fluid\"         # 0.30 <= L < 0.70\n    SETTLED = \"settled\"     # L >= 0.70\n\n# Thresholds\nTHRESHOLD_SETTLED = 0.70\nTHRESHOLD_DRIFTING = 0.30\n\n# Output bounds (never fully 0 or 1)\nLOCK_IN_MIN = 0.15\nLOCK_IN_MAX = 0.85"
+                }
+              ]
+            },
+            {
+              "title": "Cluster-Level States (Memory Economy Clusters)",
+              "tables": [
+                {
+                  "headers": ["State", "Range", "Decay Lambda", "Half-Life"],
+                  "rows": [
+                    ["**DRIFTING**", "L < 0.20", "0.01", "~17 minutes"],
+                    ["**FLUID**", "0.20 <= L < 0.70", "0.001", "~2.8 hours"],
+                    ["**SETTLED**", "0.70 <= L < 0.85", "0.0001", "~1.15 days"],
+                    ["**CRYSTALLIZED**", "L >= 0.85", "0.00001", "~11.5 days"]
+                  ]
+                }
+              ],
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "# From src/luna/memory/lock_in.py\nSTATE_THRESHOLDS = {\n    'drifting': 0.20,   # Different from node-level 0.30!\n    'fluid': 0.70,\n    'settled': 0.85,\n    # crystallized = above 0.85 (unique to cluster-level)\n}"
+                }
+              ],
+              "notes": [
+                "The threshold mismatch (node=0.30, cluster=0.20 for drifting) is intentional but may cause confusion. Cluster-level also has a fourth state \"crystallized\" that node-level lacks."
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3A.3",
+          "section_title": "Weighted Factors",
+          "content": "Lock-in is computed from four weighted factors.",
+          "tables": [
+            {
+              "headers": ["Factor", "Weight", "Description", "Status"],
+              "rows": [
+                ["**Retrieval**", "0.40", "How often this memory is accessed", "IMPLEMENTED"],
+                ["**Reinforcement**", "0.30", "Explicit marks as \"important\"", "IMPLEMENTED"],
+                ["**Network**", "0.20", "Connected to settled nodes", "PARTIAL (uses neighbor count / 3 estimate)"],
+                ["**Tag Siblings**", "0.10", "Shares tags with settled nodes", "NOT IMPLEMENTED (always 0)"]
+              ]
+            }
+          ],
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "# From src/luna/substrate/lock_in.py\nDEFAULT_WEIGHTS = {\n    \"retrieval\": 0.4,       # How often accessed (heaviest weight)\n    \"reinforcement\": 0.3,   # Explicitly marked important\n    \"network\": 0.2,         # Connected to settled nodes\n    \"tag_siblings\": 0.1     # Shares tags with settled nodes\n}"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Implementation Note: Tag Siblings",
+              "warning": "Tag siblings are NOT IMPLEMENTED. The code contains:",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "# Lines 273-274 in substrate/lock_in.py\n# TODO: Implement tag sibling counting\nlocked_tag_sibling_count = 0  # Always 0"
+                }
+              ],
+              "content": "This means **10% of the lock-in weight is currently inactive**. The tag sibling feature requires:\n1. A `tags` table in the database schema\n2. A `node_tags` junction table\n3. Implementation of `_count_locked_tag_siblings()` method\n\nUntil implemented, lock-in calculations use only 90% of intended signal."
+            },
+            {
+              "title": "Implementation Note: Network Effects",
+              "content": "Network effects are **PARTIALLY** implemented. The code uses a rough estimate:",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "# Lines 269-270 in substrate/lock_in.py\n# TODO: Optimize with batch query for actual L >= 0.7 count\nlocked_neighbor_count = len(neighbors) // 3  # Rough estimate"
+                }
+              ],
+              "notes": [
+                "This approximation assumes ~1/3 of neighbors are locked. For accurate network effects, the code should query `memory_nodes` for neighbors with `lock_in >= 0.70`."
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3A.4",
+          "section_title": "The Sigmoid Transform",
+          "content": "Raw activity scores are mapped to lock-in coefficients using a sigmoid function. This creates smooth, bounded transitions.",
+          "subsections": [
+            {
+              "title": "Mathematical Formula",
+              "code_blocks": [
+                {
+                  "language": "text",
+                  "code": "activity = (retrieval * 0.4 + reinforcement * 0.3 + network * 0.2 + tags * 0.1) / 10.0\n\nsigmoid(x) = 1 / (1 + e^(-K * (x - X0)))\n\nlock_in = 0.15 + (0.85 - 0.15) * sigmoid(activity)"
+                }
+              ]
+            },
+            {
+              "title": "Sigmoid Parameters",
+              "tables": [
+                {
+                  "headers": ["Parameter", "Value", "Purpose"],
+                  "rows": [
+                    ["**K**", "1.2", "Steepness (higher = sharper transition)"],
+                    ["**X0**", "0.5", "Midpoint (where sigmoid = 0.5)"]
+                  ]
+                }
+              ],
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "# From src/luna/substrate/lock_in.py\nDEFAULT_SIGMOID_K = 1.2   # Steepness\nDEFAULT_SIGMOID_X0 = 0.5  # Midpoint"
+                }
+              ]
+            },
+            {
+              "title": "Why Sigmoid?",
+              "points": [
+                "1. **Bounded Output:** Lock-in stays between 0.15 and 0.85 (never fully locked or fully drifting)",
+                "2. **Smooth Transitions:** No hard cutoffs - gradual change as activity increases",
+                "3. **Diminishing Returns:** High activity doesn't infinitely increase lock-in",
+                "4. **Mathematical Stability:** No overflow at extreme values (clamped at +/-700)"
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3A.5",
+          "section_title": "Activity Computation",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "def compute_activity(\n    retrieval_count: int = 0,\n    reinforcement_count: int = 0,\n    locked_neighbor_count: int = 0,\n    locked_tag_sibling_count: int = 0,  # Currently always 0\n) -> float:\n    \"\"\"\n    Compute raw activity score from weighted factors.\n    \n    Returns:\n        Activity score (typically 0.0 to 2.0+)\n    \"\"\"\n    config = get_config()\n    \n    activity = (\n        retrieval_count * config.weight_retrieval +\n        reinforcement_count * config.weight_reinforcement +\n        locked_neighbor_count * config.weight_network +\n        locked_tag_sibling_count * config.weight_tag_siblings\n    ) / 10.0\n    \n    return activity"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Example Calculations",
+              "tables": [
+                {
+                  "headers": ["Scenario", "Retrieval", "Reinforce", "Neighbors", "Activity", "Lock-In", "State"],
+                  "rows": [
+                    ["New memory", "0", "0", "0", "0.0", "0.15", "DRIFTING"],
+                    ["Mentioned once", "1", "0", "0", "0.04", "0.16", "DRIFTING"],
+                    ["Regular use", "10", "0", "0", "0.40", "0.44", "FLUID"],
+                    ["Important + used", "10", "3", "2", "0.53", "0.50", "FLUID"],
+                    ["Core knowledge", "20", "5", "5", "1.05", "0.66", "FLUID"],
+                    ["Deeply settled", "50", "10", "10", "2.5", "0.82", "SETTLED"]
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3A.6",
+          "section_title": "Configuration",
+          "content": "Lock-in behavior is configurable at runtime.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "@dataclass\nclass LockInConfig:\n    \"\"\"Configuration for lock-in computation.\"\"\"\n    enabled: bool = True  # When False, all memories return 0.5 (neutral)\n    weight_retrieval: float = 0.4\n    weight_reinforcement: float = 0.3\n    weight_network: float = 0.2\n    weight_tag_siblings: float = 0.1\n    sigmoid_k: float = 1.2\n    sigmoid_x0: float = 0.5\n    threshold_settled: float = 0.70\n    threshold_drifting: float = 0.30"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Disabling Lock-In",
+              "content": "When `enabled=False`, all memories return a neutral lock-in of 0.5, effectively treating all memories equally. This is useful for testing or when you want to disable memory decay entirely."
+            }
+          ]
+        },
+        {
+          "section_number": "3A.7",
+          "section_title": "Node-Level Computation",
+          "content": "For a specific memory node, lock-in includes network effects.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def compute_lock_in_for_node(\n    node_id: str,\n    retrieval_count: int,\n    reinforcement_count: int,\n    graph: \"MemoryGraph\",\n) -> tuple[float, LockInState]:\n    \"\"\"\n    Compute lock-in for a specific node, including network effects.\n    \"\"\"\n    # Count settled neighbors (simplified - uses depth=1 neighbors / 3)\n    locked_neighbor_count = 0\n    \n    if graph and graph.has_node(node_id):\n        neighbors = await graph.get_neighbors(node_id, depth=1)\n        locked_neighbor_count = len(neighbors) // 3  # Rough estimate\n        # TODO: Optimize with batch query for actual L >= 0.7 count\n    \n    # Tag siblings not implemented\n    locked_tag_sibling_count = 0  # TODO\n    \n    lock_in = compute_lock_in(\n        retrieval_count=retrieval_count,\n        reinforcement_count=reinforcement_count,\n        locked_neighbor_count=locked_neighbor_count,\n        locked_tag_sibling_count=locked_tag_sibling_count,\n    )\n    \n    state = classify_state(lock_in)\n    return lock_in, state"
+            }
+          ]
+        },
+        {
+          "section_number": "3A.8",
+          "section_title": "Database Schema",
+          "content": "Lock-in values are stored in the `memory_nodes` table.",
+          "code_blocks": [
+            {
+              "language": "sql",
+              "code": "-- From src/luna/substrate/schema.sql\nCREATE TABLE memory_nodes (\n    id TEXT PRIMARY KEY,\n    node_type TEXT NOT NULL,\n    content TEXT NOT NULL,\n    -- ... other fields ...\n    access_count INTEGER DEFAULT 0,        -- For lock-in tracking\n    reinforcement_count INTEGER DEFAULT 0,\n    lock_in REAL DEFAULT 0.15,             -- 0.15-0.85 coefficient\n    lock_in_state TEXT DEFAULT 'drifting',\n    -- ...\n);\n\n-- Index for filtering by lock-in state\nCREATE INDEX idx_memory_nodes_lock_in_state ON memory_nodes(lock_in_state);"
+            }
+          ]
+        },
+        {
+          "section_number": "3A.9",
+          "section_title": "Memory Matrix Integration",
+          "content": "The MemoryMatrix provides lock-in-aware filtering.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "# From src/luna/substrate/memory.py\nclass MemoryMatrix:\n    async def get_nodes_by_lock_in_state(\n        self,\n        state: LockInState\n    ) -> list[MemoryNode]:\n        \"\"\"Get all nodes in a specific lock-in state.\"\"\"\n        ...\n    \n    async def get_drifting_nodes(self) -> list[MemoryNode]:\n        \"\"\"Get all drifting nodes (L < 0.30) - candidates for pruning.\"\"\"\n        ...\n    \n    async def get_settled_nodes(self) -> list[MemoryNode]:\n        \"\"\"Get all settled nodes (L >= 0.70) - core knowledge.\"\"\"\n        ...\n    \n    async def record_access(self, node_id: str):\n        \"\"\"Increment access count and recalculate lock-in.\"\"\"\n        ...\n    \n    async def reinforce_node(self, node_id: str):\n        \"\"\"Explicitly reinforce a node, increasing lock-in.\"\"\"\n        ..."
+            }
+          ]
+        },
+        {
+          "section_number": "3A.10",
+          "section_title": "Visual Indicators",
+          "content": "For debugging and UI display.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "def get_state_emoji(state: LockInState) -> str:\n    \"\"\"Visual indicator for state.\"\"\"\n    return {\n        LockInState.SETTLED: \"green_circle\",   # Green = stable, persistent\n        LockInState.FLUID: \"blue_circle\",      # Blue = active, changeable\n        LockInState.DRIFTING: \"orange_circle\", # Orange = fading, at risk\n    }.get(state, \"white_circle\")"
+            }
+          ]
+        },
+        {
+          "section_number": "3A.11",
+          "section_title": "Cluster-Level Lock-In (Memory Economy)",
+          "content": "The Memory Economy introduces a separate cluster-level lock-in system with different thresholds and a decay mechanism.",
+          "subsections": [
+            {
+              "title": "Cluster Lock-In Formula",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "# From src/luna/memory/lock_in.py\nlock_in = (\n    0.40 * weighted_node_strength +    # Average member node lock-ins\n    0.30 * log_access_factor +         # log(access+1)/log(11), caps at 1.0\n    0.20 * avg_edge_strength +         # Average edge strength * lock_in\n    0.10 * age_factor                  # 1/(1 + age_days/30)\n) * decay_factor                       # exp(-lambda * seconds_since_access)"
+                }
+              ]
+            },
+            {
+              "title": "Key Differences from Node-Level",
+              "tables": [
+                {
+                  "headers": ["Aspect", "Node-Level", "Cluster-Level"],
+                  "rows": [
+                    ["Drifting threshold", "< 0.30", "< 0.20"],
+                    ["Settled threshold", ">= 0.70", "0.70 - 0.85"],
+                    ["Crystallized state", "N/A", ">= 0.85"],
+                    ["Decay", "None", "Exponential, state-dependent"],
+                    ["Access factor", "Linear count", "Logarithmic (diminishing returns)"],
+                    ["Bounds", "0.15 - 0.85", "0.0 - 1.0"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Decay Rates",
+              "tables": [
+                {
+                  "headers": ["State", "Lambda", "Half-Life", "Meaning"],
+                  "rows": [
+                    ["crystallized", "0.00001", "~11.5 days", "Nearly permanent"],
+                    ["settled", "0.0001", "~1.15 days", "Stable"],
+                    ["fluid", "0.001", "~2.8 hours", "Active but volatile"],
+                    ["drifting", "0.01", "~17 minutes", "Fading fast"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Logarithmic Access Boost",
+              "content": "The cluster-level system uses logarithmic access scaling.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "access_factor = min(log(access_count + 1) / log(11), 1.0)"
+                }
+              ],
+              "notes": [
+                "- First few accesses (1-5) provide significant boost",
+                "- Later accesses (100+) provide diminishing returns",
+                "- Caps at 1.0 when access_count >= 10"
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "3A.12",
+          "section_title": "Future Work",
+          "subsections": [
+            {
+              "title": "Priority 1: Implement Tag Siblings",
+              "content": "The tag sibling feature would add 10% of lock-in signal.",
+              "code_blocks": [
+                {
+                  "language": "sql",
+                  "title": "Schema Changes",
+                  "code": "CREATE TABLE tags (\n    id TEXT PRIMARY KEY,\n    name TEXT NOT NULL UNIQUE\n);\n\nCREATE TABLE node_tags (\n    node_id TEXT REFERENCES memory_nodes(id),\n    tag_id TEXT REFERENCES tags(id),\n    PRIMARY KEY (node_id, tag_id)\n);"
+                },
+                {
+                  "language": "python",
+                  "title": "Implementation",
+                  "code": "async def _count_locked_tag_siblings(\n    self,\n    node_id: str\n) -> int:\n    \"\"\"Count nodes sharing tags with L >= 0.7.\"\"\"\n    # Get tags for this node\n    # Find other nodes with same tags\n    # Filter to L >= 0.7\n    # Return count"
+                }
+              ]
+            },
+            {
+              "title": "Priority 2: Batch Lock-In Updates",
+              "content": "Currently, lock-in is recalculated on access. For performance:\n- Batch recalculation during reflective tick\n- Cache neighbor lock-in states\n- Use graph spreading activation for network effects"
+            },
+            {
+              "title": "Priority 3: Lock-In Decay",
+              "content": "Consider time-based decay for rarely accessed memories:\n- Drifting memories lose lock-in over time\n- Settled memories are protected from decay\n- Fluid memories decay slowly if not accessed"
+            }
+          ]
+        },
+        {
+          "section_number": "Summary",
+          "section_title": "Lock-In Coefficient Summary",
+          "content": "The Lock-In Coefficient is Luna's memory persistence system. It determines which memories become core knowledge and which fade away.",
+          "subsections": [
+            {
+              "title": "Node-Level Lock-In",
+              "tables": [
+                {
+                  "headers": ["Aspect", "Value"],
+                  "rows": [
+                    ["**States**", "DRIFTING (< 0.30), FLUID (0.30-0.70), SETTLED (>= 0.70)"],
+                    ["**Bounds**", "0.15 to 0.85 (never fully locked/drifting)"],
+                    ["**Factors**", "Retrieval (40%), Reinforcement (30%), Network (20% partial), Tags (10% - NOT IMPLEMENTED)"],
+                    ["**Transform**", "Sigmoid with K=1.2, X0=0.5"],
+                    ["**Location**", "`src/luna/substrate/lock_in.py`"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Cluster-Level Lock-In",
+              "tables": [
+                {
+                  "headers": ["Aspect", "Value"],
+                  "rows": [
+                    ["**States**", "DRIFTING (< 0.20), FLUID (0.20-0.70), SETTLED (0.70-0.85), CRYSTALLIZED (>= 0.85)"],
+                    ["**Bounds**", "0.0 to 1.0"],
+                    ["**Factors**", "Node strength (40%), Access (30% logarithmic), Edge strength (20%), Age (10%)"],
+                    ["**Decay**", "Exponential, state-dependent (crystallized decays slowest)"],
+                    ["**Location**", "`src/luna/memory/lock_in.py`"],
+                    ["**Config**", "`config/memory_economy_config.json`"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Known Gaps",
+              "tables": [
+                {
+                  "headers": ["Gap", "Impact", "Status"],
+                  "rows": [
+                    ["Tag siblings", "10% of node lock-in weight missing", "NOT IMPLEMENTED"],
+                    ["Network effects", "Uses estimate (neighbors/3) instead of actual query", "Partial"],
+                    ["Threshold mismatch", "Node (0.30) vs Cluster (0.20) drifting boundary", "By design, may confuse"]
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "part_number": "IV",
+      "part_title": "The Scribe (Ben Franklin)",
+      "version": "v3.0",
+      "metadata": {
+        "status": "CURRENT",
+        "replaces": "BIBLE-PART-IV-THE-SCRIBE-v2.1.md",
+        "last_updated": "January 30, 2026",
+        "implementation": "`src/luna/actors/scribe.py`"
+      },
+      "sections": [
+        {
+          "section_number": "4.1",
+          "section_title": "The Scribe: Benjamin Franklin",
+          "content": "The Scribe is the **sensory cortex** - turning the messy stream of experience into structured data the Substrate can understand.",
+          "persona": "Benjamin Franklin. Colonial gravitas, meticulous attention, practical wisdom. Ben monitors the conversation stream, extracts wisdom, and classifies it with scholarly precision.",
+          "quote": "\"An investment in knowledge pays the best interest.\" - Ben Franklin",
+          "key_insight": "The Scribe doesn't just transcribe; it **distills**.",
+          "subsections": [
+            {
+              "title": "The Separation Principle",
+              "content": "**Critical Design Rule:** Ben has personality in his PROCESS (logs can be witty and colonial), but his OUTPUTS are NEUTRAL (clean structured data). Luna's memories stay unpolluted by processing artifacts.",
+              "diagrams": [
+                {
+                  "title": "Separation of Process vs Output",
+                  "description": "Shows that Ben's colonial personality exists in the PROCESS domain (e.g., 'Ahoy! A decision most weighty hath been rendered...') but the OUTPUT is neutral structured data (Decision object with choice='Actor model', confidence=0.9). The data itself has no colonial flavor.",
+                  "ascii": "┌─────────────────────────────────────────────────────────────────────────┐\n│  PROCESS (Ben's Domain)         OUTPUT (Neutral)                        │\n│                                   │                                     │\n│  \"Ahoy! A decision most weighty → Decision(                             │\n│   hath been rendered...\"           choice=\"Actor model\",                │\n│                                    confidence=0.9                       │\n│  Colonial personality OK here    )                                      │\n│                                   │                                     │\n│                       No colonial flavor                                │\n│                       in the data itself                                │\n└─────────────────────────────────────────────────────────────────────────┘"
+                }
+              ],
+              "rationale": "Why? Luna's voice should be Luna's. Not a patchwork of processing personas."
+            }
+          ]
+        },
+        {
+          "section_number": "4.2",
+          "section_title": "Two-Gear Operation",
+          "subsections": [
+            {
+              "title": "Reflexive Gear (Real-time, <200ms)",
+              "content": "Audio -> Whisper -> Text -> Local Classifier -> Label",
+              "tables": [
+                {
+                  "title": "Classification Labels",
+                  "headers": ["Label", "Signal", "Action"],
+                  "rows": [
+                    ["**COMMAND**", "\"Luna, do X\"", "Route to Director"],
+                    ["**QUESTION**", "\"What is X?\"", "Route to Director + Retrieval"],
+                    ["**STATEMENT**", "Declarative, no action", "Queue for extraction"],
+                    ["**NOISE**", "Filler, incomplete", "Ignore"]
+                  ]
+                }
+              ],
+              "notes": [
+                "The local classifier (Director 3B) doesn't understand everything. It just labels."
+              ],
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "class ReflexiveGear:\n    async def classify(self, text: str) -> Intent:\n        \"\"\"<200ms classification using Director 3B.\"\"\"\n        # Single forward pass, no generation\n        logits = self.model.classify(text)\n        return Intent(\n            type=logits.argmax(),\n            confidence=logits.max(),\n            requires_response=logits.argmax() in (COMMAND, QUESTION)\n        )"
+                }
+              ]
+            },
+            {
+              "title": "Deep Gear (Background, async)",
+              "content": "If the Reflexive pass detects extractable content, it queues for full extraction.",
+              "flow": "Text -> Claude (via Shadow Reasoner) -> Structured Extraction -> Queue for Librarian",
+              "notes": [
+                "The Deep Gear runs asynchronously - Luna has already responded before extraction completes."
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "4.3",
+          "section_title": "The Stack of Benjamins",
+          "content": "Conversations don't arrive as neat packets. They stream. Ben handles this with stacking.",
+          "diagrams": [
+            {
+              "title": "Conversation Stream Processing",
+              "description": "Shows the flow: Conversation Stream -> CHUNKER (Split into semantic units) -> STACK (Accumulate chunks with context window) -> BEN REVIEWS (Process stacked chunks together) -> 'MAKE IT RAIN' (Extractions flow to The Dude)",
+              "ascii": "    Conversation Stream\n          │\n          ▼\n    ┌─────────────────────────────────┐\n    │   CHUNKER   │  Split into semantic units\n    └─────────────────────────────────┘\n          │\n          ▼\n    ┌─────────────────────────────────┐\n    │    STACK    │  Accumulate chunks with context window\n    └─────────────────────────────────┘\n          │\n          ▼\n    ┌─────────────────────────────────┐\n    │ BEN REVIEWS │  Process stacked chunks together\n    └─────────────────────────────────┘\n          │\n          ▼\n    ┌─────────────────────────────────┐\n    │\"MAKE IT RAIN\"│  Extractions flow to The Dude\n    └─────────────────────────────────┘"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Chunking Strategy",
+              "tables": [
+                {
+                  "headers": ["Parameter", "Value", "Rationale"],
+                  "rows": [
+                    ["Target size", "200-500 tokens", "Fits in single extraction call"],
+                    ["Overlap", "50 tokens", "Context continuity"],
+                    ["Boundaries", "Topic shifts, speaker changes", "Semantic coherence"]
+                  ]
+                }
+              ],
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "class SemanticChunker:\n    def chunk(self, conversation: list[Turn]) -> list[Chunk]:\n        chunks = []\n        current_chunk = []\n        current_tokens = 0\n        \n        for turn in conversation:\n            turn_tokens = count_tokens(turn.text)\n            \n            # Topic shift detection\n            if self.is_topic_shift(current_chunk, turn):\n                if current_chunk:\n                    chunks.append(self.finalize_chunk(current_chunk))\n                current_chunk = []\n                current_tokens = 0\n            \n            current_chunk.append(turn)\n            current_tokens += turn_tokens\n            \n            # Size limit\n            if current_tokens >= 500:\n                chunks.append(self.finalize_chunk(current_chunk))\n                # Overlap: keep last turn for context\n                current_chunk = [turn]\n                current_tokens = turn_tokens\n        \n        if current_chunk:\n            chunks.append(self.finalize_chunk(current_chunk))\n        \n        return chunks"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "next_section": "Part IV - The Scribe (Ben Franklin) continues"
+}

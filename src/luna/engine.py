@@ -72,6 +72,9 @@ class EngineConfig:
     voice_tts_voice: str = "en_US-amy-medium"  # Piper voice ID
     voice_mode: str = "push_to_talk"  # push_to_talk, hands_free
 
+    # FaceID settings
+    faceid_enabled: bool = False
+
     def __post_init__(self):
         if self.snapshot_path is None:
             self.snapshot_path = self.data_dir / "snapshot.yaml"
@@ -317,6 +320,15 @@ Emojis can accompany gestures or stand alone.
             from luna.actors.history_manager import HistoryManagerActor
             self.register_actor(HistoryManagerActor())
 
+        # FaceID: Identity actor (optional)
+        if self.config.faceid_enabled and "identity" not in self.actors:
+            try:
+                from luna.actors.identity import IdentityActor
+                self.register_actor(IdentityActor(enabled=True))
+                logger.info("IdentityActor registered (FaceID enabled)")
+            except Exception as e:
+                logger.warning(f"FaceID initialization failed (non-fatal): {e}")
+
         # Phase 1.5: Eden adapter + bridge actor (optional)
         await self._init_eden()
 
@@ -353,6 +365,9 @@ Emojis can accompany gestures or stand alone.
         # Initialize voice system if enabled
         if self.config.voice_enabled:
             await self._init_voice()
+
+        # Memory hygiene: run maintenance sweep if overdue (>7 days)
+        await self._maybe_run_hygiene_sweep()
 
         logger.info("Boot sequence complete")
 
@@ -439,6 +454,68 @@ Emojis can accompany gestures or stand alone.
         except Exception as e:
             logger.error(f"Failed to initialize voice system: {e}")
             self._voice = None
+
+    async def _maybe_run_hygiene_sweep(self) -> None:
+        """Run maintenance sweep + entity review quest if >7 days since last."""
+        import json as _json
+        from datetime import timezone
+
+        state_path = Path("data/hygiene_sweep_state.json")
+        now = datetime.now(timezone.utc)
+        seven_days = 7 * 24 * 3600
+
+        try:
+            if state_path.exists():
+                state = _json.loads(state_path.read_text())
+                last = datetime.fromisoformat(state.get("last_sweep", "2000-01-01T00:00:00+00:00"))
+                if (now - last).total_seconds() < seven_days:
+                    logger.debug("Hygiene sweep not due yet (last: %s)", last.isoformat())
+                    return
+
+            logger.info("Running scheduled memory hygiene sweep...")
+            from luna_mcp.observatory.tools import (
+                tool_observatory_maintenance_sweep,
+                tool_observatory_entity_review_quest,
+                tool_observatory_quest_create,
+            )
+
+            sweep = await tool_observatory_maintenance_sweep()
+            candidates = sweep.get("candidates", [])
+            created_ids = []
+
+            for c in candidates:
+                result = await tool_observatory_quest_create(
+                    title=c.get("title", ""),
+                    objective=c.get("objective", c.get("title", "")),
+                    quest_type=c.get("quest_type", "side"),
+                    priority=c.get("priority", "medium"),
+                    subtitle=c.get("subtitle", ""),
+                    source=c.get("source", "maintenance_sweep"),
+                    target_entity_ids=_json.dumps(c.get("target_entities", [])),
+                    target_node_ids=_json.dumps(c.get("target_nodes", [])),
+                )
+                if result.get("quest_id"):
+                    created_ids.append(result["quest_id"])
+
+            review = await tool_observatory_entity_review_quest()
+            if review.get("quest_id"):
+                created_ids.append(review["quest_id"])
+
+            # Save sweep timestamp
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(_json.dumps({
+                "last_sweep": now.isoformat(),
+                "quests_created": len(created_ids),
+                "quest_ids": created_ids,
+            }, indent=2))
+
+            logger.info(
+                "Hygiene sweep complete: %d candidates, %d quests created",
+                len(candidates), len(created_ids),
+            )
+
+        except Exception as e:
+            logger.warning("Hygiene sweep failed (non-fatal): %s", e)
 
     async def _ensure_entity_seeds_loaded(self) -> None:
         """
@@ -608,6 +685,15 @@ Emojis can accompany gestures or stand alone.
                 # Internal message from actor
                 await self._handle_actor_message(event)
 
+            case EventType.IDENTITY_RECOGNIZED:
+                name = event.payload.get("entity_name", "unknown")
+                tier = event.payload.get("luna_tier", "unknown")
+                logger.info(f"Identity event: {name} recognized (tier={tier})")
+
+            case EventType.IDENTITY_LOST:
+                name = event.payload.get("entity_name", "unknown")
+                logger.info(f"Identity event: {name} left")
+
             case EventType.SHUTDOWN:
                 await self.stop()
 
@@ -723,7 +809,9 @@ Emojis can accompany gestures or stand alone.
                         retrieval_query = subtask_phase.rewritten_query
                         logger.info(f"[SUBTASK] Using rewritten query for retrieval: {retrieval_query[:60]}...")
 
-                    memory_context = await matrix.get_context(retrieval_query, max_tokens=1500)
+                    memory_context = await matrix.get_context(
+                        retrieval_query, max_tokens=1500, scopes=self.active_scopes
+                    )
                     if memory_context:
                         self.context.add(content=memory_context, source=ContextSource.MEMORY)
 
@@ -1114,7 +1202,22 @@ Emojis can accompany gestures or stand alone.
 
             case "generation_error":
                 data = payload.get("data", {})
-                logger.error(f"Generation error: {data.get('error')}")
+                error_msg = data.get("error", "unknown error")
+                logger.error(f"Generation error: {error_msg}")
+
+                # Fire response callbacks with error message so /message
+                # endpoint doesn't hang waiting for a response that never comes
+                fallback_text = "hmm, I'm having a moment — my thoughts aren't connecting right now. can you try again in a sec?"
+                fallback_data = {
+                    "model": "error-fallback",
+                    "error": error_msg,
+                    "fallback": True,
+                }
+                for callback in self._on_response_callbacks:
+                    try:
+                        await callback(fallback_text, fallback_data)
+                    except Exception as cb_err:
+                        logger.error(f"Error callback error: {cb_err}")
 
     async def _reflective_loop(self) -> None:
         """
@@ -1251,8 +1354,46 @@ Emojis can accompany gestures or stand alone.
             if not rows:
                 return ""
 
-            # Format as directive context so Luna presents the docs
+            # ── Permission filter: remove documents the speaker can't see ──
             import json as _json
+            bridge_result = None
+            identity_actor = self.get_actor("identity")
+            if identity_actor and identity_actor.current.is_present:
+                entity_id = identity_actor.current.entity_id
+                if entity_id:
+                    try:
+                        from luna.identity.bridge import AccessBridge
+                        _mem = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+                        if _mem:
+                            _bridge = AccessBridge(_mem.db)
+                            bridge_result = await _bridge.lookup(entity_id)
+                    except Exception as e:
+                        logger.warning(f"Bridge lookup in dataroom context failed: {e}")
+
+            # Convert rows to dicts for the permission filter
+            doc_dicts = []
+            for row in rows:
+                _id, content, summary, meta_str = row[0], row[1], row[2], row[3]
+                meta = _json.loads(meta_str) if meta_str else {}
+                doc_dicts.append({
+                    "id": _id, "content": content, "summary": summary,
+                    "metadata": meta,
+                })
+
+            from luna.identity.permissions import filter_documents
+            allowed_docs, denied_docs = filter_documents(doc_dicts, bridge_result)
+
+            if denied_docs:
+                logger.info(
+                    "Dataroom filter: %d allowed, %d denied for %s",
+                    len(allowed_docs), len(denied_docs),
+                    bridge_result.entity_id if bridge_result else "unknown",
+                )
+
+            if not allowed_docs:
+                return ""
+
+            # Format as directive context so Luna presents the docs
             lines = [
                 "## Data Room Documents (PRESENT THESE TO THE USER)",
                 "The user is asking about documents. List them with names, types, status, and Google Drive links.",
@@ -1260,11 +1401,9 @@ Emojis can accompany gestures or stand alone.
             if target_category:
                 lines.append(f"Category: {target_category}\n")
 
-            for row in rows:
-                _id, content, summary, meta_str = row[0], row[1], row[2], row[3]
-                meta = _json.loads(meta_str) if meta_str else {}
-                name = (summary or content).split(" \u2014 ")[0]  # Just the filename
-                cat = meta.get("category", "")
+            for doc in allowed_docs:
+                meta = doc["metadata"]
+                name = (doc["summary"] or doc["content"]).split(" \u2014 ")[0]
                 ftype = meta.get("file_type", "")
                 url = meta.get("gdrive_url", "")
                 status = meta.get("status", "")
@@ -1486,6 +1625,13 @@ Never output internal reasoning, debugging info, or bullet points about context 
 Never use generic chatbot greetings like "How can I help you?" - just be natural.
 """
 
+        # Add identity context (FaceID — who Luna is talking to)
+        identity_actor = self.get_actor("identity")
+        if identity_actor and hasattr(identity_actor, "get_identity_context"):
+            identity_context = identity_actor.get_identity_context()
+            if identity_context:
+                base_prompt += identity_context
+
         # Add expression directive (gesture frequency from personality.json)
         expression_directive = self._get_expression_directive()
         if expression_directive:
@@ -1603,6 +1749,11 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
     def librarian(self):
         """Access the librarian actor (if exists)."""
         return self.get_actor("librarian")
+
+    @property
+    def identity(self):
+        """Access the identity actor (FaceID, if enabled)."""
+        return self.get_actor("identity")
 
     async def start_voice(self) -> bool:
         """Start voice conversation mode."""
@@ -1771,6 +1922,17 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
             # Project scoping
             "active_project": self._active_project,
             "active_scope": self.active_scope,
+            # FaceID
+            "identity": {
+                "enabled": self.config.faceid_enabled,
+                "initialized": self.identity.is_ready if self.identity else False,
+                "current": {
+                    "is_present": self.identity.current.is_present,
+                    "entity_name": self.identity.current.entity_name,
+                    "luna_tier": self.identity.current.luna_tier,
+                    "confidence": self.identity.current.confidence,
+                } if self.identity and self.identity.current.is_present else None,
+            } if self.config.faceid_enabled else None,
             # Voice system
             "voice": {
                 "enabled": self.config.voice_enabled,

@@ -80,6 +80,10 @@ export const useObservatoryStore = create((set, get) => ({
   selectedQuestId: null,
   questDetail: null,
 
+  // Threads (from THREAD nodes in Memory Matrix)
+  threads: [],
+  selectedThreadId: null,
+
   // Journal entries (from data/journal/ markdown files)
   journalEntries: [],
   selectedJournalEntry: null,
@@ -341,6 +345,19 @@ export const useObservatoryStore = create((set, get) => ({
     } catch (e) {
       console.error('Failed to complete quest:', e)
       return null
+    }
+  },
+
+  // ── Thread Actions ─────────────────────────────
+
+  selectThread: (threadId) => set({ selectedThreadId: threadId }),
+
+  fetchThreads: async (status = null) => {
+    try {
+      const data = await api.threads(status)
+      set({ threads: data.threads || [] })
+    } catch (e) {
+      console.error('Failed to fetch threads:', e)
     }
   },
 

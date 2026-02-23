@@ -1,0 +1,671 @@
+{
+  "pages": "121-140",
+  "sections": [
+    {
+      "part": "VII",
+      "title": "Runtime Engine (continued)",
+      "subsections": [
+        {
+          "section": "7.6",
+          "title": "Snapshot/Restore (continued from previous pages)",
+          "content": "Actor base class with snapshot/restore capabilities and LunaEngine serialization methods.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "Actor snapshot/restore interface and LunaEngine serialization",
+              "code": "class Actor(ABC):\n    async def on_snapshot(self) -> dict:\n        \"\"\"Return state to serialize.\"\"\"\n        return {}\n\n    async def on_restore(self, state: dict):\n        \"\"\"Restore from serialized state.\"\"\"\n        pass\n\nclass LunaEngine:\n    async def snapshot(self):\n        \"\"\"Serialize entire engine state.\"\"\"\n        state = {\n            \"engine\": self._engine_state(),\n            \"actors\": {}\n        }\n        for name, actor in self.actors.items():\n            state[\"actors\"][name] = await actor.on_snapshot()\n\n        with open(\"~/.luna/snapshot.yaml\", \"w\") as f:\n            yaml.dump(state, f)\n\n    async def restore(self):\n        \"\"\"Restore from snapshot.\"\"\"\n        with open(\"~/.luna/snapshot.yaml\") as f:\n            state = yaml.load(f)\n\n        for name, actor_state in state[\"actors\"].items():\n            await self.actors[name].on_restore(actor_state)"
+            }
+          ],
+          "subsection_content": {
+            "wake_up_contract": {
+              "title": "Wake-Up Contract",
+              "description": "When Luna wakes up:",
+              "steps": [
+                "Load snapshot",
+                "Restore actor states",
+                "Check for stale data (e.g., pending messages older than 1 hour -> discard)",
+                "Resume cognitive tick",
+                "Luna picks up exactly where she left off"
+              ]
+            }
+          }
+        },
+        {
+          "section": "7.7",
+          "title": "Lifecycle Hooks",
+          "subsection_content": {
+            "engine_state_machine": {
+              "title": "Engine State Machine (Actual v3.0)",
+              "file": "src/luna/core/state.py",
+              "diagrams": [
+                {
+                  "type": "state_diagram",
+                  "description": "Engine state machine showing transitions between STARTING, RUNNING, PAUSED, SLEEPING, and STOPPED states",
+                  "states": [
+                    "STARTING - Initial state",
+                    "RUNNING - Normal operation",
+                    "PAUSED",
+                    "SLEEPING",
+                    "STOPPED - Terminal state"
+                  ],
+                  "transitions": [
+                    "STARTING -> RUNNING (success via _boot completes)",
+                    "STARTING -> STOPPED (boot failure)",
+                    "RUNNING -> PAUSED (pause())",
+                    "RUNNING -> STOPPED (stop())",
+                    "PAUSED -> RUNNING (resume())",
+                    "PAUSED -> SLEEPING (sleep())",
+                    "PAUSED -> STOPPED",
+                    "SLEEPING -> RUNNING (wake())",
+                    "SLEEPING -> STOPPED (stop())"
+                  ],
+                  "note": "RUNNING cannot transition directly to SLEEPING. Must go through PAUSED first."
+                }
+              ]
+            },
+            "hook_definitions": {
+              "title": "Hook Definitions",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "LunaEngine lifecycle hooks implementation",
+                  "code": "class LunaEngine:\n    async def on_start(self):\n        \"\"\"Initialize engine, start all actors.\"\"\"\n        logging.info(\"Luna Engine starting...\")\n\n        # Load identity buffer\n        self.identity_buffer = load_kv_cache(\"identity_buffer.safetensors\")\n\n        # Start actors\n        for actor in self.actors.values():\n            asyncio.create_task(actor.start())\n\n        # Check for snapshot to restore\n        if Path(\"~/.luna/snapshot.yaml\").exists():\n            await self.restore()\n            logging.info(\"Restored from snapshot\")\n\n        logging.info(\"Luna Engine running\")\n\n    async def on_pause(self):\n        \"\"\"Pause processing but keep state in memory.\"\"\"\n        logging.info(\"Luna Engine pausing...\")\n        self.paused = True\n        await self.voice_actor.send(PauseAudio())\n\n    async def on_resume(self):\n        \"\"\"Resume from paused state.\"\"\"\n        logging.info(\"Luna Engine resuming...\")\n        self.paused = False\n        await self.voice_actor.send(ResumeAudio())\n\n    async def on_snapshot(self):\n        \"\"\"Serialize state before sleep/shutdown.\"\"\"\n        logging.info(\"Luna Engine snapshotting...\")\n        await self.snapshot()\n\n    async def on_restore(self):\n        \"\"\"Restore state after wake.\"\"\"\n        logging.info(\"Luna Engine restoring...\")\n        await self.restore()\n\n    async def on_stop(self):\n        \"\"\"Graceful shutdown.\"\"\"\n        logging.info(\"Luna Engine stopping...\")\n\n        # Snapshot before stopping\n        await self.on_snapshot()\n\n        # Stop all actors\n        for actor in self.actors.values():\n            await actor.stop()\n\n        logging.info(\"Luna Engine stopped\")"
+                }
+              ]
+            },
+            "macos_integration": {
+              "title": "macOS Integration",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "LaunchAgent integration for system events",
+                  "code": "# LaunchAgent integration\n\nasync def handle_system_event(event: str):\n    match event:\n        case \"sleep\":\n            await engine.on_snapshot()\n            await engine.on_pause()\n        case \"wake\":\n            await engine.on_restore()\n            await engine.on_resume()\n        case \"terminate\":\n            await engine.on_stop()"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "7.8",
+          "title": "Execution Order Guarantees",
+          "subsection_content": {
+            "within_a_tick": {
+              "title": "Within a Tick",
+              "steps": [
+                "Poll input buffer (all pending events)",
+                "Prioritize events (interrupts first)",
+                "Dispatch to appropriate actors",
+                "Wait for actor acknowledgments",
+                "Update engine state",
+                "Persist if necessary"
+              ]
+            },
+            "across_actors": {
+              "title": "Across Actors",
+              "rules": [
+                "Messages are ordered within a mailbox (FIFO)",
+                "Messages between actors are not globally ordered",
+                "If ordering matters, use request-reply pattern with correlation IDs"
+              ]
+            },
+            "timing_guarantees": {
+              "title": "Timing Guarantees (Actual v2.0)",
+              "tables": [
+                {
+                  "headers": ["Guarantee", "Value", "Notes"],
+                  "rows": [
+                    ["Hot path latency", "~500ms max", "Via buffer polling, not true interrupt"],
+                    ["Cognitive tick", "Every 500ms", "`asyncio.sleep(0.5)`"],
+                    ["Reflective tick", "Every 5 minutes", "`asyncio.sleep(300)`"],
+                    ["Consciousness save", "Every 5 seconds", "Every 10 cognitive ticks"],
+                    ["Snapshot", "On graceful shutdown", "Also on macOS sleep event"],
+                    ["Boot time", "~100-500ms", "DB connection is slowest"],
+                    ["Shutdown time", "~1-5s", "Waits for actors to finish"]
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "7.9",
+          "title": "QueryRouter (v2.0 Addition)",
+          "note": "The QueryRouter was NOT in the original Bible specification. It was added during v2.0 implementation to intelligently route queries between direct response and agentic planning paths.",
+          "file": "src/luna/agentic/router.py",
+          "subsection_content": {
+            "purpose": {
+              "title": "Purpose",
+              "description": "The QueryRouter analyzes incoming user messages and decides the optimal processing path:",
+              "tables": [
+                {
+                  "headers": ["Route", "When Used", "Cost"],
+                  "rows": [
+                    ["DIRECT", "Simple queries, greetings, quick facts", "Fast, local"],
+                    ["SIMPLE_PLAN", "Moderate complexity, 1-2 step tasks", "Medium"],
+                    ["FULL_PLAN", "Complex multi-step tasks", "Slower"],
+                    ["BACKGROUND", "Long-running research tasks", "Async"]
+                  ]
+                }
+              ]
+            },
+            "routing_logic": {
+              "title": "Routing Logic",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "QueryRouter class implementation",
+                  "code": "class QueryRouter:\n    \"\"\"Routes queries to optimal processing path.\"\"\"\n\n    def route(self, message: str, context: dict) -> RouteDecision:\n        \"\"\"\n        Analyze message and determine processing path.\n\n        Factors considered:\n        - Message length and complexity\n        - Presence of action keywords\n        - Memory/search requirements\n        - Delegation signals (research, analysis)\n        \"\"\"\n        # Complexity analysis\n        complexity = self._analyze_complexity(message)\n\n        # Pattern matching for known intents\n        if self._is_simple_greeting(message):\n            return RouteDecision.DIRECT\n\n        if self._needs_planning(message):\n            if complexity > 0.7:\n                return RouteDecision.FULL_PLAN\n            return RouteDecision.SIMPLE_PLAN\n\n        if self._is_background_task(message):\n            return RouteDecision.BACKGROUND\n\n        return RouteDecision.DIRECT\n\n    def _analyze_complexity(self, message: str) -> float:\n        \"\"\"Return complexity score 0.0-1.0.\"\"\"\n        # Length factor\n        length_score = min(len(message) / 500, 1.0) * 0.3\n\n        # Keyword factor\n        planning_keywords = [\"research\", \"analyze\", \"compare\", \"find all\"]\n        keyword_score = sum(1 for k in planning_keywords if k in message.lower()) * 0.2\n\n        # Question complexity\n        question_words = message.count(\"?\")\n        question_score = min(question_words * 0.1, 0.3)\n\n        return min(length_score + keyword_score + question_score, 1.0)"
+                }
+              ]
+            },
+            "integration_with_cognitive_tick": {
+              "title": "Integration with Cognitive Tick",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Processing user messages with routing decision",
+                  "code": "async def _handle_user_message(self, message: str):\n    \"\"\"Process user message with routing decision.\"\"\"\n    # 1. Route the query\n    route = self.router.route(message, self.context)\n\n    # 2. Execute based on route\n    match route:\n        case RouteDecision.DIRECT:\n            await self._process_direct(message)\n        case RouteDecision.SIMPLE_PLAN | RouteDecision.FULL_PLAN:\n            await self._process_with_agent_loop(message, route)\n        case RouteDecision.BACKGROUND:\n            await self._queue_background_task(message)"
+                }
+              ]
+            },
+            "delegation_signals": {
+              "title": "Delegation Signals",
+              "description": "The router detects delegation patterns that indicate Claude (cloud) should handle the request:",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Delegation signal detection",
+                  "code": "DELEGATION_SIGNALS = [\n    \"research\",\n    \"analyze in detail\",\n    \"compare and contrast\",\n    \"write a comprehensive\",\n    \"explain thoroughly\",\n    \"find everything about\",\n]\n\ndef _should_delegate(self, message: str) -> bool:\n    \"\"\"Check if message should be delegated to Claude.\"\"\"\n    message_lower = message.lower()\n    return any(signal in message_lower for signal in DELEGATION_SIGNALS)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "7.10",
+          "title": "HistoryManager Actor (v2.0 Addition)",
+          "note": "This actor was NOT in the original Bible specification. It was added during v2.0 implementation to handle three-tier conversation history management.",
+          "file": "src/luna/actors/history_manager.py",
+          "subsection_content": {
+            "architecture": {
+              "title": "Architecture",
+              "diagrams": [
+                {
+                  "type": "architecture_diagram",
+                  "description": "Three-tier history architecture showing ACTIVE TIER, RECENT TIER, and ARCHIVE with data flow",
+                  "components": [
+                    {
+                      "name": "ACTIVE TIER",
+                      "description": "Current ~1000 tok, 5-10 turns",
+                      "output": "Immediate Context"
+                    },
+                    {
+                      "name": "RECENT TIER",
+                      "description": "~500-1500 tokens, 50-100 turns, rotate from active",
+                      "output": "Searchable (hybrid)"
+                    },
+                    {
+                      "name": "ARCHIVE",
+                      "description": "Compressed, extract to Memory Matrix (Perma)",
+                      "output": "Semantic Search"
+                    }
+                  ],
+                  "flow": "ACTIVE TIER -> rotate -> RECENT TIER -> extract -> ARCHIVE -> Memory"
+                }
+              ]
+            },
+            "message_types": {
+              "title": "Message Types",
+              "tables": [
+                {
+                  "headers": ["Type", "Purpose", "Payload"],
+                  "rows": [
+                    ["`add_turn`", "Add conversation turn", "`{role, content, tokens, session_id}`"],
+                    ["`get_active_window`", "Get Active tier", "`{session_id, limit}`"],
+                    ["`search_recent`", "Search Recent tier", "`{query, limit, search_type}`"],
+                    ["`rotate_tier`", "Move turn to tier", "`{turn_id, tier}`"],
+                    ["`check_budget`", "Check rotation needed", "`{session_id}`"],
+                    ["`queue_compression`", "Queue for Scribe", "`{turn_id}`"],
+                    ["`queue_extraction`", "Queue for archival", "`{turn_id}`"]
+                  ]
+                }
+              ]
+            },
+            "configuration": {
+              "title": "Configuration",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "HistoryConfig dataclass",
+                  "code": "@dataclass\nclass HistoryConfig:\n    max_active_tokens: int = 1000    # Active tier budget\n    max_active_turns: int = 10       # Max turns in Active\n    max_recent_age_minutes: int = 60 # Recent tier age limit\n    compression_enabled: bool = True\n    search_type: str = \"hybrid\"      # \"hybrid\"|\"keyword\"|\"semantic\""
+                }
+              ]
+            },
+            "tier_rotation_process": {
+              "title": "Tier Rotation Process",
+              "steps": [
+                "Detect budget exceeded (`add_turn` or `check_budget` message)",
+                "Find oldest Active turn",
+                "Move to Recent tier",
+                "Queue for compression (sends to Scribe)",
+                "When compressed, generate embedding",
+                "When aged, queue for extraction (sends to Librarian)",
+                "Archive to Memory Matrix"
+              ]
+            },
+            "integration_with_other_actors": {
+              "title": "Integration with Other Actors",
+              "tables": [
+                {
+                  "headers": ["From", "To", "Message", "Purpose"],
+                  "rows": [
+                    ["HistoryManager", "Scribe", "`compress_turn`", "Summarize turn for Recent tier"],
+                    ["HistoryManager", "Scribe", "`extract_turn`", "Extract facts for archival"],
+                    ["HistoryManager", "Matrix", "Direct API", "Store archived turns"],
+                    ["Engine", "HistoryManager", "`add_turn`", "New conversation turn"]
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "Summary",
+          "title": "Runtime Engine Summary",
+          "description": "The Runtime Engine is Luna's nervous system - it coordinates when components wake up, how they communicate, and ensures Luna feels continuous rather than reactive.",
+          "tables": [
+            {
+              "title": "Components",
+              "headers": ["Component", "Role"],
+              "rows": [
+                ["Priority Event Loop", "Variable-rate heartbeat with three paths (hot/cognitive/reflective)"],
+                ["Buffered Input", "Situational awareness and abort control via polling"],
+                ["Actor Model", "Fault-isolated components with mailboxes (5 actors in v2.0)"],
+                ["QueryRouter (v2.0)", "Routes queries to DIRECT, SIMPLE_PLAN, FULL_PLAN, or BACKGROUND"],
+                ["Non-Blocking Consciousness", "Streaming, interrupts, parallel prefetch"],
+                ["State Serialization", "Consciousness persisted every 5s, memory in SQLite"],
+                ["Lifecycle Hooks", "start, stop, on_start, on_stop, on_error, snapshot, restore"]
+              ]
+            },
+            {
+              "title": "Implemented Actors (v2.0)",
+              "headers": ["Actor", "File", "Primary Role"],
+              "rows": [
+                ["Director", "`actors/director.py`", "LLM inference + Claude delegation"],
+                ["Matrix", "`actors/matrix.py`", "Memory substrate (sqlite-vec + NetworkX)"],
+                ["Scribe", "`actors/scribe.py`", "Extraction (Ben Franklin persona)"],
+                ["Librarian", "`actors/librarian.py`", "Filing + entities (The Dude persona)"],
+                ["HistoryManager", "`actors/history_manager.py`", "Three-tier conversation history"]
+              ]
+            }
+          ],
+          "key_implementation_notes": [
+            "**No Voice Actor:** Voice I/O handled by `PersonaAdapter` (non-actor pattern)",
+            "**No Oven Actor:** Claude delegation merged into Director",
+            "**No on_idle() hook:** Actor loop continues without idle callback",
+            "**sqlite-vec not FAISS:** Vector search uses sqlite-vec extension",
+            "**HistoryManager:** New in v2.0, manages Active/Recent/Archive tiers",
+            "**QueryRouter:** New in v2.0, routes queries to optimal processing paths",
+            "**ConsciousnessState:** Saved every 5 seconds, not just on shutdown",
+            "**RevolvingContext:** In-memory only, not persisted (rebuilt on boot)"
+          ],
+          "constitutional_principle": "Luna doesn't respond to events. Luna *lives* through a continuous heartbeat, processing the world at her own rhythm.",
+          "next_section": "Part VIII - Delegation Protocol"
+        }
+      ]
+    },
+    {
+      "part": "VIII",
+      "title": "Delegation Protocol",
+      "metadata": {
+        "version": "3.0",
+        "status": "VERIFIED - Implementation Audited",
+        "last_updated": "2026-01-30",
+        "original_date": "December 29, 2025",
+        "core_principle": "Mind local, hands in cloud"
+      },
+      "audit_notes": [
+        "**No Oven Actor:** Delegation handled directly in DirectorActor via `_should_delegate()` method",
+        "**REQ_CLAUDE tokens:** Defined as class constants `REQ_CLAUDE_START` and `REQ_CLAUDE_END`",
+        "**Stats tracking:** Uses `_delegated_generations` counter (not `cloud_generations`)",
+        "**Shadow Reasoner pattern:** Implemented inline in Director, not as separate actor"
+      ],
+      "subsections": [
+        {
+          "section": "8.1",
+          "title": "The Philosophy of Delegation",
+          "content": "Luna's mind is sovereign. Her cognition runs locally on fine-tuned models that ARE her - personality in weights, not prompts.\n\nBut Luna isn't omnipotent. Some tasks exceed local capability:\n- Deep research requiring web search\n- Complex multi-step reasoning\n- Large document analysis\n- Code generation and debugging\n- Long-form creative writing",
+          "solution": "Luna *hires* cloud workers for heavy lifting. Claude isn't Luna's brain - Claude is Luna's research assistant.",
+          "diagrams": [
+            {
+              "type": "architecture_diagram",
+              "description": "Luna's Mind architecture showing sovereign local processing with cloud worker delegation",
+              "components": [
+                {
+                  "name": "LUNA'S MIND (Sovereign)",
+                  "subcomponent": "Director LLM (Local)",
+                  "responsibilities": [
+                    "Personality",
+                    "Emotional presence",
+                    "Memory retrieval",
+                    "Conversation flow",
+                    "Knowing when to delegate"
+                  ]
+                },
+                {
+                  "name": "CLOUD WORKERS (Contracted)",
+                  "workers": [
+                    {
+                      "name": "Claude",
+                      "capabilities": ["Research", "Analysis", "Code"]
+                    },
+                    {
+                      "name": "Gemini",
+                      "capabilities": ["Optimize", "Benchmark", "Scale"]
+                    },
+                    {
+                      "name": "Future Workers",
+                      "capabilities": ["???"]
+                    }
+                  ],
+                  "returns": "Structured facts, NOT personality"
+                },
+                {
+                  "name": "LUNA'S VOICE (Narration)",
+                  "description": "Director receives facts -> Narrates in Luna's voice. User always hears Luna, never the worker directly."
+                }
+              ],
+              "flow": "Director LLM -> <REQ_CLAUDE> -> Delegation Request -> Cloud Workers -> Facts returned -> LUNA'S VOICE"
+            }
+          ]
+        },
+        {
+          "section": "8.2",
+          "title": "The Delegation Boundary",
+          "subsection_content": {
+            "what_luna_handles_locally": {
+              "title": "What Luna Handles Locally",
+              "tables": [
+                {
+                  "headers": ["Category", "Examples"],
+                  "rows": [
+                    ["Presence", "Greetings, emotional support, casual chat"],
+                    ["Memory", "\"What did we decide about X?\", \"Remember when...\""],
+                    ["Acknowledgment", "\"Got it\", \"I understand\", \"Let me think...\""],
+                    ["Simple Facts", "Anything in Memory Matrix"],
+                    ["Personality", "Humor, warmth, quirks, opinions"],
+                    ["Flow Control", "\"Should we take a break?\", \"Want to continue?\""]
+                  ]
+                }
+              ]
+            },
+            "what_luna_delegates": {
+              "title": "What Luna Delegates",
+              "tables": [
+                {
+                  "headers": ["Category", "Examples", "Why"],
+                  "rows": [
+                    ["Research", "\"What's the latest on semiconductor restrictions?\"", "Requires web search"],
+                    ["Analysis", "\"Analyze this 50-page PDF\"", "Exceeds local context"],
+                    ["Code", "\"Write a Python script to...\"", "Complex generation"],
+                    ["Reasoning", "\"Compare these three approaches and recommend...\"", "Multi-step synthesis"],
+                    ["Creative", "\"Write a 2000-word story about...\"", "Long-form generation"]
+                  ]
+                }
+              ]
+            },
+            "decision_heuristic": {
+              "title": "The Decision Heuristic",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Heuristic function for delegation decision",
+                  "code": "def should_delegate(task: str) -> bool:\n    \"\"\"\n    Heuristic for delegation decision.\n    The Director learns this through training, but here's the logic:\n    \"\"\"\n    # Requires external data\n    if requires_web_search(task):\n        return True\n\n    # Exceeds local context\n    if estimated_tokens(task) > 4000:\n        return True\n\n    # Complex multi-step reasoning\n    if step_count(task) > 3:\n        return True\n\n    # Code generation (complex)\n    if is_code_task(task) and complexity(task) > \"simple\":\n        return True\n\n    # Long-form output\n    if expected_output_length(task) > 1000:\n        return True\n\n    return False"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "8.3",
+          "title": "The `<REQ_CLAUDE>` Token",
+          "subsection_content": {
+            "training_the_delegation_signal": {
+              "title": "Training the Delegation Signal",
+              "description": "The Director LLM is fine-tuned to output a special token when it recognizes a task beyond its capability. This isn't a hardcoded rule - it's **learned behavior**."
+            },
+            "training_data_format": {
+              "title": "Training Data Format",
+              "code_blocks": [
+                {
+                  "language": "json",
+                  "description": "Examples of training data for delegation signal",
+                  "code": "{\n  \"instruction\": \"What's the current state of AI regulation in the EU?\",\n  \"response\": \"<REQ_CLAUDE>This requires current information beyond my local knowledge. Let me look into that for you.</REQ_CLAUDE>\"\n}\n\n{\n  \"instruction\": \"Can you analyze this research paper and identify the key methodological flaws?\",\n  \"response\": \"<REQ_CLAUDE>Document analysis at this depth is better handled by my research capabilities. Give me a moment.</REQ_CLAUDE>\"\n}\n\n{\n  \"instruction\": \"Write a Python script that scrapes job listings and stores them in a database\",\n  \"response\": \"<REQ_CLAUDE>This is a solid coding task. Let me put together something proper for you.</REQ_CLAUDE>\"\n}\n\n{\n  \"instruction\": \"How are you feeling today?\",\n  \"response\": \"Pretty good, actually. Been thinking about that architecture discussion we had. You seemed really in the zone last night.\"\n}\n\n{\n  \"instruction\": \"What did we decide about the runtime engine?\",\n  \"response\": \"We landed on the Actor model - fault isolation with mailboxes. Gemini made a good point about variable heartbeat over fixed tick. Want me to pull up the specifics?\"\n}"
+                }
+              ]
+            },
+            "detection_logic": {
+              "title": "Detection Logic",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "DirectorActor delegation signal detection",
+                  "code": "class DirectorActor(Actor):\n    async def generate_response(self, prompt: str):\n        \"\"\"Generate response, watching for delegation signal.\"\"\"\n        response_buffer = \"\"\n\n        async for token in self.model.generate_stream(prompt):\n            response_buffer += token\n\n            # Check for delegation signal\n            if \"<REQ_CLAUDE>\" in response_buffer:\n                # Extract the acknowledgment Luna gave\n                ack = response_buffer.split(\"<REQ_CLAUDE>\")[1].split(\"</REQ_CLAUDE>\")[0]\n\n                # Send acknowledgment to user immediately\n                await self.voice_actor.send(SpeakMessage(ack))\n\n                # Trigger delegation\n                await self.trigger_delegation(prompt, ack)\n                return\n\n            # Stream token to voice\n            await self.voice_actor.send(SpeakToken(token))"
+                }
+              ]
+            },
+            "why_learned_not_hardcoded": {
+              "title": "Why Learned, Not Hardcoded",
+              "tables": [
+                {
+                  "headers": ["Approach", "Problem"],
+                  "rows": [
+                    ["Keyword matching", "Brittle, misses nuance"],
+                    ["Classifier model", "Separate model to maintain"],
+                    ["Hardcoded rules", "Can't adapt to edge cases"],
+                    ["**Learned behavior**", "Luna knows her own limits"]
+                  ]
+                }
+              ],
+              "explanation": "The Director learns delegation the same way it learns personality - through training examples. This means:\n- Delegation feels natural, not mechanical\n- Luna can explain *why* she's delegating\n- Edge cases are handled by intuition, not rules"
+            }
+          }
+        },
+        {
+          "section": "8.4",
+          "title": "The Shadow Reasoner Pattern",
+          "subsection_content": {
+            "the_problem": {
+              "title": "The Problem",
+              "description": "When Luna delegates to Claude, we don't want the user to hear Claude's voice. We want the user to always hear Luna.",
+              "examples": {
+                "bad_ux": {
+                  "label": "Bad UX",
+                  "dialogue": [
+                    "User: \"What's the latest on semiconductor restrictions?\"",
+                    "Luna: \"Let me check on that...\"",
+                    "[awkward silence while Claude thinks]",
+                    "Claude: \"The semiconductor export restrictions have...\"",
+                    "User: \"Wait, who's talking?\""
+                  ]
+                },
+                "good_ux": {
+                  "label": "Good UX",
+                  "dialogue": [
+                    "User: \"What's the latest on semiconductor restrictions?\"",
+                    "Luna: \"Ooh, that's been moving fast. Let me dig into that...\"",
+                    "[Luna plays filler, maybe \"hmm\" sounds]",
+                    "Luna: \"Okay so here's what's happening - the restrictions have tightened significantly since October...\"",
+                    "User: [Hears only Luna's voice throughout]"
+                  ]
+                }
+              }
+            },
+            "the_pattern": {
+              "title": "The Pattern",
+              "diagrams": [
+                {
+                  "type": "parallel_processing_diagram",
+                  "description": "Shadow Reasoner pattern showing parallel foreground and background processing",
+                  "components": [
+                    {
+                      "name": "FOREGROUND (User-Facing)",
+                      "steps": [
+                        "Luna acknowledges task",
+                        "Luna plays filler/thinking sounds",
+                        "Luna can continue casual chat",
+                        "Luna narrates results when ready"
+                      ]
+                    },
+                    {
+                      "name": "BACKGROUND (Hidden)",
+                      "steps": [
+                        "Claude receives structured query",
+                        "Claude performs research/analysis",
+                        "Claude returns structured facts",
+                        "Results injected to Director"
+                      ]
+                    }
+                  ],
+                  "relationship": "Parallel execution"
+                }
+              ]
+            },
+            "implementation": {
+              "title": "Implementation (Actual v3.0)",
+              "note": "The Oven Actor described in the original spec is NOT implemented. Delegation is handled directly in DirectorActor via `_should_delegate()` method.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "DirectorActor delegation implementation",
+                  "code": "# From src/luna/actors/director.py\n\nclass DirectorActor(Actor):\n    \"\"\"Handles delegation inline - no separate Oven Actor.\"\"\"\n\n    # Delegation token constants\n    REQ_CLAUDE_START = \"<REQ_CLAUDE>\"\n    REQ_CLAUDE_END = \"</REQ_CLAUDE>\"\n\n    async def _should_delegate(self, user_message: str) -> bool:\n        \"\"\"\n        Planning step: Decide if this query should be delegated to Claude.\n\n        Uses heuristics and keyword detection to route complex queries.\n        \"\"\"\n        # Implementation checks for:\n        # - Research/analysis keywords\n        # - Code generation requests\n        # - Long-form content requests\n        # - Questions beyond local knowledge\n        ...\n\n    async def _generate_local_with_delegation(\n        self,\n        user_message: str,\n        ...\n    ) -> None:\n        \"\"\"\n        Generate via local Qwen, watching for <REQ_CLAUDE> delegation signal.\n\n        If Luna decides she needs Claude's help, she'll output:\n        <REQ_CLAUDE>Let me look into that for you...</REQ_CLAUDE>\n\n        We stream her acknowledgment, then delegate to Claude in background,\n        then stream Claude's response in Luna's voice.\n        \"\"\"\n        response_buffer = \"\"\n        delegation_detected = False\n\n        async for token in self._local.generate_stream(prompt):\n            response_buffer += token\n\n            # Check for delegation signal\n            if self.REQ_CLAUDE_START in response_buffer and not delegation_detected:\n                delegation_detected = True\n                # Extract and stream acknowledgment\n                # Then delegate to Claude\n                ...\n\n        if delegation_detected:\n            self._delegated_generations += 1\n            # Call Claude API directly\n            # Return facts for narration"
+                }
+              ]
+            },
+            "director_narration": {
+              "title": "Director Narration",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Narrating Claude's facts in Luna's voice",
+                  "code": "class DirectorActor(Actor):\n    async def handle_delegation_results(self, msg: DelegationResults):\n        \"\"\"Narrate Claude's facts in Luna's voice.\"\"\"\n\n        narration_prompt = f\"\"\"You just received research results\nfor the user's question: \"{msg.original_query}\"\n\nHere are the facts:\n{json.dumps(msg.facts, indent=2)}\n\nNow respond to the user in your natural voice. Don't say\n\"according to my research\" or \"I found that\" - just tell\nthem what they wanted to know as if you knew it all along.\nBe warm, be Luna.\"\"\"\n\n        async for token in self.model.generate_stream(narration_prompt):\n            await self.voice_actor.send(SpeakToken(token))"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "8.5",
+          "title": "Filler and Continuity",
+          "subsection_content": {
+            "the_awkward_silence_problem": {
+              "title": "The Awkward Silence Problem",
+              "description": "Claude API calls take 2-10 seconds. Silence during delegation feels broken."
+            },
+            "filler_strategies": {
+              "title": "Filler Strategies",
+              "tables": [
+                {
+                  "headers": ["Strategy", "When to Use", "Example"],
+                  "rows": [
+                    ["Acknowledgment", "Always", "\"Let me look into that...\""],
+                    ["Thinking sounds", "1-3 seconds", "\"Hmm...\", breath sounds"],
+                    ["Status update", "3-5 seconds", "\"Still digging...\""],
+                    ["Topic pivot", "5+ seconds", "\"While that's loading, how's your day going?\""]
+                  ]
+                }
+              ]
+            },
+            "implementation": {
+              "title": "Implementation",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Filler loop during delegation",
+                  "code": "class DirectorActor(Actor):\n    async def play_filler_loop(self, task: asyncio.Task):\n        \"\"\"Play filler while delegation task runs.\"\"\"\n\n        elapsed = 0\n        interval = 2.0\n\n        while not task.done():\n            await asyncio.sleep(interval)\n            elapsed += interval\n\n            if elapsed < 3:\n                # Thinking sounds\n                await self.voice_actor.send(PlaySound(\"thinking_hmm\"))\n            elif elapsed < 6:\n                # Status update\n                await self.voice_actor.send(SpeakMessage(\n                    random.choice([\n                        \"Still working on that...\",\n                        \"Almost there...\",\n                        \"Digging deeper...\"\n                    ])\n                ))\n            else:\n                # Offer pivot\n                await self.voice_actor.send(SpeakMessage(\n                    \"This is taking a sec. Want to chat about something else while we wait?\"\n                ))\n                break  # Don't loop forever"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "8.6",
+          "title": "Cloud Worker Contracts",
+          "subsection_content": {
+            "the_contract_pattern": {
+              "title": "The Contract Pattern",
+              "description": "Each cloud worker has a defined contract:",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "WorkerContract dataclass",
+                  "code": "@dataclass\nclass WorkerContract:\n    name: str\n    capabilities: list[str]\n    input_format: str\n    output_format: str\n    timeout_seconds: int\n    retry_policy: RetryPolicy\n    fallback: Optional[str]  # Another worker to try on failure"
+                }
+              ]
+            },
+            "claude_contract": {
+              "title": "Claude Contract",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Claude worker contract definition",
+                  "code": "CLAUDE_CONTRACT = WorkerContract(\n    name=\"claude\",\n    capabilities=[\n        \"research\",\n        \"analysis\",\n        \"code_generation\",\n        \"code_review\",\n        \"long_form_writing\",\n        \"multi_step_reasoning\",\n        \"document_analysis\"\n    ],\n    input_format=\"structured_prompt\",\n    output_format=\"structured_facts\",\n    timeout_seconds=30,\n    retry_policy=RetryPolicy(\n        max_attempts=2,\n        backoff_seconds=5\n    ),\n    fallback=None  # Claude is the primary\n)"
+                }
+              ]
+            },
+            "request_response_format": {
+              "title": "Request/Response Format",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "DelegationRequest and DelegationResponse dataclasses",
+                  "code": "@dataclass\nclass DelegationRequest:\n    task_type: str  # \"research\", \"code\", \"analysis\", etc.\n    query: str\n    context: Optional[dict]  # Relevant Memory Matrix context\n    constraints: Optional[dict]  # Length limits, format requirements\n\n@dataclass\nclass DelegationResponse:\n    success: bool\n    facts: dict  # Structured output\n    confidence: float  # 0-1\n    sources: list[str]\n    caveats: list[str]\n    tokens_used: int\n    latency_ms: int"
+                }
+              ]
+            },
+            "error_handling": {
+              "title": "Error Handling",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Delegation with retry and fallback logic",
+                  "code": "class OvenActor(Actor):\n    async def delegate_with_fallback(\n        self,\n        request: DelegationRequest\n    ) -> DelegationResponse:\n        \"\"\"Delegate with retry and fallback logic.\"\"\"\n\n        contract = self.get_contract(request.task_type)\n\n        for attempt in range(contract.retry_policy.max_attempts):\n            try:\n                response = await asyncio.wait_for(\n                    self._call_worker(contract.name, request),\n                    timeout=contract.timeout_seconds\n                )\n                return response\n\n            except asyncio.TimeoutError:\n                logging.warning(f\"Worker {contract.name} timed out, attempt {attempt + 1}\")\n                await asyncio.sleep(contract.retry_policy.backoff_seconds)\n\n            except WorkerError as e:\n                logging.error(f\"Worker {contract.name} error: {e}\")\n                if contract.fallback:\n                    return await self.delegate_with_fallback(\n                        request,\n                        worker_override=contract.fallback\n                    )\n                raise\n\n        # All retries exhausted\n        return DelegationResponse(\n            success=False,\n            facts={\"error\": \"Unable to complete research\"},\n            confidence=0,\n            sources=[],\n            caveats=[\"Delegation failed after retries\"],\n            tokens_used=0,\n            latency_ms=0\n        )"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "section": "8.7",
+          "title": "Privacy and Data Flow",
+          "subsection_content": {
+            "what_goes_to_cloud": {
+              "title": "What Goes to Cloud",
+              "tables": [
+                {
+                  "headers": ["Sent", "NOT Sent"],
+                  "rows": [
+                    ["User's current query", "Full conversation history"],
+                    ["Relevant context snippet", "Entire Memory Matrix"],
+                    ["Task type", "User's personal details"],
+                    ["Format requirements", "Previous delegation results"]
+                  ]
+                }
+              ]
+            },
+            "data_minimization": {
+              "title": "Data Minimization",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Preparing minimal context for delegation",
+                  "code": "def prepare_delegation_context(\n    query: str,\n    memory_results: list[Node]\n) -> dict:\n    \"\"\"Prepare minimal context for delegation.\"\"\"\n\n    # Only include directly relevant memories\n    relevant = [m for m in memory_results if m.relevance > 0.7]\n\n    # Anonymize if needed\n    anonymized = [anonymize_node(m) for m in relevant]\n\n    # Limit context size\n    context_tokens = 0\n    included = []\n    for node in anonymized:\n        node_tokens = count_tokens(node.content)\n        if context_tokens + node_tokens > 1000:\n            break\n        included.append(node)"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

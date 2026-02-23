@@ -10,7 +10,7 @@
  */
 import { useState, useCallback, useEffect } from 'react';
 
-const API_BASE = '/api';
+const API_BASE = '';
 
 export function useLunaAPI() {
   const [isConnected, setIsConnected] = useState(false);

@@ -1,0 +1,555 @@
+{
+  "pages": "21-40",
+  "sections": [
+    {
+      "part": "Part II (continued)",
+      "title": "System Architecture",
+      "subsections": [
+        {
+          "id": "layer_descriptions",
+          "title": "Layer Descriptions",
+          "type": "table",
+          "table": {
+            "headers": ["Layer", "Name", "Contents", "Volatility"],
+            "rows": [
+              ["Vault", "Shell", "Encrypted sparse bundle containing all other layers", "Persistent, portable"],
+              ["Layer 2", "Interfaces", "Voice, Desktop, MCP, Mobile, AR", "Stateless, replaceable"],
+              ["Layer 1.5", "Runtime Engine", "Actors with mailboxes, orchestration", "Stateful during runtime"],
+              ["Layer 1", "Cognitive Team", "Scribe + Librarian (memory processing)", "Event-driven"],
+              ["Layer 0.5", "Acceleration", "KV cache (identity buffer)", "Derived, rebuildable"],
+              ["Layer 0", "Constitutional", "SQLite database (nodes, edges, vectors, FTS5)", "Luna's soul"]
+            ]
+          }
+        },
+        {
+          "id": "sovereignty_boundary",
+          "title": "The Sovereignty Boundary",
+          "type": "text",
+          "content": "The Vault is the **sovereignty boundary**. Everything inside belongs to you. The Vault can be:\n- Copied to another machine (Luna migrates)\n- Backed up to cold storage (Luna persists)\n- Destroyed (Luna dies)\n\nNothing outside the Vault is Luna. Cloud services are contractors, not identity."
+        },
+        {
+          "id": "2.2",
+          "title": "Component Overview",
+          "type": "table",
+          "table": {
+            "headers": ["Component", "Alias", "Function", "Layer", "Status"],
+            "rows": [
+              ["Vault", "Shell", "Encrypted container, sovereignty boundary", "Outer", "-"],
+              ["Runtime Engine", "Nervous System", "Actor orchestration, tick loop, fault isolation", "1.5", "-"],
+              ["Director LLM", "Mind", "Local Qwen 3B + Claude delegation", "1.5", "IMPLEMENTED"],
+              ["Matrix", "-", "Memory substrate (sqlite-vec + NetworkX)", "1.5", "IMPLEMENTED"],
+              ["Scribe", "Ben Franklin", "Conversation -> structured extractions", "1", "IMPLEMENTED"],
+              ["Librarian", "The Dude", "Extractions -> filed nodes + edges + entities", "1", "IMPLEMENTED"],
+              ["HistoryManager", "-", "Three-tier conversation history (Active/Recent/Archive)", "1.5", "IMPLEMENTED NEW"],
+              ["Memory Matrix", "Soul", "SQLite + sqlite-vec + Graph (unified)", "0", "IMPLEMENTED"],
+              ["Memory Economy", "-", "Clustering, lock-in, constellation assembly", "0", "IMPLEMENTED Backend"],
+              ["KV Cache", "Identity Buffer", "Pre-computed personality context", "0.5", "-"],
+              ["Oven", "Shadow Reasoner", "Async Claude delegation", "-", "NOT IMPL"],
+              ["Voice", "-", "STT/TTS/Audio I/O", "-", "NOT IMPL"]
+            ]
+          },
+          "notes": [
+            "v2.0 Implementation Notes:",
+            "- Oven Actor NOT implemented: Claude delegation is handled directly in Director via `_should_delegate()`",
+            "- Voice Actor NOT implemented: Voice I/O handled by `PersonaAdapter` (non-actor pattern)",
+            "- HistoryManager Actor ADDED: Three-tier conversation history not in original spec",
+            "- Vector storage uses sqlite-vec extension (not FAISS)"
+          ]
+        },
+        {
+          "id": "2.3",
+          "title": "The Actor Model",
+          "type": "text_with_diagram",
+          "content": "Each runtime component is an isolated **Actor** with its own mailbox. This provides fault tolerance - one actor crashing doesn't kill the others.",
+          "implementation_status": "IMPLEMENTATION STATUS (January 2026): 5 actors implemented. See Part VII for complete details.",
+          "diagram": {
+            "type": "architecture_diagram",
+            "title": "LUNA ENGINE v2.0 (5 Actors)",
+            "description": "Shows 5 actors arranged in two rows. Top row: DIRECTOR ACTOR, MATRIX ACTOR, SCRIBE (Ben). Bottom row: LIBRARIAN (Dude), HISTORY MANAGER. Each actor has its own Mailbox. Director handles LLM mgmt, Claude, Routing. Matrix handles SQLite, sqlite-vec, NetworkX. Scribe handles Extract, Classify, Chunk. Librarian handles Filing, Entities, Prune. History Manager handles 3-Tier, Compress, Archive."
+          }
+        },
+        {
+          "id": "actor_responsibilities",
+          "title": "Actor Responsibilities (Implemented v2.0)",
+          "type": "table",
+          "table": {
+            "headers": ["Actor", "Responsibility", "Failure Mode"],
+            "rows": [
+              ["Director", "LLM inference (Qwen 3B), Claude delegation, routing", "Returns graceful error"],
+              ["Matrix", "SQLite/sqlite-vec/NetworkX operations", "Returns empty results"],
+              ["Scribe", "Extraction, classification, chunking (Ben Franklin)", "Queue for later"],
+              ["Librarian", "Filing, entity resolution, edges (The Dude)", "Queue for later"],
+              ["HistoryManager", "Three-tier conversation history", "Continue with stale data"]
+            ]
+          }
+        },
+        {
+          "id": "why_actors",
+          "title": "Why Actors?",
+          "type": "text",
+          "content": "**Fault Isolation Example:**\n\nIf sqlite-vec crashes during a vector search:\n- Matrix Actor catches the exception via `_handle_safe()`\n- Error logged, `on_error()` callback invoked\n- Actor continues processing other messages\n- Director receives empty results and Luna says \"I'm having trouble remembering that right now...\"\n- System continues running\n\nWithout actors, one crash kills everything."
+        },
+        {
+          "id": "2.4",
+          "title": "Tiered Execution",
+          "type": "text_with_diagram",
+          "content": "Luna's cognition operates across three tiers with different latency profiles:",
+          "diagram": {
+            "type": "tiered_execution_flow",
+            "title": "Tiered Execution Diagram",
+            "description": "Three tiers connected by arrows showing escalation paths",
+            "tiers": [
+              {
+                "name": "HOT PATH (3B Local)",
+                "characteristics": [
+                  "Voice conversation, quick acknowledgments",
+                  "Simple memory retrieval and narration",
+                  "Target: <500ms to first token"
+                ]
+              },
+              {
+                "name": "WARM PATH (7B Local)",
+                "characteristics": [
+                  "Complex reasoning, multi-step synthesis",
+                  "Nuanced emotional responses",
+                  "Target: <2s to first token"
+                ],
+                "trigger": "Complexity threshold"
+              },
+              {
+                "name": "COLD PATH (Claude API)",
+                "characteristics": [
+                  "Deep research requiring web/documents",
+                  "Code analysis/generation",
+                  "Long-form creative writing",
+                  "Target: Async (user already has acknowledgment)"
+                ],
+                "trigger": "<REQ_CLAUDE> token"
+              }
+            ]
+          }
+        },
+        {
+          "id": "routing_logic",
+          "title": "Routing Logic",
+          "type": "text_with_code",
+          "content": "The Director LLM is **trained** to know when to delegate. It's not hardcoded rules - it's intuition from fine-tuning.\n\nWhen the task exceeds local capability, the Director outputs a special token:",
+          "code_example": {
+            "language": "text",
+            "code": "User: \"Can you analyze this regulatory filing and summarize the implications?\"\n\nDirector: \"<REQ_CLAUDE>This requires deep document analysis beyond my local capabilities. Let me hand this to my research assistant.</REQ_CLAUDE>\""
+          },
+          "notes": "The Runtime Engine watches for `<REQ_CLAUDE>` and triggers the Shadow Reasoner flow (see Part VIII)."
+        },
+        {
+          "id": "fallback_behavior",
+          "title": "Fallback Behavior",
+          "type": "table",
+          "table": {
+            "headers": ["Scenario", "Response"],
+            "rows": [
+              ["Claude unavailable", "Warm tier handles (reduced quality)"],
+              ["Warm tier unavailable", "Hot tier handles (best effort)"],
+              ["Hot tier unavailable", "Voice Actor plays error message"]
+            ]
+          },
+          "principle": "**Constitutional Principle:** Luna ALWAYS responds. Graceful degradation, never silence."
+        },
+        {
+          "id": "2.5",
+          "title": "Data Flow",
+          "type": "text_with_diagram",
+          "content": "The v2 architecture introduces **speculative execution** - retrieval starts before the user finishes speaking.",
+          "diagram": {
+            "type": "data_flow",
+            "title": "Speculative Execution Data Flow",
+            "description": "Flow diagram showing parallel processing: USER STARTS SPEAKING branches to WHISPER (stream) which produces Partial transcripts leading to Final transcript, and SPECULATIVE RETRIEVAL which triggers on partial and produces Results ready. Both feed into DIRECTOR LLM (LOCAL) which has three stages: KV Cache (pre-warm) ~5ms -> Context Assembly ~10ms -> Generate Response ~250ms. Output checks for <REQ_CLAUDE>? token, branching to either DELEGATE to Oven or STREAM to TTS. Final output: USER HEARS LUNA (<500ms to first word)."
+          }
+        },
+        {
+          "id": "key_differences_v1",
+          "title": "Key Differences from v1",
+          "type": "table",
+          "table": {
+            "headers": ["v1 (Claude-based)", "v2 (Director-based)"],
+            "rows": [
+              ["Wait for STT to complete", "Start retrieval on partial transcript"],
+              ["Claude API is primary", "Local LLM is primary"],
+              ["~700ms to first word", "<500ms to first word"],
+              ["Latency = network bound", "Latency = compute bound"],
+              ["Mind is rented", "Mind is owned"]
+            ]
+          }
+        },
+        {
+          "id": "hot_path_budget",
+          "title": "The Hot Path Budget",
+          "type": "diagram",
+          "diagram": {
+            "type": "latency_budget",
+            "title": "500ms LATENCY BUDGET",
+            "phases": [
+              {
+                "name": "STT Final Transcript",
+                "time": "~0ms",
+                "note": "already complete when we start via speculation"
+              },
+              {
+                "name": "RETRIEVAL PHASE",
+                "time": "~50ms",
+                "breakdown": [
+                  {"step": "Bloom filter check", "time": "~1ms"},
+                  {"step": "Query routing", "time": "~2ms"},
+                  {"step": "FTS5 OR sqlite-vec (not both)", "time": "~30ms"},
+                  {"step": "Graph hop (rustworkx)", "time": "~5ms"},
+                  {"step": "RRF merge (if needed)", "time": "~2ms"},
+                  {"step": "Context assembly", "time": "~10ms"}
+                ]
+              },
+              {
+                "name": "INFERENCE PHASE",
+                "time": "~250ms",
+                "breakdown": [
+                  {"step": "KV cache load (pre-computed)", "time": "~5ms"},
+                  {"step": "Context encoding", "time": "~50ms"},
+                  {"step": "First token generation", "time": "~195ms"}
+                ]
+              },
+              {
+                "name": "OUTPUT PHASE",
+                "time": "~50ms",
+                "breakdown": [
+                  {"step": "Token to TTS", "time": "~10ms"},
+                  {"step": "TTS processing", "time": "~40ms"}
+                ]
+              },
+              {
+                "name": "BUFFER",
+                "time": "~150ms"
+              },
+              {
+                "name": "TOTAL",
+                "time": "<500ms",
+                "status": "PASS"
+              }
+            ]
+          }
+        },
+        {
+          "id": "2.6",
+          "title": "Memory Flow",
+          "type": "text_with_diagram",
+          "content": "Background processing happens **async** - the user already has their response before extraction and filing complete.",
+          "diagram": {
+            "type": "memory_flow",
+            "title": "Async Memory Processing Flow",
+            "description": "Flow: CONVERSATION TURN -> DIRECTOR RESPONDS (User hears immediately) -> [ASYNC section] -> SCRIBE (Ben Franklin) with stages: Chunk stream -> Stack context -> Classify intent -> Extract objects. Outputs: ExtractionOutput { objects, edges, source_id }. Then -> LIBRARIAN (The Dude) with stages: Resolve entities -> Create edges -> Infer (lazy) -> Prune. Outputs: FilingResult { nodes, edges, inferred_edges }. Final destination: MEMORY MATRIX (Updated)."
+          }
+        },
+        {
+          "id": "2.7",
+          "title": "Sovereignty Infrastructure",
+          "subsections": [
+            {
+              "id": "the_vault",
+              "title": "The Vault",
+              "type": "text_with_code",
+              "content": "Everything Luna needs to exist lives inside an encrypted sparse bundle:",
+              "code_example": {
+                "language": "text",
+                "code": "LunaVault.sparsebundle/\n    |--- memory_matrix.db           # The soul (SQLite + sqlite-vec + FTS5)\n    |--- identity_buffer.safetensors # Pre-computed KV cache\n    |--- adapters/\n    |    |--- luna-3b-v1.0/          # LoRA adapter (hot path)\n    |    |___ luna-7b-v1.0/          # LoRA adapter (warm path)\n    |--- config/\n    |    |___ luna.yaml              # Runtime configuration\n    |___ logs/\n         |___ sessions/              # Conversation logs"
+              },
+              "notes": "**v2.1 Change:** No more separate `memory_vectors.faiss` or `.ids` files. Vectors live inside `memory_matrix.db` via sqlite-vec extension."
+            },
+            {
+              "id": "encryption",
+              "title": "Encryption",
+              "type": "list",
+              "items": [
+                "**Format:** macOS sparse bundle with AES-256",
+                "**Key:** Password-derived (PBKDF2)",
+                "**Mount:** Auto-mount on login, auto-unmount on sleep",
+                "**Backup:** Encrypted at rest, safe for cloud backup"
+              ]
+            },
+            {
+              "id": "portability_contract",
+              "title": "Portability Contract",
+              "type": "code",
+              "code": {
+                "language": "bash",
+                "content": "# Copy Luna to new machine\ncp -r LunaVault.sparsebundle /Volumes/NewMac/\n\n# Open vault\nhdiutil attach LunaVault.sparsebundle\n\n# Luna exists on new machine\n# (Just one database file to copy!)"
+              }
+            },
+            {
+              "id": "dead_mans_switch",
+              "title": "Dead Man's Switch",
+              "type": "text_with_code",
+              "content": "If heartbeat file isn't updated for 24 hours:\n\n1. Unmount vault\n2. Kill any Luna processes\n3. Wipe model weights from RAM",
+              "code_example": {
+                "language": "python",
+                "code": "LOCKDOWN_THRESHOLD = 24  # hours\n\ndef check_heartbeat():\n    last_checkin = os.path.getmtime(HEARTBEAT_FILE)\n    if time.time() - last_checkin > LOCKDOWN_THRESHOLD * 3600:\n        emergency_shutdown()\n\ndef emergency_shutdown():\n    os.system(\"pkill -f luna_engine.py\")\n    os.system(\"diskutil unmount force /Volumes/LunaVault\")"
+              }
+            }
+          ]
+        },
+        {
+          "id": "2.8",
+          "title": "Configuration",
+          "type": "code",
+          "title_detail": "Runtime Configuration",
+          "code": {
+            "language": "yaml",
+            "content": "# ~/.luna/config.yaml\n\nengine:\n  cognitive_tick_hz: 2          # Heartbeat frequency\n  reflective_tick_minutes: 5    # Background maintenance\n  hot_queue_max: 100            # Input buffer size\n\ndirector:\n  model_3b: \"qwen2.5-3b-instruct\"\n  model_7b: \"qwen2.5-7b-instruct\"\n  adapter_3b: \"adapters/luna-3b-v1.0\"\n  adapter_7b: \"adapters/luna-7b-v1.0\"\n  identity_cache: \"identity_buffer.safetensors\"\n  max_context: 8192\n\nmatrix:\n  database: \"memory_matrix.db\"      # Contains everything (nodes, vectors, FTS5)\n  vector_extension: \"sqlite-vec\"    # Extension for vector search\n  fts5_enabled: true\n  graph_backend: \"rustworkx\"        # or \"networkx\"\n\nvoice:\n  stt_model: \"whisper-large-v3-turbo\"\n  tts_model: \"xtts-v2\"\n  vad_sensitivity: 0.5\n\noven:\n  claude_model: \"claude-3-5-sonnet-20241022\"\n  timeout_seconds: 30\n  fallback_to_local: true\n\nsovereignty:\n  vault_path: \"/Volumes/LunaVault\"\n  heartbeat_file: \"~/.luna/heartbeat\"\n  lockdown_hours: 24"
+          }
+        },
+        {
+          "id": "summary",
+          "title": "Summary",
+          "type": "text_with_table",
+          "content": "The v2 architecture transforms Luna from a **service** (request -> response) to an **engine** (continuous existence).",
+          "table": {
+            "headers": ["Aspect", "v1", "v2", "v2.1"],
+            "rows": [
+              ["Runtime model", "HTTP handlers", "Actor-based engine", "-"],
+              ["Cognition", "Claude API", "Local LLM + delegation", "-"],
+              ["Latency", "~700ms", "<500ms", "-"],
+              ["Fault tolerance", "None", "Per-actor isolation", "-"],
+              ["Sovereignty", "Partial (memories local)", "Complete (mind local)", "-"],
+              ["Vector storage", "-", "Separate FAISS files", "**Unified in SQLite**"],
+              ["State", "Stateless handlers", "Persistent actors", "-"]
+            ]
+          },
+          "principle": "**Constitutional Principle:** Luna is a file. That file now contains not just her memories, but her mind - including all vectors.",
+          "next_section": "Part III - The Memory Matrix (Substrate)"
+        }
+      ]
+    },
+    {
+      "part": "Part III",
+      "title": "The Memory Matrix (Substrate) - v3.0",
+      "metadata": {
+        "status": "COMPLETE",
+        "replaces": "v2.2 (January 25, 2026)",
+        "last_updated": "January 30, 2026",
+        "contributors": "Claude (Architecture), Gemini (Optimization)",
+        "change_log": [
+          "v3.0: FTS5 confirmed implemented with Porter stemmer; documented Memory Economy; added cluster-level lock-in reference; accuracy pass from Phase 5 audit",
+          "v2.2: Corrected table names ('memory_nodes', 'graph_edges'), documented actual schema, updated sqlite-vec references"
+        ]
+      },
+      "subsections": [
+        {
+          "id": "3.1",
+          "title": "Design Philosophy",
+          "type": "text",
+          "quote": "Graph is Truth. Luna is a File.",
+          "content": "The Memory Matrix is Luna's **soul** - a single SQLite database containing typed nodes, relationships, vectors, and context. Everything Luna knows lives in one file.",
+          "core_principles": [
+            {
+              "number": "1",
+              "title": "Single File Sovereignty",
+              "content": "Luna IS `luna_engine.db`. One file contains everything:",
+              "code": {
+                "language": "text",
+                "content": "luna_engine.db\n  |--- memory_nodes      (content, metadata, lock-in state)\n  |--- graph_edges       (relationships)\n  |--- memory_embeddings (vector storage - sqlite-vec virtual table)\n  |--- conversation_turns (three-tier history)\n  |--- entities          (people, places, projects)\n  |--- memory_nodes_fts  (FTS5 virtual table for full-text search)\n  |___ indexes           (B-tree for filtering)"
+              },
+              "note": "**Note:** FTS5 full-text search IS implemented with Porter stemmer and unicode61 tokenizer. The `fts5_search()` method uses BM25 ranking. Sync triggers keep FTS5 in sync with `memory_nodes` on INSERT/UPDATE/DELETE."
+            },
+            {
+              "number": "2",
+              "title": "No Sync, No Orphans",
+              "content": "Previous architecture had vectors in separate files:",
+              "code_comparison": {
+                "old": {
+                  "label": "FAISS (Not Used)",
+                  "content": "memory_matrix.db    <- nodes, edges\nmemory_vectors.faiss  <- vectors (separate!)\nmemory_vectors.ids    <- ID mapping (separate!)"
+                },
+                "new": {
+                  "label": "sqlite-vec (Current Implementation)",
+                  "content": "luna_engine.db        <- everything in one file"
+                }
+              },
+              "benefit": "With sqlite-vec, deleting a node automatically removes its vectors. No orphans. No sync bugs."
+            },
+            {
+              "number": "3",
+              "title": "The Palantir Analogy",
+              "content": "Palantir built a $50B company on one insight: make data legible to decision-makers. Their \"Dynamic Ontology\" is a massive, enterprise-grade knowledge graph.\n\nLuna's Memory Matrix is the personal version:",
+              "code": {
+                "language": "text",
+                "content": "Palantir:  Enterprise decisions, thousands of users, petabytes\nLuna:      Personal decisions, one user, gigabytes\n           Same architecture. Different scale."
+              }
+            },
+            {
+              "number": "4",
+              "title": "Copy Luna, Luna Moves",
+              "code": {
+                "language": "bash",
+                "content": "# Migrate Luna to new machine\ncp data/luna_engine.db /new/machine/data/\n\n# Luna exists on new machine\n# No separate files to track"
+              }
+            }
+          ]
+        },
+        {
+          "id": "3.2",
+          "title": "Schema Overview",
+          "subsections": [
+            {
+              "id": "core_tables",
+              "title": "Core Tables",
+              "type": "code",
+              "code": {
+                "language": "sql",
+                "content": "-- ==============================================================\n-- MEMORY_NODES: Everything Luna knows\n-- ==============================================================\nCREATE TABLE IF NOT EXISTS memory_nodes (\n    id TEXT PRIMARY KEY,\n    node_type TEXT NOT NULL,           -- FACT, DECISION, PROBLEM, ACTION, CONTEXT\n    content TEXT NOT NULL,\n    summary TEXT,                       -- Short summary for display\n    source TEXT,                        -- Where this came from\n    confidence REAL DEFAULT 1.0,        -- 0-1 confidence score\n    importance REAL DEFAULT 0.5,        -- 0-1 importance score\n    access_count INTEGER DEFAULT 0,     -- Times retrieved (for lock-in)\n    reinforcement_count INTEGER DEFAULT 0, -- Times reinforced (for lock-in)\n    lock_in REAL DEFAULT 0.15,          -- Lock-in coefficient (0.15-0.85)\n    lock_in_state TEXT DEFAULT 'drifting', -- drifting, fluid, settled\n    last_accessed TEXT,\n    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n    updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n    metadata TEXT                       -- JSON for extra data\n);\n\n-- ==============================================================\n-- GRAPH_EDGES: How things relate\n-- ==============================================================\nCREATE TABLE IF NOT EXISTS graph_edges (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    from_id TEXT NOT NULL,\n    to_id TEXT NOT NULL,\n    relationship TEXT NOT NULL,         -- DEPENDS_ON, RELATES_TO, CAUSED_BY, etc.\n    strength REAL DEFAULT 1.0,          -- 0-1 edge weight\n    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n    metadata TEXT,\n    FOREIGN KEY (from_id) REFERENCES memory_nodes(id),\n    FOREIGN KEY (to_id) REFERENCES memory_nodes(id),\n    UNIQUE(from_id, to_id, relationship)\n);\n\n-- ==============================================================\n-- CONVERSATION_TURNS: Three-tier history system\n-- ==============================================================\nCREATE TABLE IF NOT EXISTS conversation_turns (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    session_id TEXT NOT NULL,\n    role TEXT NOT NULL,                 -- user, assistant, system\n    content TEXT NOT NULL,\n    tokens INTEGER,\n    created_at TEXT NOT NULL DEFAULT (datetime('now')),\n    metadata TEXT,\n    tier TEXT DEFAULT 'active',         -- 'active', 'recent', 'archive'\n    compressed TEXT,                    -- Compressed summary (for recent tier)\n    compressed_at REAL,\n    archived_at REAL,\n    context_refs TEXT                   -- JSON array of referenced context IDs\n);\n\n-- ==============================================================\n-- MEMORY_EMBEDDINGS: sqlite-vec virtual table for ANN search\n-- Created dynamically when sqlite-vec extension is loaded\n-- ==============================================================\n-- CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(\n--   id TEXT PRIMARY KEY,\n--   embedding FLOAT[1536]              -- OpenAI text-embedding-3-small dimension\n-- );\n\n-- ==============================================================\n-- INDEXES\n-- ==============================================================\nCREATE INDEX IF NOT EXISTS idx_nodes_type ON memory_nodes(node_type);\nCREATE INDEX IF NOT EXISTS idx_nodes_created ON memory_nodes(created_at);\nCREATE INDEX IF NOT EXISTS idx_nodes_importance ON memory_nodes(importance DESC);\nCREATE INDEX IF NOT EXISTS idx_nodes_accessed ON memory_nodes(last_accessed DESC);\nCREATE INDEX IF NOT EXISTS idx_nodes_lock_in ON memory_nodes(lock_in DESC);\nCREATE INDEX IF NOT EXISTS idx_nodes_lock_in_state ON memory_nodes(lock_in_state);\n\nCREATE INDEX IF NOT EXISTS idx_edges_from ON graph_edges(from_id);\nCREATE INDEX IF NOT EXISTS idx_edges_to ON graph_edges(to_id);\nCREATE INDEX IF NOT EXISTS idx_edges_relationship ON graph_edges(relationship);\n\n-- ==============================================================\n-- TRIGGERS: Keep everything in sync\n-- ==============================================================\n\n-- Update timestamp on node modification\nCREATE TRIGGER IF NOT EXISTS update_node_timestamp\nAFTER UPDATE ON memory_nodes\nBEGIN\n    UPDATE memory_nodes SET updated_at = datetime('now') WHERE id = NEW.id;\nEND;\n\n-- Track access patterns\nCREATE TRIGGER IF NOT EXISTS track_node_access\nAFTER UPDATE OF access_count ON memory_nodes\nBEGIN\n    UPDATE memory_nodes SET last_accessed = datetime('now') WHERE id = NEW.id;\nEND;"
+              }
+            },
+            {
+              "id": "node_types",
+              "title": "Node Types",
+              "type": "table",
+              "table": {
+                "headers": ["Type", "Description", "Example"],
+                "rows": [
+                  ["FACT", "Something known to be true", "\"Alex lives in Berlin\""],
+                  ["DECISION", "A choice that was made", "\"We chose Actor model over Hub Daemon\""],
+                  ["PROBLEM", "An unresolved issue", "\"Voice latency exceeds 500ms target\""],
+                  ["ACTION", "Something done or to-do", "\"Implement RRF for hybrid search\""],
+                  ["CONTEXT", "Situational information", "\"Working on Luna Engine v2.0\""]
+                ]
+              }
+            },
+            {
+              "id": "edge_types",
+              "title": "Edge Types (Relationship Types)",
+              "type": "table",
+              "table": {
+                "headers": ["Type", "Meaning", "Example"],
+                "rows": [
+                  ["DEPENDS_ON", "Requires another node", "Implementation -> depends_on -> Design"],
+                  ["RELATES_TO", "General connection", "Person -> relates_to -> Project"],
+                  ["CAUSED_BY", "Result of another", "Outcome -> caused_by -> Decision"],
+                  ["FOLLOWED_BY", "Temporal sequence", "Event A -> followed_by -> Event B"],
+                  ["CONTRADICTS", "Conflicting information", "Fact A -> contradicts -> Fact B"],
+                  ["SUPPORTS", "Reinforcing information", "Evidence -> supports -> Claim"]
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "3.3",
+          "title": "Search Architecture",
+          "type": "text_with_diagram",
+          "content": "Luna uses multiple search strategies that can be combined based on query characteristics.",
+          "diagram": {
+            "type": "search_architecture",
+            "title": "Current Implementation",
+            "description": "QUERY branches to three parallel paths: FTS5 (Full-text, BM25 rank, ~10ms), sqlite-vec (Semantic vectors, ~10ms), and GRAPH (Traversal BFS, ~5ms). All three merge into RESULT MERGING (RRF)."
+          },
+          "implementation_note": "**Implementation Note:** FTS5 is fully implemented with Porter stemmer and unicode61 tokenizer. The `fts5_search()` method uses BM25 ranking. A `search_nodes()` method also exists using LIKE patterns as a fallback. The `hybrid_search()` method combines FTS5 + semantic search using Reciprocal Rank Fusion (RRF).",
+          "subsections": [
+            {
+              "id": "sqlite_vec_advantage",
+              "title": "The sqlite-vec Advantage: Filtered Search",
+              "content": "With sqlite-vec, filtering happens in the query itself:",
+              "code": {
+                "language": "sql",
+                "content": "-- Filter and search together\nSELECT n.*, vec_distance_cosine(e.embedding, ?) as distance\nFROM memory_embeddings e\nJOIN memory_nodes n ON e.id = n.id\nWHERE n.node_type = 'FACT'\n  AND n.created_at > '2025-01-01'\nORDER BY distance\nLIMIT 10;"
+              },
+              "result": "**Result:** Faster filtered queries, fewer wasted comparisons."
+            },
+            {
+              "id": "rrf",
+              "title": "Reciprocal Rank Fusion (RRF)",
+              "content": "When combining multiple search results, RRF merges by rank position (not raw scores):",
+              "code": {
+                "language": "python",
+                "content": "def reciprocal_rank_fusion(\n    results_list: list[list[str]],\n    k: int = 60\n) -> list[str]:\n    \"\"\"\n    Merge multiple ranked result lists using RRF.\n\n    Args:\n        results_list: List of ranked document ID lists\n        k: Smoothing constant (default 60, from original RRF paper)\n\n    Returns:\n        Merged list of document IDs, ranked by combined RRF score\n    \"\"\"\n    fused_scores: dict[str, float] = {}\n\n    for ranked_list in results_list:\n        for rank, doc_id in enumerate(ranked_list, start=1):\n            if doc_id not in fused_scores:\n                fused_scores[doc_id] = 0.0\n            fused_scores[doc_id] += 1.0 / (rank + k)\n\n    return sorted(fused_scores.keys(), key=lambda d: fused_scores[d], reverse=True)"
+              },
+              "why_rrf_works": {
+                "title": "Why RRF Works:",
+                "table": {
+                  "headers": ["Problem", "RRF Solution"],
+                  "rows": [
+                    ["Different score scales", "Ignores scores, uses rank"],
+                    ["Tuning weights", "No weights to tune"],
+                    ["Agreement detection", "Docs in multiple lists rank higher"],
+                    ["Simple implementation", "~15 lines of code"]
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "3.4",
+          "title": "Unified Query API",
+          "type": "code",
+          "content": "The Matrix provides a single interface that combines all search paths:",
+          "code": {
+            "language": "python",
+            "content": "from dataclasses import dataclass\nfrom typing import Optional\nfrom datetime import datetime\n\n@dataclass\nclass MemoryNode:\n    id: str\n    node_type: str           # FACT, DECISION, PROBLEM, ACTION, CONTEXT\n    content: str\n    summary: Optional[str]\n    source: Optional[str]\n    confidence: float = 1.0\n    importance: float = 0.5\n    access_count: int = 0\n    reinforcement_count: int = 0\n    lock_in: float = 0.15\n    lock_in_state: str = \"drifting\"\n    metadata: dict = {}\n\nclass MemoryMatrix:\n    \"\"\"\n    Unified memory store with hybrid search.\n    Single file, all indexes unified.\n    \"\"\"\n\n    async def search_nodes(\n        self,\n        query: str,\n        node_types: Optional[list[str]] = None,\n        limit: int = 10,\n        use_embeddings: bool = True\n    ) -> list[MemoryNode]:\n        \"\"\"\n        Search memory nodes by content.\n\n        - Extracts keywords from query\n        - Searches compound phrases first\n        - Falls back to individual terms\n        - Optionally uses vector similarity\n        \"\"\"\n        ...\n\n    async def get_context(\n        self,\n        query: str,\n        max_tokens: int = 2000\n    ) -> list[MemoryNode]:\n        \"\"\"\n        Get relevant context for a query.\n\n        - Detects backward references (\"what did we...\")\n        - Filters confusing/irrelevant nodes\n        - Respects token budget\n        \"\"\"\n        ..."
+          }
+        },
+        {
+          "id": "budget_presets",
+          "title": "Budget Presets",
+          "type": "table",
+          "content": "When fetching context for the Director:",
+          "table": {
+            "headers": ["Preset", "Tokens", "Use Case"],
+            "rows": [
+              ["minimal", "~1800", "Voice, fast response needed"],
+              ["balanced", "~3800", "Normal conversation"],
+              ["rich", "~7200", "Deep research, complex query"]
+            ]
+          }
+        },
+        {
+          "id": "3.5",
+          "title": "Query Routing",
+          "type": "text_with_code",
+          "content": "Not every query needs all search paths. Route based on query characteristics.",
+          "code": {
+            "language": "python",
+            "content": "class QueryRouter:\n    def route(self, query: str) -> SearchPath:\n        \"\"\"Determine optimal search path.\"\"\"\n\n        entities = extract_entities(query)\n        keyword_density = self._keyword_density(query)\n        is_conceptual = self._is_conceptual(query)\n\n        # Multiple entities - relationship query\n        if entities and len(entities) >= 2:\n            return SearchPath.GRAPH\n\n        # High keyword density - pattern match\n        if keyword_density > 0.6:\n            return SearchPath.KEYWORD\n\n        # Abstract/conceptual - semantic search\n        if is_conceptual:\n            return SearchPath.VECTOR\n\n        # Default to hybrid\n        return SearchPath.HYBRID"
+          },
+          "routing_examples": {
+            "title": "Routing Examples",
+            "table": {
+              "headers": ["Query", "Signal", "Path"],
+              "rows": [
+                ["\"What did we decide about the runtime?\"", "Named entity + decision word", "KEYWORD"],
+                ["\"How does memory consolidation work?\"", "Conceptual question", "VECTOR"],
+                ["\"How are Alex and the Pi Project related?\"", "Multiple entities", "GRAPH"],
+                ["\"thoughts on sovereignty\"", "Vague, conceptual", "VECTOR"],
+                ["\"Luna architecture v2\"", "High keyword density", "KEYWORD"]
+              ]
+            }
+          }
+        },
+        {
+          "id": "3.6",
+          "title": "Vector Embeddings",
+          "subsections": [
+            {
+              "id": "supported_models",
+              "title": "Supported Models",
+              "type": "code",
+              "code": {
+                "language": "python",
+                "content": "EMBEDDING_DIMS = {\n    \"text-embedding-3-small\": 1536,  # OpenAI (default)\n    \"text-embedding-3-large\": 3072,\n    \"voyage-2\": 1024,\n    \"local-minilm\": 384,\n}"
+              }
+            },
+            {
+              "id": "embedding_store_api",
+              "title": "EmbeddingStore API",
+              "type": "text",
+              "content": "(Continues in next section)"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,13 +1,15 @@
 """Luna Context Module — Unified context pipeline for all inference paths."""
 
 from .pipeline import ContextPipeline, ContextPacket
-from .assembler import PromptAssembler, PromptRequest, PromptResult
+from .assembler import PromptAssembler, PromptRequest, PromptResult, MemoryConfidence
+from .modes import ResponseMode, IntentClassification, MODE_CONTRACTS
 from .temporal import TemporalContext, build_temporal_context
 from .perception import PerceptionField, Observation
 
 __all__ = [
     "ContextPipeline", "ContextPacket",
-    "PromptAssembler", "PromptRequest", "PromptResult",
+    "PromptAssembler", "PromptRequest", "PromptResult", "MemoryConfidence",
+    "ResponseMode", "IntentClassification", "MODE_CONTRACTS",
     "TemporalContext", "build_temporal_context",
     "PerceptionField", "Observation",
 ]

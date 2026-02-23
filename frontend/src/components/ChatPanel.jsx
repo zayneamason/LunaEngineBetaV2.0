@@ -55,9 +55,10 @@ const SLASH_COMMANDS = [
   { command: '/vk', description: 'Run Voight-Kampff identity test', icon: '🧠' },
   { command: '/voight-kampff', description: 'Run full identity verification', icon: '🧠' },
   { command: '/prompt', description: 'Show last system prompt sent to LLM', icon: '📋' },
+  { command: '/faceid', description: 'FaceID: status, set-pin, or reset', icon: '🔐', placeholder: '[set-pin <pin> | reset <pin>]' },
 ];
 
-const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [] }) => {
+const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null }) => {
   const [input, setInput] = useState('');
   const [showCommands, setShowCommands] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -295,7 +296,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                         onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
                       />}
                 </p>
-                {(msg.model || msg.delegated || msg.local || msg.fallback) && (
+                {(msg.model || msg.delegated || msg.local || msg.fallback || msg.accessDeniedCount > 0) && (
                   <div className="mt-2 flex items-center gap-3 text-xs">
                     {/* Model indicator */}
                     {msg.delegated ? (
@@ -318,6 +319,16 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                     )}
                     {msg.tokens && <span className="text-kozmo-muted">{msg.tokens} tokens</span>}
                     {msg.latency && <span className="text-kozmo-muted">{msg.latency}ms</span>}
+                    {msg.accessDeniedCount > 0 && (
+                      <span className="flex items-center gap-1 text-amber-400/60">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                        <span>{msg.accessDeniedCount} filtered</span>
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -386,7 +397,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Message Luna... (type / for commands)"
+            placeholder={identityName ? `Message Luna... (as ${identityName})` : "Message Luna... (type / for commands)"}
             disabled={isLoading}
             className="flex-1 font-mono bg-kozmo-surface border border-kozmo-border rounded px-4 py-3 text-sm text-white/90 placeholder-white/30 focus:outline-none focus:border-kozmo-accent/50 transition-all disabled:opacity-50"
             style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03), 0 2px 8px rgba(0,0,0,0.3)' }}

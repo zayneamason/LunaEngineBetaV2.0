@@ -5,19 +5,20 @@ import { useNavigation } from '../hooks/useNavigation'
 import EntitiesView from './views/EntitiesView'
 import QuestsView from './views/QuestsView'
 import JournalView from './views/JournalView'
+import ThreadsView from './views/ThreadsView'
 import GraphView from './views/GraphView'
 import Timeline from './views/Timeline'
 import Replay from './views/Replay'
 import GraphSettings from './views/GraphSettings'
 
-const TABS = ['Entities', 'Quests', 'Journal', 'Graph', 'Timeline', 'Replay', 'Settings']
+const TABS = ['Entities', 'Quests', 'Threads', 'Journal', 'Graph', 'Timeline', 'Replay', 'Settings']
 
 export default function ObservatoryApp({ onBack }) {
   const [tab, setTab] = useState('Entities')
   const {
     wsConnected, setWsConnected, handleEvent,
-    fetchGraph, fetchConfig, fetchEntities, fetchQuests, fetchUniverse,
-    fetchEntityDetail, selectEntity, selectQuest, fetchSolarSystem,
+    fetchGraph, fetchConfig, fetchEntities, fetchQuests, fetchThreads, fetchUniverse,
+    fetchEntityDetail, selectEntity, selectQuest, selectThread, fetchSolarSystem,
   } = useObservatoryStore()
   const { pending: navPending } = useNavigation()
 
@@ -28,6 +29,7 @@ export default function ObservatoryApp({ onBack }) {
       fetchUniverse(),
       fetchEntities(),
       fetchQuests(),
+      fetchThreads(),
       fetchGraph(),
       fetchConfig(),
     ])
@@ -55,6 +57,9 @@ export default function ObservatoryApp({ onBack }) {
     if (navPending.questId) {
       selectQuest(navPending.questId)
     }
+    if (navPending.threadId) {
+      selectThread(navPending.threadId)
+    }
     if (navPending.nodeId) {
       fetchSolarSystem(navPending.nodeId)
     }
@@ -69,15 +74,19 @@ export default function ObservatoryApp({ onBack }) {
     if (selection.questId) {
       selectQuest(selection.questId)
     }
+    if (selection.threadId) {
+      selectThread(selection.threadId)
+    }
     if (selection.nodeId) {
       fetchSolarSystem(selection.nodeId)
     }
-  }, [selectEntity, fetchEntityDetail, selectQuest, fetchSolarSystem])
+  }, [selectEntity, fetchEntityDetail, selectQuest, selectThread, fetchSolarSystem])
 
   const renderTab = () => {
     switch (tab) {
       case 'Entities': return <EntitiesView navigateTab={navigateTab} />
       case 'Quests': return <QuestsView navigateTab={navigateTab} />
+      case 'Threads': return <ThreadsView navigateTab={navigateTab} />
       case 'Journal': return <JournalView navigateTab={navigateTab} />
       case 'Graph': return <GraphView navigateTab={navigateTab} />
       case 'Timeline': return <Timeline navigateTab={navigateTab} />

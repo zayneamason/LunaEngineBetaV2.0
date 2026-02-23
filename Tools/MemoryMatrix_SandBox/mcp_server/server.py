@@ -224,8 +224,10 @@ from .layout import compute_cluster_layout, invalidate_cache as invalidate_layou
 from .auto_cluster import ensure_cluster_tables, auto_cluster_from_db, needs_auto_cluster
 
 # ── DB path tracking (updated on switch-db) ────────────────────
-_current_db_path: str = str(Path(__file__).parent.parent / "sandbox_matrix.db")
-_is_production: bool = False
+_production_db = str(Path(__file__).resolve().parent.parent.parent.parent / "data" / "luna_engine.db")
+_sandbox_db = str(Path(__file__).parent.parent / "sandbox_matrix.db")
+_current_db_path: str = _production_db if Path(_production_db).exists() else _sandbox_db
+_is_production: bool = Path(_production_db).exists()
 
 
 def _get_table_names() -> dict:
@@ -466,9 +468,47 @@ async def api_quests(status: str = Query(default=None), type: str = Query(defaul
         conn.close()
 
 
+@app.get("/api/quests/{quest_id}")
+async def api_quest_detail(quest_id: str):
+    """Get quest detail with targets and journal entries."""
+    conn = _sync_db()
+    try:
+        quest = conn.execute("SELECT * FROM quests WHERE id = ?", (quest_id,)).fetchone()
+        if not quest:
+            return {"error": "Quest not found"}
+        quest_dict = dict(quest)
+
+        # Targets
+        targets = [dict(r) for r in conn.execute(
+            "SELECT target_type, target_id FROM quest_targets WHERE quest_id = ?",
+            (quest_id,),
+        ).fetchall()]
+        quest_dict["targets"] = targets
+
+        # Journal entries
+        journal = [dict(r) for r in conn.execute(
+            "SELECT * FROM quest_journal WHERE quest_id = ? ORDER BY created_at DESC",
+            (quest_id,),
+        ).fetchall()]
+        quest_dict["journal_entries"] = journal
+
+        return quest_dict
+    finally:
+        conn.close()
+
+
 @app.post("/api/maintenance-sweep")
 async def api_maintenance_sweep():
     """Trigger maintenance sweep to generate quests."""
+    if _is_production:
+        # Use production observatory tools directly (correct column names)
+        from luna_mcp.observatory.tools import (
+            tool_observatory_maintenance_sweep,
+            tool_observatory_quest_board,
+        )
+        # Run sweep, then create quests from candidates
+        result = await tool_observatory_quest_board(action="create")
+        return result
     result = await tool_fns.tool_sandbox_maintenance_sweep(matrix)
     return result
 
@@ -476,6 +516,17 @@ async def api_maintenance_sweep():
 @app.post("/api/quests/{quest_id}/accept")
 async def api_quest_accept(quest_id: str):
     """Accept a quest (mark as active)."""
+    if _is_production:
+        conn = _sync_db()
+        try:
+            conn.execute(
+                "UPDATE quests SET status = 'active', updated_at = datetime('now') WHERE id = ?",
+                (quest_id,),
+            )
+            conn.commit()
+            return {"status": "ok", "quest_id": quest_id, "action": "accept"}
+        finally:
+            conn.close()
     result = await tool_fns.tool_sandbox_quest_accept(matrix, quest_id)
     return result
 
@@ -483,10 +534,100 @@ async def api_quest_accept(quest_id: str):
 @app.post("/api/quests/{quest_id}/complete")
 async def api_quest_complete(quest_id: str, body: dict):
     """Complete a quest with optional journal."""
+    if _is_production:
+        journal_text = body.get("journal_text")
+        themes = body.get("themes", [])
+        conn = _sync_db()
+        try:
+            conn.execute(
+                "UPDATE quests SET status = 'complete', completed_at = datetime('now'), "
+                "updated_at = datetime('now') WHERE id = ?",
+                (quest_id,),
+            )
+            if journal_text:
+                import json as _json
+                conn.execute(
+                    "INSERT INTO quest_journal (quest_id, content, themes, created_at) "
+                    "VALUES (?, ?, ?, datetime('now'))",
+                    (quest_id, journal_text, _json.dumps(themes)),
+                )
+            conn.commit()
+            result = {"status": "ok", "quest_id": quest_id, "action": "complete"}
+            if journal_text:
+                result["journal"] = "saved"
+            return result
+        finally:
+            conn.close()
     journal_text = body.get("journal_text")
     themes = body.get("themes", [])
     result = await tool_fns.tool_sandbox_quest_complete(matrix, quest_id, journal_text, themes)
     return result
+
+
+@app.get("/api/threads")
+async def api_threads(status: str = Query(default=None)):
+    """Get THREAD nodes from Memory Matrix, parsed from JSON content."""
+    tn = _get_table_names()
+    conn = _sync_db()
+    try:
+        conditions = [f"{tn['type_col']} = 'THREAD'"]
+        params = []
+        if status:
+            # Status is stored inside the JSON content, so we filter after parsing
+            pass
+
+        rows = conn.execute(
+            f"SELECT id, content, lock_in, created_at, updated_at "
+            f"FROM {tn['nodes']} WHERE {tn['type_col']} = 'THREAD' "
+            f"ORDER BY updated_at DESC LIMIT 100"
+        ).fetchall()
+
+        threads = []
+        for r in rows:
+            row = dict(r)
+            # Parse the JSON content blob (Thread.to_dict() output)
+            try:
+                thread_data = json.loads(row["content"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                thread_data = {}
+
+            # Merge DB fields with parsed thread data
+            thread = {
+                "id": thread_data.get("id", row["id"]),
+                "topic": thread_data.get("topic", ""),
+                "status": thread_data.get("status", "active"),
+                "entities": thread_data.get("entities", []),
+                "entity_node_ids": thread_data.get("entity_node_ids", []),
+                "open_tasks": thread_data.get("open_tasks", []),
+                "turn_count": thread_data.get("turn_count", 0),
+                "resume_count": thread_data.get("resume_count", 0),
+                "started_at": thread_data.get("started_at", row["created_at"]),
+                "parked_at": thread_data.get("parked_at"),
+                "resumed_at": thread_data.get("resumed_at"),
+                "closed_at": thread_data.get("closed_at"),
+                "project_slug": thread_data.get("project_slug"),
+                "parent_thread_id": thread_data.get("parent_thread_id"),
+                "lock_in": row["lock_in"],
+                "node_id": row["id"],
+            }
+
+            # Apply status filter (stored inside JSON, not a SQL column)
+            if status and thread["status"] != status:
+                continue
+
+            # Get INVOLVES edges to find connected entities
+            involves = conn.execute(
+                f"SELECT to_id FROM {tn['edges']} "
+                f"WHERE from_id = ? AND relationship = 'INVOLVES'",
+                (row["id"],),
+            ).fetchall()
+            thread["involves_node_ids"] = [e["to_id"] for e in involves]
+
+            threads.append(thread)
+
+        return {"threads": threads, "count": len(threads)}
+    finally:
+        conn.close()
 
 
 @app.get("/api/events/recent")
@@ -1116,18 +1257,21 @@ def main():
     if http_only:
         # HTTP-only mode for frontend development
         loop = asyncio.new_event_loop()
-        loop.run_until_complete(init_matrix())
         if start_prod:
+            # Skip sandbox init, go straight to production DB
             loop.run_until_complete(api_switch_db({"db": "production"}))
+        else:
+            loop.run_until_complete(init_matrix())
         mode_label = "PRODUCTION" if start_prod else "SANDBOX"
         print(f"Observatory — HTTP-only mode on :8100 [{mode_label}]")
         uvicorn.run(app, host="0.0.0.0", port=8100)
     else:
         # MCP mode: FastMCP in main thread, HTTP in background
         loop = asyncio.new_event_loop()
-        loop.run_until_complete(init_matrix())
         if start_prod:
             loop.run_until_complete(api_switch_db({"db": "production"}))
+        else:
+            loop.run_until_complete(init_matrix())
 
         # Start HTTP server in background thread
         http_thread = threading.Thread(target=run_http_server, daemon=True)

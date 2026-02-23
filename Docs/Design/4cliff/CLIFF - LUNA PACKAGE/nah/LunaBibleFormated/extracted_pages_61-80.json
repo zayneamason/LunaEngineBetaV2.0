@@ -1,0 +1,574 @@
+{
+  "pages": "61-80",
+  "sections": [
+    {
+      "part_number": "IV",
+      "part_title": "The Scribe (Ben) - Continued",
+      "sections": [
+        {
+          "section_number": "4.3",
+          "section_title": "Stacking Strategy",
+          "content": "Ben doesn't process chunks in isolation. He sees context.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "class BenStack:\n    def __init__(self, window_size: int = 5):\n        self.window_size = window_size\n        self.stack: deque[Chunk] = deque(maxlen=window_size)\n\n    def push(self, chunk: Chunk):\n        self.stack.append(chunk)\n\n    def get_context_window(self) -> list[Chunk]:\n        \"\"\"Ben sees 3-5 recent chunks for context.\"\"\"\n        return list(self.stack)\n\n    async def process(self) -> list[Extraction]:\n        \"\"\"Process current stack, return extractions.\"\"\"\n        context = self.get_context_window()\n        extractions = await self.extract_with_context(context)\n        return extractions  # \"Make it rain\""
+            }
+          ]
+        },
+        {
+          "section_number": "4.4",
+          "section_title": "Extraction Types",
+          "status": "IMPLEMENTED",
+          "content": "Ben classifies into eleven categories (defined in `src/luna/extraction/types.py`).",
+          "tables": [
+            {
+              "title": "Extraction Types",
+              "headers": ["Type", "Description", "Example", "Status"],
+              "rows": [
+                ["FACT", "Something known to be true", "\"Alex lives in Berlin\"", "Implemented"],
+                ["DECISION", "A choice that was made", "\"We chose Actor model\"", "Implemented"],
+                ["PROBLEM", "An unresolved issue", "\"Voice latency is too high\"", "Implemented"],
+                ["ASSUMPTION", "Believed but unverified", "\"Users will want voice-first\"", "Implemented"],
+                ["CONNECTION", "Relationship between entities", "\"Alex and Sarah are teammates\"", "Implemented"],
+                ["ACTION", "Something done or to be done", "\"Need to implement RRF\"", "Implemented"],
+                ["OUTCOME", "Result of action or decision", "\"Switching to NetworkX saved 45ms\"", "Implemented"],
+                ["QUESTION", "A question asked", "\"What is the best approach?\"", "Implemented"],
+                ["PREFERENCE", "User preference stated", "\"I prefer dark mode\"", "Implemented"],
+                ["OBSERVATION", "Something noticed", "\"The API seems slow today\"", "Implemented"],
+                ["MEMORY", "A memory shared", "\"Remember when we debugged that?\"", "Implemented"]
+              ]
+            }
+          ],
+          "notes": ["The extraction prompt also supports additional categories (RELATION, MILESTONE) which are mapped to standard types when parsing."],
+          "subsections": [
+            {
+              "title": "Confidence Scoring",
+              "tables": [
+                {
+                  "title": "Evidence Level Confidence",
+                  "headers": ["Evidence Level", "Confidence Range", "Example"],
+                  "rows": [
+                    ["Explicit statement", "0.9-1.0", "\"Alex definitely lives in Berlin\""],
+                    ["Strong implication", "0.7-0.9", "\"Alex mentioned his Berlin apartment\""],
+                    ["Weak inference", "0.5-0.7", "\"Alex seems to be in Germany\""],
+                    ["Speculation", "0.3-0.5", "\"Alex might be European\""]
+                  ]
+                }
+              ],
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass ExtractedFact:\n    type: ExtractionType\n    content: str\n    confidence: float\n    source_chunk: str\n    entities: list[str]\n\n    def is_high_confidence(self) -> bool:\n        return self.confidence >= 0.7"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "4.5",
+          "section_title": "Interface Contract",
+          "subsections": [
+            {
+              "title": "Input",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass ExtractionInput:\n    raw_content: str\n    source_type: str  # 'conversation', 'document', 'voice'\n    source_id: str\n    context: dict  # Additional metadata\n    preceding_chunks: list[str]  # For context window"
+                }
+              ]
+            },
+            {
+              "title": "Output",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass ExtractedObject:\n    type: ExtractionType  # FACT, DECISION, PROBLEM, QUESTION, PREFERENCE, etc.\n    content: str  # The distilled content\n    confidence: float  # 0.0-1.0\n    entities: list[str]  # Mentioned entities\n    source_id: str = \"\"  # Source reference\n    metadata: dict = field(default_factory=dict)  # Additional structured fields\n\n@dataclass\nclass ExtractedEdge:\n    from_ref: str  # Source entity name\n    to_ref: str  # Target entity name\n    edge_type: str  # \"works_on\", \"decided\", \"caused\", etc.\n    confidence: float = 1.0  # Edge confidence\n    source_id: str = \"\"  # Source conversation\n\n@dataclass\nclass ExtractionOutput:\n    objects: list[ExtractedObject]\n    edges: list[ExtractedEdge]\n    source_id: str = \"\"\n    extraction_time_ms: int = 0\n\n    def is_empty(self) -> bool:\n        \"\"\"Check if extraction produced no results.\"\"\"\n        return len(self.objects) == 0 and len(self.edges) == 0\n\n    def to_dict(self) -> dict:\n        \"\"\"Serialize for message passing.\"\"\"\n        ..."
+                }
+              ]
+            },
+            {
+              "title": "Entity Updates (v2.1 Addition)",
+              "content": "Ben also extracts entity updates for the Entity System.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass EntityUpdate:\n    update_type: ChangeType  # CREATE, UPDATE, SYNTHESIZE\n    entity_id: str | None  # Existing ID (for updates)\n    name: str  # Entity name\n    entity_type: EntityType  # PERSON, PERSONA, PLACE, PROJECT\n    facts: dict[str, str]  # Facts to add/update\n    source: str = \"\"  # Source of update"
+                }
+              ],
+              "notes": ["This enables Ben to file biographical facts directly to entity profiles."]
+            }
+          ]
+        },
+        {
+          "section_number": "4.6",
+          "section_title": "Scheduling Model",
+          "content": "Ben is **event-driven**, not scheduled.",
+          "tables": [
+            {
+              "title": "Event Triggers",
+              "headers": ["Trigger", "Action", "Priority"],
+              "rows": [
+                ["Conversation turn completed", "Queue for extraction", "Normal"],
+                ["Document uploaded", "Parse + extract", "High"],
+                ["Silence > 30s", "Flush pending stack", "Normal"],
+                ["User says \"remember that\"", "Immediate extraction", "High"]
+              ]
+            }
+          ],
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "class ScribeScheduler:\n    def __init__(self):\n        self.queue = asyncio.Queue()\n        self.stack = BenStack(window_size=5)\n\n    async def on_turn(self, turn: Turn):\n        \"\"\"Event: conversation turn completed.\"\"\"\n        chunk = self.chunker.process_turn(turn)\n        self.stack.push(chunk)\n\n        # Queue for background extraction\n        await self.queue.put(ExtractionTask(\n            chunks=self.stack.get_context_window(),\n            priority=Priority.NORMAL\n        ))\n\n    async def on_document(self, doc: Document):\n        \"\"\"Event: document uploaded.\"\"\"\n        chunks = self.chunker.chunk_document(doc)\n        await self.queue.put(ExtractionTask(\n            chunks=chunks,\n            priority=Priority.HIGH\n        ))\n\n    async def on_silence(self, duration_s: float):\n        \"\"\"Event: conversation went quiet.\"\"\"\n        if duration_s > 30 and self.stack:\n            await self.flush_stack()\n\n    async def worker(self):\n        \"\"\"Background worker processes queue.\"\"\"\n        while True:\n            task = await self.queue.get()\n            extractions = await self.extract(task.chunks)\n            await self.librarian.file(extractions)  # Make it rain"
+            }
+          ],
+          "notes": [
+            "**Why event-driven?**",
+            "- CPU usage minimal during idle periods",
+            "- Extractions queue naturally as conversation flows",
+            "- No wasted cycles polling for work",
+            "**Contrast with The Dude:** The Librarian runs on a hybrid schedule (event-driven for urgent filing, periodic for maintenance tasks like pruning)."
+          ]
+        },
+        {
+          "section_number": "4.7",
+          "section_title": "Technical Stack",
+          "tables": [
+            {
+              "title": "Technical Components",
+              "headers": ["Component", "Model", "Purpose", "Latency"],
+              "rows": [
+                ["Transcription", "Whisper V3 Turbo (local)", "Audio -> Text", "~200ms"],
+                ["Reflexive labeling", "Director 3B (local)", "Fast classification", "~50ms"],
+                ["Deep extraction", "Claude via Shadow Reasoner", "Full semantic extraction", "Async"],
+                ["Embedding", "Sentence Transformers (local)", "Vector representation", "~10ms"]
+              ]
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Resource Budget",
+              "diagrams": [
+                {
+                  "title": "Processing Paths",
+                  "description": "Two processing paths showing latency budgets. REFLEXIVE PATH (must complete <200ms): Whisper Turbo 150ms + Director 3B classify 40ms + Queue for extraction 5ms = Total ~195ms. DEEP PATH (async, user already has response): Stack processing 10ms + Claude extraction 500-2000ms + Embedding generation 50ms + Queue for Librarian 5ms = Total ~600-2100ms (non-blocking)."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "4.8",
+          "section_title": "Implementation (Actor Pattern)",
+          "status": "IMPLEMENTED (per AUDIT-ACTORS.md)",
+          "content": "The actual implementation uses the Actor pattern with mailbox-based communication.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "class ScribeActor(Actor):\n    \"\"\"\n    Benjamin Franklin: The extraction system.\n\n    Extracts structured knowledge from conversations and sends\n    to Librarian for filing in Memory Matrix.\n    \"\"\"\n\n    def __init__(\n        self,\n        config: Optional[ExtractionConfig] = None,\n        engine: Optional[\"LunaEngine\"] = None,\n    ):\n        super().__init__(\"scribe\", engine)\n        self.config = config or ExtractionConfig()\n        self.chunker = SemanticChunker()\n        self.stack: deque[Chunk] = deque(maxlen=5)  # Context window\n\n        # Anthropic client (lazy init)\n        self._client = None\n\n        # Stats\n        self._extractions_count = 0\n        self._objects_extracted = 0\n        self._edges_extracted = 0\n        self._entity_updates_extracted = 0\n        self._total_extraction_time_ms = 0\n\n        # Extraction history (keep last 20)\n        self._extraction_history: list[dict] = []"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Direct API Methods (bypassing mailbox)",
+              "tables": [
+                {
+                  "headers": ["Method", "Purpose", "Status"],
+                  "rows": [
+                    ["`compress_turn(content, role)`", "Compress turn to one-sentence summary", "Implemented"],
+                    ["`get_stats()`", "Return extraction statistics", "Implemented"],
+                    ["`get_extraction_history()`", "Return recent extraction history", "Implemented"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Message Types (Mailbox Interface)",
+              "status": "IMPLEMENTED (per AUDIT-ACTORS.md)",
+              "tables": [
+                {
+                  "headers": ["Message Type", "Purpose", "Payload", "Status"],
+                  "rows": [
+                    ["`extract_turn`", "Extract from conversation turn", "`{role, content, turn_id, session_id, immediate}`", "Implemented"],
+                    ["`extract_text`", "Extract from raw text", "`{text, source_id, immediate}`", "Implemented"],
+                    ["`entity_note`", "Direct entity update command", "`{entity_name, entity_type, facts, update_type, source}`", "Implemented"],
+                    ["`flush_stack`", "Process pending chunks", "None", "Implemented"],
+                    ["`set_config`", "Update extraction configuration", "`{backend, batch_size, min_content_length}`", "Implemented"],
+                    ["`get_stats`", "Return extraction statistics", "None", "Implemented"],
+                    ["`compress_turn`", "Compress for history tier", "`{turn_id, content, role}`", "Implemented"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Messages Sent (Outbound)",
+              "tables": [
+                {
+                  "headers": ["Target", "Message Type", "When", "Status"],
+                  "rows": [
+                    ["Librarian", "`file`", "After extraction complete (with ExtractionOutput)", "Implemented"],
+                    ["Librarian", "`entity_update`", "After entity note processing", "Implemented"],
+                    ["Engine", "`scribe_stats`", "Response to `get_stats`", "Implemented"],
+                    ["Engine", "`turn_compressed`", "Response to `compress_turn`", "Implemented"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Extraction Backend Configuration",
+              "status": "IMPLEMENTED",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass ExtractionConfig:\n    backend: str = \"haiku\"  # \"haiku\", \"sonnet\", \"local\", \"disabled\"\n    batch_size: int = 5     # Turns per extraction call\n    min_content_length: int = 10  # Skip very short messages\n    temperature: float = 0.3  # Lower = more deterministic extractions\n    max_tokens: int = 1024    # Max response tokens\n\n# Backend configurations (from extraction/types.py)\nEXTRACTION_BACKENDS = {\n    \"haiku\": {\n        \"model\": \"claude-3-haiku-20240307\",\n        \"cost_per_1k_input\": 0.00025,\n        \"cost_per_1k_output\": 0.00125,\n        \"quality\": \"good\",\n    },\n    \"sonnet\": {\n        \"model\": \"claude-3-5-sonnet-20241022\",\n        \"cost_per_1k_input\": 0.003,\n        \"cost_per_1k_output\": 0.015,\n        \"quality\": \"excellent\",\n    },\n    \"local\": {\n        \"model\": \"qwen-3b\",\n        \"cost_per_1k_input\": 0,\n        \"cost_per_1k_output\": 0,\n        \"quality\": \"basic\",\n    },\n}"
+                }
+              ],
+              "notes": ["The implementation uses synchronous Anthropic client which blocks the Scribe actor's message loop. Consider migrating to `anthropic.AsyncAnthropic()` for better async compliance (per AUDIT-ACTORS.md recommendation)."]
+            },
+            {
+              "title": "Turn Compression (v2.1 Feature)",
+              "content": "Ben also handles turn compression for the HistoryManager.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "async def compress_turn(self, content: str, role: str = \"user\") -> str:\n    \"\"\"\n    Compress a conversation turn into a one-sentence summary.\n\n    Used by HistoryManager when rotating turns from Active to Recent tier.\n\n    Returns:\n        Compressed summary (<50 words)\n    \"\"\""
+                }
+              ]
+            },
+            {
+              "title": "Extraction Statistics",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "{\n    \"backend\": \"claude-opus\",\n    \"extractions_count\": 15,\n    \"objects_extracted\": 234,\n    \"edges_extracted\": 89,\n    \"entity_updates_extracted\": 45,\n    \"avg_extraction_time_ms\": 2345,\n    \"stack_size\": 2,\n    \"batch_size\": 3\n}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "4.9",
+          "section_title": "Ben's Principles",
+          "tables": [
+            {
+              "title": "Implementation Principles",
+              "headers": ["Principle", "Implementation"],
+              "rows": [
+                ["**Separation**", "Personality in process, neutrality in output"],
+                ["**Context Window**", "Never extract in isolation; see surrounding chunks"],
+                ["**Confidence Tagging**", "Every extraction carries uncertainty signal"],
+                ["**Event-Driven**", "React to events, don't poll"],
+                ["**Non-Blocking**", "Deep extraction never delays response"]
+              ]
+            }
+          ],
+          "quotes": ["\"By failing to prepare, you are preparing to fail.\" - Ben Franklin"],
+          "content": "Ben prepares Luna's memories so they're ready when needed.",
+          "end_note": "*End of Part IV (v3.0)*"
+        }
+      ]
+    },
+    {
+      "part_number": "V",
+      "part_title": "The Librarian (The Dude)",
+      "version": "v3.0",
+      "metadata": {
+        "status": "CURRENT",
+        "replaces": "BIBLE-PART-V-THE-LIBRARIAN-v2.1.md",
+        "last_updated": "January 30, 2026",
+        "implementation": "`src/luna/actors/librarian.py`"
+      },
+      "sections": [
+        {
+          "section_number": "5.1",
+          "section_title": "The Librarian: The Dude",
+          "content": "The Librarian is the **deep brain** - taking Scribe output and weaving it into the Substrate. He doesn't just store; he **connects**.",
+          "persona": "The Dude from The Big Lebowski. Chill, competent, cuts through bullshit. The Dude abides... and files things where they belong.",
+          "quotes": ["\"This will not stand, ya know, this aggression will not stand, man.\" - The Dude (On duplicate entities trying to sneak into the graph.)"],
+          "subsections": [
+            {
+              "title": "The Separation Principle",
+              "content": "**Critical Design Rule:** The Dude has personality in his PROCESS (commentary can be irreverent), but his OUTPUTS are NEUTRAL (clean context packets, properly filed nodes). Luna's memories stay unpolluted.",
+              "diagrams": [
+                {
+                  "title": "Process vs Output Separation",
+                  "description": "Diagram showing PROCESS (Dude's Domain) with commentary like 'Yeah, well, that's just like, your opinion, man...' and 'Chill commentary OK here' producing OUTPUT (Neutral) as ContextPacket(nodes=[...], edges=[...], token_count=1847) with 'No Dude flavor in the data itself'."
+                }
+              ],
+              "notes": ["Why? Luna's responses should be Luna's. The Dude does the filing; Luna does the speaking."]
+            }
+          ]
+        },
+        {
+          "section_number": "5.2",
+          "section_title": "Core Functions",
+          "status": "IMPLEMENTED (per AUDIT-ACTORS.md)",
+          "content": "The Dude handles six primary tasks.",
+          "tables": [
+            {
+              "title": "Core Functions",
+              "headers": ["Function", "What It Does", "When It Runs", "Status"],
+              "rows": [
+                ["Entity Resolution", "Deduplicate (\"Mark\" = \"Zuck\" = \"The Landlord\")", "Immediate", "Implemented"],
+                ["Knowledge Wiring", "Create explicit edges from extractions", "Immediate", "Implemented"],
+                ["Entity Updates", "File biographical facts to entity profiles", "Immediate", "Implemented"],
+                ["Entity Rollback", "Revert entities to previous versions", "On request", "Implemented"],
+                ["Spreading Activation", "Discover hidden connections", "Deferred", "Planned"],
+                ["Synaptic Pruning", "Clean low-value edges AND drifting nodes", "Periodic", "Implemented"]
+              ]
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Message Types (Mailbox Interface)",
+              "tables": [
+                {
+                  "headers": ["Message Type", "Purpose", "Payload", "Status"],
+                  "rows": [
+                    ["`file`", "File extraction from Scribe", "`ExtractionOutput dict`", "Implemented"],
+                    ["`entity_update`", "Update entity profile", "`{update_type, entity_id, name, entity_type, facts, source}`", "Implemented"],
+                    ["`get_context`", "Retrieve context for query", "`{query, budget, node_types}`", "Implemented"],
+                    ["`resolve_entity`", "Find or create entity", "`{name, entity_type}`", "Implemented"],
+                    ["`rollback_entity`", "Revert to version", "`{entity_id, version, reason}`", "Implemented"],
+                    ["`prune`", "Run maintenance", "`{confidence_threshold, age_days, prune_nodes, max_prune_nodes}`", "Implemented"],
+                    ["`get_stats`", "Return statistics", "None", "Implemented"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Messages Sent (Outbound)",
+              "tables": [
+                {
+                  "headers": ["Target", "Message Type", "When", "Status"],
+                  "rows": [
+                    ["Engine", "`filing_result`", "After successful filing (if reply_to set)", "Implemented"],
+                    ["Engine", "`entity_update_result`", "After entity update (if reply_to set)", "Implemented"],
+                    ["Engine", "`rollback_result`", "After rollback attempt", "Implemented"],
+                    ["Engine", "`context_result`", "Response to get_context", "Implemented"],
+                    ["Engine", "`entity_resolved`", "Response to resolve_entity", "Implemented"],
+                    ["Engine", "`prune_result`", "Response to prune", "Implemented"],
+                    ["Engine", "`librarian_stats`", "Response to get_stats", "Implemented"]
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "5.3",
+          "section_title": "Entity Resolution (Deduplication)",
+          "status": "IMPLEMENTED",
+          "content": "\"Mark,\" \"Zuck,\" and \"The Landlord\" might all be the same node.",
+          "subsections": [
+            {
+              "title": "Resolution Strategy (3-Level)",
+              "content": "The implementation uses a simplified 3-level resolution.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "async def _resolve_entity(\n    self,\n    name: str,\n    entity_type: str,\n    source_id: str = \"\",\n) -> str:\n    \"\"\"\n    Resolve entity to existing node or create new.\n\n    Resolution order:\n    1. Alias cache (O(1))\n    2. Exact DB match\n    3. Create new if not found\n    \"\"\"\n    name_lower = name.lower().strip()\n\n    # 1. Check alias cache\n    if name_lower in self.alias_cache:\n        logger.debug(f\"The Dude: Cache hit for '{name}'\")\n        return self.alias_cache[name_lower]\n\n    # 2. Check exact DB match via Matrix actor\n    matrix = await self._get_matrix()\n    if matrix:\n        existing = await self._find_existing_node(matrix, name, entity_type)\n        if existing:\n            self.alias_cache[name_lower] = existing\n            self._nodes_merged += 1\n            return existing\n\n    # 3. Create new node\n    node_id = await self._create_node(name, entity_type, source_id)\n    self.alias_cache[name_lower] = node_id\n    self._nodes_created += 1\n\n    return node_id"
+                }
+              ],
+              "tables": [
+                {
+                  "title": "Resolution Priority",
+                  "headers": ["Step", "Cost", "Skip If"],
+                  "rows": [
+                    ["Alias cache", "O(1)", "Never"],
+                    ["Exact DB match", "O(log n)", "Cache hit"],
+                    ["Create new", "O(1)", "Previous match"]
+                  ]
+                }
+              ],
+              "notes": ["The implementation prioritizes simplicity over the full fuzzy matching described in the original spec. Semantic similarity search is deferred to future enhancement."]
+            }
+          ]
+        },
+        {
+          "section_number": "5.4",
+          "section_title": "Knowledge Wiring",
+          "status": "IMPLEMENTED",
+          "content": "New memory -> find all related nodes -> create edges.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def _wire_extraction(\n    self,\n    extraction: ExtractionOutput,\n) -> FilingResult:\n    \"\"\"\n    Wire extraction into Memory Matrix.\n\n    1. Resolve/create nodes for each extracted object\n    2. Create edges between entities\n    \"\"\"\n    result = FilingResult()\n\n    # 1. Process objects - create/resolve nodes\n    for obj in extraction.objects:\n        node_id = await self._resolve_entity(\n            name=obj.content,\n            entity_type=obj.type.value if hasattr(obj.type, 'value') else str(obj.type),\n            source_id=extraction.source_id,\n        )\n\n        # Track if created or merged\n        if self._nodes_created > len(result.nodes_created) + len(result.nodes_merged):\n            result.nodes_created.append(node_id)\n        else:\n            result.nodes_merged.append((obj.content, node_id))\n\n        # Also resolve any mentioned entities\n        for entity in obj.entities:\n            await self._resolve_entity(entity, \"ENTITY\", extraction.source_id)\n\n    # 2. Create edges via MatrixActor's graph\n    for edge in extraction.edges:\n        from_id = await self._resolve_entity(edge.from_ref, \"ENTITY\", extraction.source_id)\n        to_id = await self._resolve_entity(edge.to_ref, \"ENTITY\", extraction.source_id)\n\n        edge_created = await self._create_edge(\n            from_id=from_id,\n            to_id=to_id,\n            edge_type=edge.edge_type,\n            confidence=edge.confidence,\n        )\n\n        if edge_created:\n            result.edges_created.append(f\"{from_id}->{to_id}\")\n        else:\n            result.edges_skipped.append(f\"duplicate: {edge.from_ref}->{edge.to_ref}\")\n\n    return result"
+            }
+          ],
+          "notes": ["The implementation uses NetworkX (not rustworkx) for graph operations via the MatrixActor. See Section 5.10 for details."]
+        },
+        {
+          "section_number": "5.5",
+          "section_title": "Spreading Activation",
+          "status": "PLANNED (not yet implemented)",
+          "content": "The magic part. When filing a fact, proactively find related nodes.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "class SpreadingActivation:\n    def __init__(self, matrix: MemoryMatrix):\n        self.matrix = matrix\n        # rustworkx for fast graph traversal\n        import rustworkx as rx\n        self.graph = matrix.get_rustworkx_graph()\n\n    async def discover_hidden_links(\n        self,\n        new_entity_ids: list[UUID],\n        max_hops: int = 2,\n        similarity_threshold: float = 0.7\n    ) -> list[UUID]:\n        \"\"\"Find and create inferred edges.\"\"\"\n        inferred_edges = []\n\n        for eid in new_entity_ids:\n            # Get neighbors up to max_hops (using rustworkx BFS)\n            node_idx = self.matrix.id_to_idx[eid]\n            neighbors = rx.bfs_successors(self.graph, node_idx)\n\n            for neighbor_idx in neighbors:\n                neighbor_id = self.matrix.idx_to_id[neighbor_idx]\n\n                # Check against OTHER new entities\n                for other_eid in new_entity_ids:\n                    if other_eid != eid:\n                        # Compute similarity\n                        similarity = self.compute_similarity(other_eid, neighbor_id)\n\n                        if similarity > similarity_threshold:\n                            # Check edge doesn't already exist\n                            if not self.matrix.edge_exists(other_eid, neighbor_id, \"likely_related\"):\n                                edge_id = self.matrix.create_edge(\n                                    from_id=other_eid,\n                                    to_id=neighbor_id,\n                                    edge_type=\"likely_related\",\n                                    confidence=similarity * 0.5,  # Inferred = lower confidence\n                                    source_id=\"inferred\"\n                                )\n                                inferred_edges.append(edge_id)\n\n        return inferred_edges"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Example Spreading Activation",
+              "content": "Input: \"Alex is joining the Pi Project\"\n\nStep 1: Ben extracts\n- Entity: Alex (PERSON)\n- Entity: Pi Project (PROJECT)\n- Edge: Alex -> works_on -> Pi Project\n\nStep 2: The Dude files (explicit)\nAlex ----works_on----> Pi Project\n\nStep 3: Spreading activation finds\nPi Project ----has_member----> Sarah (existing)\n\nStep 4: The Dude infers (low confidence)\nAlex ----likely_teammate----> Sarah (confidence: 0.35)\n\nResult:\nNext time user asks about Alex, Luna can say:\n\"Should I introduce Alex to Sarah? They're both on Pi Project.\""
+            }
+          ]
+        },
+        {
+          "section_number": "5.5.1",
+          "section_title": "Entity Updates",
+          "status": "IMPLEMENTED",
+          "content": "The Dude handles entity profile updates from Ben using the EntityResolver.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def _file_entity_update(self, update: EntityUpdate) -> Optional[Entity]:\n    \"\"\"\n    File an entity update to the database.\n\n    Creates or updates an entity based on the update type.\n    Always creates a new version record (append-only).\n    \"\"\"\n    resolver = await self._get_entity_resolver()\n    if not resolver:\n        return None\n\n    # Resolve or create the entity\n    if update.update_type == ChangeType.CREATE or not update.entity_id:\n        entity = await resolver.resolve_or_create(\n            name=update.name,\n            entity_type=entity_type,\n            source=update.source or \"scribe\",\n        )\n    else:\n        entity = await resolver.get_entity(update.entity_id)\n\n    # Merge new facts with existing\n    merged_facts = dict(entity.core_facts)\n    merged_facts.update(update.facts)\n\n    # Update entity record and create version record (append-only)\n    ..."
+            }
+          ],
+          "notes": [
+            "**Key Features:**",
+            "- Uses EntityResolver for proper entity resolution",
+            "- Creates version records for every update (append-only history)",
+            "- Tracks `entity_versions_created` for audit"
+          ]
+        },
+        {
+          "section_number": "5.5.2",
+          "section_title": "Entity Rollback",
+          "status": "IMPLEMENTED",
+          "content": "The Dude can revert entities to previous versions.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def _rollback_entity(\n    self,\n    entity_id: str,\n    target_version: Optional[int] = None,\n    reason: str = \"Rollback requested\",\n) -> bool:\n    \"\"\"\n    Rollback an entity to a previous version.\n\n    Args:\n        entity_id: Entity ID to rollback\n        target_version: Target version (None = previous version)\n        reason: Reason for rollback\n\n    Returns:\n        True if rollback successful\n    \"\"\"\n    # Get target version record\n    row = await resolver.db.fetchone(\n        \"\"\"SELECT core_facts, full_profile, voice_config\n           FROM entity_versions WHERE entity_id = ? AND version = ?\"\"\",\n        (entity_id, target_version)\n    )\n\n    # Create new version with rollback data (preserves audit trail)\n    await resolver.db.execute(\n        \"\"\"INSERT INTO entity_versions (\n            entity_id, version, ..., change_type, change_summary\n        ) VALUES (?, ?, ..., 'rollback', ?)\"\"\",\n        (entity_id, new_version, f\"Rolled back to v{target_version}: {reason}\")\n    )"
+            }
+          ],
+          "notes": [
+            "**Key Features:**",
+            "- Retrieves target version from `entity_versions` table",
+            "- Creates a new version record with `change_type='rollback'`",
+            "- Preserves full audit trail of what was changed and why",
+            "- Closes out previous version with `valid_until` timestamp"
+          ]
+        },
+        {
+          "section_number": "5.6",
+          "section_title": "Synaptic Pruning",
+          "status": "IMPLEMENTED",
+          "content": "Periodically clean low-value connections and drifting nodes.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "class SynapticPruner:\n    def __init__(self, matrix: MemoryMatrix):\n        self.matrix = matrix\n\n    async def prune(self, config: PruningConfig = None) -> PruningResult:\n        \"\"\"Remove stale, low-confidence, never-accessed edges.\"\"\"\n        config = config or PruningConfig()\n        result = PruningResult()\n\n        # Find candidates for pruning\n        stale_edges = self.matrix.query(\"\"\"\n            SELECT e.id, e.confidence, e.created_at\n            FROM edges e\n            LEFT JOIN access_log a ON e.id = a.edge_id\n            WHERE e.confidence < :confidence_threshold\n              AND e.created_at < datetime('now', :age_threshold)\n              AND a.edge_id IS NULL\n        \"\"\", {\n            'confidence_threshold': config.confidence_threshold,  # 0.3\n            'age_threshold': config.age_threshold  # '-30 days'\n        })\n\n        for edge in stale_edges:\n            # Double-check: is this edge part of a chain we care about?\n            if not self.is_in_important_chain(edge.id):\n                self.matrix.delete_edge(edge.id)\n                result.pruned.append(edge.id)\n            else:\n                result.preserved.append(edge.id)\n\n        return result\n\n    def is_in_important_chain(self, edge_id: UUID) -> bool:\n        \"\"\"Check if edge connects to high-value nodes.\"\"\"\n        edge = self.matrix.get_edge(edge_id)\n        from_node = self.matrix.get_node(edge.from_id)\n        to_node = self.matrix.get_node(edge.to_id)\n\n        # Preserve if connects to identity nodes\n        if from_node.tags and 'identity' in from_node.tags:\n            return True\n        if to_node.tags and 'identity' in to_node.tags:\n            return True\n\n        return False\n\n@dataclass\nclass PruningConfig:\n    confidence_threshold: float = 0.3\n    age_threshold: str = '-30 days'\n    preserve_identity_chains: bool = True"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Drifting Node Cleanup",
+              "status": "IMPLEMENTED",
+              "content": "The Dude prunes \"drifting\" nodes - entities with low lock-in that are old and never reinforced.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "async def _prune_drifting_nodes(\n    self,\n    age_days: int = 30,\n    max_prune: int = 100,\n) -> dict:\n    \"\"\"\n    Remove nodes that are drifting and old.\n\n    Only prunes nodes that:\n    - Have lock_in_state = 'drifting'\n    - Are older than age_days\n    - Have zero reinforcement_count (never explicitly marked important)\n\n    Returns:\n        Dict with 'pruned', 'preserved', and 'candidates' counts\n    \"\"\"\n    # Get drifting nodes from MemoryMatrix\n    drifting = await matrix.get_drifting_nodes(limit=max_prune * 2)\n\n    for node in drifting:\n        # Never prune reinforced nodes\n        if node.reinforcement_count > 0:\n            continue\n\n        # Skip recent nodes\n        if node.created_at.timestamp() > cutoff:\n            continue\n\n        # Prune this node\n        await matrix.delete_node(node.id)"
+                }
+              ],
+              "notes": [
+                "**Key Features:**",
+                "- Uses lock-in state from MemoryMatrix (not graph degree)",
+                "- Respects `reinforcement_count` to protect user-marked important nodes",
+                "- Configurable `age_days` and `max_prune` limits",
+                "- Returns detailed statistics for monitoring"
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "5.6.1",
+          "section_title": "Graph Building via MatrixActor",
+          "status": "IMPLEMENTED",
+          "content": "The Librarian builds the knowledge graph through the MatrixActor's graph interface.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "async def _create_edge(\n    self,\n    from_id: str,\n    to_id: str,\n    edge_type: str,\n    confidence: float = 1.0,\n) -> bool:\n    \"\"\"\n    Create edge between nodes via MatrixActor's graph.\n\n    Returns True if created, False if duplicate.\n    \"\"\"\n    matrix_actor = self.engine.get_actor(\"matrix\")\n    if hasattr(matrix_actor, \"_graph\") and matrix_actor._graph:\n        graph = matrix_actor._graph\n\n        # Check if edge already exists (deduplication)\n        if graph.has_edge(from_id, to_id, edge_type):\n            return False\n\n        # Create edge\n        graph.add_edge(\n            from_id=from_id,\n            to_id=to_id,\n            edge_type=edge_type,\n            weight=confidence,\n        )\n\n        return True"
+            }
+          ],
+          "notes": [
+            "**Key Features:**",
+            "- Uses NetworkX graph via MatrixActor (not rustworkx)",
+            "- Automatic deduplication of edges",
+            "- Confidence stored as edge weight"
+          ]
+        },
+        {
+          "section_number": "5.7",
+          "section_title": "Scheduling Model",
+          "content": "The Dude runs on a **hybrid schedule**.",
+          "tables": [
+            {
+              "title": "Scheduling Modes",
+              "headers": ["Mode", "Trigger", "Action", "Priority"],
+              "rows": [
+                ["**Immediate**", "Ben's extraction arrives", "File nodes, create explicit edges", "High"],
+                ["**Deferred**", "Queue reaches threshold", "Batch process inferred edges", "Medium"],
+                ["**Periodic**", "Every 5-30 minutes", "Spreading activation, pruning, FAISS rebuild", "Low"]
+              ]
+            },
+            {
+              "title": "Why Hybrid?",
+              "headers": ["Mode", "Rationale"],
+              "rows": [
+                ["Immediate", "User expects memories to be available quickly"],
+                ["Deferred", "Inference is expensive, batch is efficient"],
+                ["Periodic", "Maintenance shouldn't block conversation"]
+              ]
+            }
+          ],
+          "code_blocks": [
+            {
+              "language": "python",
+              "code": "class LibrarianScheduler:\n    def __init__(self, librarian: Librarian):\n        self.librarian = librarian\n        self.inference_queue: list[UUID] = []\n        self.batch_threshold = 10\n\n    async def on_extraction(self, extraction: ExtractionOutput):\n        \"\"\"Event: Ben sent us an extraction.\"\"\"\n        # IMMEDIATE: File the obvious stuff\n        result = await self.librarian.wire(extraction)\n\n        # DEFERRED: Queue inference work\n        self.inference_queue.extend(result.objects_created)\n\n        if len(self.inference_queue) >= self.batch_threshold:\n            await self.process_inference_batch()\n\n    async def process_inference_batch(self):\n        \"\"\"Process accumulated inference work.\"\"\"\n        entity_ids = self.inference_queue.copy()\n        self.inference_queue.clear()\n\n        await self.librarian.spreading_activation.discover_hidden_links(entity_ids)\n\n    async def periodic_maintenance(self):\n        \"\"\"Runs every 15 minutes.\"\"\"\n        # 1. Process any remaining inference queue\n        if self.inference_queue:\n            await self.process_inference_batch()\n\n        # 2. Spreading activation on recent high-value nodes\n        recent_nodes = self.librarian.get_recent_nodes(hours=1)\n        await self.librarian.spreading_activation.discover_hidden_links(recent_nodes)\n\n        # 3. Prune stale edges\n        await self.librarian.pruner.prune()\n\n        # 4. Rebuild FAISS if significant changes\n        if self.librarian.matrix.needs_faiss_rebuild():\n            await self.librarian.matrix.rebuild_faiss_index()"
+            }
+          ]
+        },
+        {
+          "section_number": "5.8",
+          "section_title": "Retrieval Contract",
+          "status": "IMPLEMENTED",
+          "content": "When the Director needs context, The Dude provides it.",
+          "subsections": [
+            {
+              "title": "Interface",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass ContextRequest:\n    query: str\n    budget_preset: str  # \"minimal\", \"balanced\", \"rich\"\n    include_graph: bool = True\n    recency_weight: float = 0.3  # How much to favor recent nodes\n    entity_hints: list[str] = None  # Known entities to prioritize\n\n@dataclass\nclass ContextPacket:\n    nodes: list[MemoryNode]\n    edges: list[MemoryEdge]\n    token_count: int\n    search_method: str  # \"fts5\", \"faiss\", \"graph\", \"hybrid\"\n    retrieval_ms: int\n    confidence_range: tuple[float, float]  # min/max confidence"
+                }
+              ],
+              "tables": [
+                {
+                  "title": "Budget Presets",
+                  "headers": ["Preset", "Token Target", "Use Case"],
+                  "rows": [
+                    ["`minimal`", "~1800", "Voice mode, fast response needed"],
+                    ["`balanced`", "~3800", "Normal conversation"],
+                    ["`rich`", "~7200", "Deep research, complex query"]
+                  ]
+                }
+              ],
+              "code_blocks_2": [
+                {
+                  "language": "python",
+                  "code": "class ContextFetcher:\n    BUDGET_PRESETS = {\n        'minimal': 1800,\n        'balanced': 3800,\n        'rich': 7200\n    }\n\n    async def fetch(self, request: ContextRequest) -> ContextPacket:\n        \"\"\"\n        The Dude's main interface to the Director.\n        Returns context within token budget.\n        \"\"\""
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

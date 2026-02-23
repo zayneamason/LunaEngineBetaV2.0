@@ -62,6 +62,9 @@ except ImportError:
 # Prompt assembler (single funnel for all prompt construction)
 from luna.context.assembler import PromptAssembler, PromptRequest, PromptResult
 
+# Response modes (Level 2 prompt control)
+from luna.context.modes import ResponseMode, IntentClassification
+
 # Perception field (user behavioral observation layer)
 from luna.context.perception import PerceptionField
 
@@ -211,6 +214,7 @@ class DirectorActor(Actor):
         self._last_system_prompt: Optional[str] = None
         self._last_route_decision: Optional[str] = None
         self._last_prompt_meta: Optional[dict] = None
+        self._last_denied_count: int = 0  # Documents denied by permission filter
 
         # Fallback chain for resilient inference
         self._fallback_chain: Optional["FallbackChain"] = None
@@ -226,6 +230,10 @@ class DirectorActor(Actor):
         # Perception field (user behavioral observation layer — session-scoped)
         self._perception_field = PerceptionField()
         self._perception_turn_count: int = 0
+
+        # Intent classification state (L2 prompt control)
+        self._last_classified_mode: ResponseMode = ResponseMode.CHAT
+        self._last_memory_confidence: Optional["MemoryConfidence"] = None
 
         # Prompt assembler (single funnel for all prompt construction)
         self._assembler = PromptAssembler(self)
@@ -751,6 +759,7 @@ class DirectorActor(Actor):
         conversation_history = context.get("conversation_history", [])
         memories = context.get("memories", [])
         session_id = context.get("session_id")
+        self._last_denied_count = 0  # Reset per-request
 
         # Auto-fetch memories when caller provided none (e.g. voice/PersonaAdapter)
         if not memories:
@@ -835,6 +844,17 @@ class DirectorActor(Actor):
         else:
             logger.info("[TRACE] WARNING: No _entity_context available!")
 
+        # ── L2: Classify intent BEFORE routing ──────────────────────
+        intent = self._classify_intent(message, conversation_history)
+        logger.info(
+            "[INTENT] mode=%s confidence=%.2f signals=%s continuation=%s",
+            intent.mode.value, intent.confidence,
+            intent.signals, intent.is_continuation,
+        )
+
+        # ── Resolve access bridge (FaceID → permissions) ──────────
+        bridge_result = await self._resolve_bridge()
+
         # Check if we should delegate to Claude
         should_delegate = await self._should_delegate(message)
 
@@ -849,6 +869,8 @@ class DirectorActor(Actor):
                 memories=memories,
                 framed_context=framed_context,
                 route="delegated",
+                intent=intent,
+                bridge_result=bridge_result,
             ))
             system_prompt = assembler_result.system_prompt
             messages = assembler_result.messages
@@ -934,6 +956,12 @@ class DirectorActor(Actor):
                     packet = await self._context_pipeline.build(message)
                     system_prompt = packet.system_prompt
                     used_retrieval = packet.used_retrieval
+                    # Inject ACCESS block — pipeline skips the assembler
+                    _access_block = self._assembler._build_access_block(
+                        PromptRequest(message=message, bridge_result=bridge_result)
+                    )
+                    if _access_block:
+                        system_prompt = system_prompt + "\n\n" + _access_block
                     logger.info(f"[PROCESS-LOCAL-PIPELINE] Using unified context: {packet}")
                 except Exception as e:
                     logger.warning(f"[PROCESS-LOCAL] Pipeline failed, using assembler: {e}")
@@ -943,6 +971,7 @@ class DirectorActor(Actor):
                         memories=memories,
                         framed_context=framed_context,
                         route="local",
+                        bridge_result=bridge_result,
                     ))
                     system_prompt = assembler_result.system_prompt
             else:
@@ -952,6 +981,7 @@ class DirectorActor(Actor):
                     memories=memories,
                     framed_context=framed_context,
                     route="local",
+                    bridge_result=bridge_result,
                 ))
                 system_prompt = assembler_result.system_prompt
 
@@ -985,6 +1015,7 @@ class DirectorActor(Actor):
                 framed_context=framed_context,
                 route="fallback",
                 auto_fetch_memory=True,
+                bridge_result=bridge_result,
             ))
             system_prompt = assembler_result.system_prompt
             messages = assembler_result.messages
@@ -1178,6 +1209,7 @@ class DirectorActor(Actor):
         context_window = payload.get("context_window", "")  # Conversation history
 
         self._generating = True
+        self._last_denied_count = 0  # Reset per-request
         self._abort_requested = False
         self._current_correlation_id = msg.correlation_id
 
@@ -1185,6 +1217,9 @@ class DirectorActor(Actor):
 
         # PLANNING STEP: Decide routing upfront
         should_delegate = await self._should_delegate(user_message)
+
+        # ── Resolve access bridge (FaceID → permissions) ──────────
+        bridge_result = await self._resolve_bridge()
 
         if should_delegate:
             # Complex query → delegate to Claude, narrate in Luna's voice
@@ -1195,6 +1230,7 @@ class DirectorActor(Actor):
                 correlation_id=msg.correlation_id,
                 start_time=start_time,
                 context_window=context_window,
+                bridge_result=bridge_result,
             )
         elif self.local_available:
             # Simple query → pure local generation
@@ -1205,6 +1241,7 @@ class DirectorActor(Actor):
                 correlation_id=msg.correlation_id,
                 start_time=start_time,
                 context_window=context_window,
+                bridge_result=bridge_result,
             )
         else:
             # Fallback to Claude directly if local not available
@@ -1216,6 +1253,7 @@ class DirectorActor(Actor):
                 correlation_id=msg.correlation_id,
                 start_time=start_time,
                 context_window=context_window,
+                bridge_result=bridge_result,
             )
 
         self._generating = False
@@ -1299,6 +1337,132 @@ class DirectorActor(Actor):
 
         return False
 
+    def _classify_intent(
+        self,
+        message: str,
+        conversation_history: list,
+    ) -> IntentClassification:
+        """
+        Classify user intent into a ResponseMode.
+
+        Runs BEFORE routing. The mode is injected into the prompt
+        regardless of which inference backend handles generation.
+
+        Classification priority:
+            1. Continuation detection (short follow-ups inherit previous mode)
+            2. Explicit RECALL signals (memory/past event queries)
+            3. Explicit REFLECT signals (feelings/opinions)
+            4. Explicit ASSIST signals (task/help requests)
+            5. Default to CHAT
+        """
+        msg = message.strip()
+        msg_lower = msg.lower()
+        signals = []
+
+        # ── 1. Continuation Detection ──────────────────────────────
+        if len(msg) < 30 and conversation_history:
+            continuation_triggers = [
+                "keep going", "more", "continue", "go on", "and?",
+                "what else", "tell me more", "yeah", "yes", "mhm",
+                "ok", "okay", "right", "sure", "cool", ":)", "👀",
+                "interesting", "huh", "wow", "really", "no way",
+            ]
+            if any(t in msg_lower for t in continuation_triggers):
+                prev_mode = self._last_classified_mode
+                return IntentClassification(
+                    mode=prev_mode,
+                    confidence=0.9,
+                    signals=["continuation_detected"],
+                    is_continuation=True,
+                    previous_mode=prev_mode,
+                )
+
+        # ── 2. RECALL signals ──────────────────────────────────────
+        recall_patterns = [
+            "remember", "recall", "memory", "memories",
+            "what do you know about", "do you know about",
+            "tell me about our", "tell me about the",
+            "who is", "who was", "what was",
+            "earlier", "before", "last time",
+            "you mentioned", "you said", "we talked", "we discussed",
+            "about us", "our relationship", "how we", "what we",
+            "most special", "favorite memory", "best memory",
+            "what have i been", "what have we been",
+            "working on", "been up to",
+        ]
+        for p in recall_patterns:
+            if p in msg_lower:
+                signals.append(f"recall_keyword:{p}")
+
+        if signals:
+            mode = ResponseMode.RECALL
+            self._last_classified_mode = mode
+            return IntentClassification(
+                mode=mode,
+                confidence=0.85,
+                signals=signals,
+                is_continuation=False,
+                previous_mode=self._last_classified_mode,
+            )
+
+        # ── 3. REFLECT signals ─────────────────────────────────────
+        reflect_patterns = [
+            "how do you feel", "what do you think",
+            "your opinion", "your perspective", "your take",
+            "do you like", "do you enjoy", "do you want",
+            "are you happy", "are you sad", "are you okay",
+            "how are you", "how's it going", "how are things",
+            "what matters to you", "what's important",
+        ]
+        for p in reflect_patterns:
+            if p in msg_lower:
+                signals.append(f"reflect_keyword:{p}")
+
+        if signals:
+            mode = ResponseMode.REFLECT
+            self._last_classified_mode = mode
+            return IntentClassification(
+                mode=mode,
+                confidence=0.8,
+                signals=signals,
+                is_continuation=False,
+                previous_mode=self._last_classified_mode,
+            )
+
+        # ── 4. ASSIST signals ──────────────────────────────────────
+        assist_patterns = [
+            "help me", "can you", "could you", "please",
+            "how do i", "how to", "show me", "explain",
+            "write", "create", "build", "implement", "fix",
+            "search for", "look up", "find",
+            "debug", "analyze", "compare",
+        ]
+        for p in assist_patterns:
+            if p in msg_lower:
+                signals.append(f"assist_keyword:{p}")
+
+        if signals:
+            mode = ResponseMode.ASSIST
+            self._last_classified_mode = mode
+            return IntentClassification(
+                mode=mode,
+                confidence=0.75,
+                signals=signals,
+                is_continuation=False,
+                previous_mode=self._last_classified_mode,
+            )
+
+        # ── 5. Default: CHAT ───────────────────────────────────────
+        mode = ResponseMode.CHAT
+        self._last_classified_mode = mode
+        return IntentClassification(
+            mode=mode,
+            confidence=0.7,
+            signals=["default"],
+            is_continuation=False,
+            previous_mode=self._last_classified_mode,
+        )
+
     async def _generate_local_only(
         self,
         user_message: str,
@@ -1307,6 +1471,7 @@ class DirectorActor(Actor):
         correlation_id: str,
         start_time: float,
         context_window: str = "",
+        bridge_result=None,
     ) -> None:
         """
         Pure local generation - no delegation detection needed.
@@ -1335,6 +1500,13 @@ class DirectorActor(Actor):
 
                 packet = await self._context_pipeline.build(user_message)
                 full_system_prompt = packet.system_prompt
+                # Inject ACCESS block — pipeline skips the assembler so we must add it here
+                from luna.context.assembler import PromptRequest
+                _access_block = self._assembler._build_access_block(
+                    PromptRequest(message=user_message, bridge_result=bridge_result)
+                )
+                if _access_block:
+                    full_system_prompt = full_system_prompt + "\n\n" + _access_block
                 print(f"✓ [LOCAL] Context pipeline: ring={packet.ring_size}, entities={len(packet.entities)}")
                 self._last_system_prompt = full_system_prompt
                 self._last_route_decision = "local"
@@ -1345,6 +1517,7 @@ class DirectorActor(Actor):
                     conversation_history=[],
                     route="local",
                     auto_fetch_memory=True,
+                    bridge_result=bridge_result,
                 ))
                 full_system_prompt = assembler_result.system_prompt
                 self._last_system_prompt = full_system_prompt
@@ -1359,6 +1532,7 @@ class DirectorActor(Actor):
                 conversation_history=[],
                 route="local",
                 auto_fetch_memory=True,
+                bridge_result=bridge_result,
             ))
             full_system_prompt = assembler_result.system_prompt
             self._last_system_prompt = full_system_prompt
@@ -1400,6 +1574,7 @@ class DirectorActor(Actor):
                 "latency_ms": elapsed_ms,
                 "local": True,
                 "planned": True,
+                "access_denied_count": self._last_denied_count,
             })
 
         except Exception as e:
@@ -1536,24 +1711,67 @@ Continue the conversation naturally, maintaining context from above."""
 
         return full_system_prompt
 
+    async def _resolve_bridge(self):
+        """
+        Resolve the access bridge for the current speaker (FaceID).
+
+        Returns BridgeResult or None. Cached per-message — call freely.
+        Uses IdentityActor.current to get entity_id, then looks up the
+        access_bridge table in the engine DB.
+        """
+        if not self.engine:
+            return None
+        identity_actor = self.engine.get_actor("identity")
+        if not identity_actor or not identity_actor.current.is_present:
+            return None
+        entity_id = identity_actor.current.entity_id
+        if not entity_id:
+            return None
+        try:
+            from luna.identity.bridge import AccessBridge
+            matrix_actor = self.engine.get_actor("matrix")
+            if not matrix_actor or not matrix_actor.is_ready:
+                return None
+            db = matrix_actor._matrix.db
+            bridge = AccessBridge(db)
+            return await bridge.lookup(entity_id)
+        except Exception as e:
+            logger.warning("Bridge resolution failed: %s", e)
+            return None
+
     async def _fetch_memory_context(self, query: str, max_tokens: int = 1500) -> str:
         """
         Fetch relevant memory context for a query.
 
         UPDATED: Uses Memory Economy constellation assembly when available for
         cluster-aware retrieval with lock-in prioritization.
+        Also sets self._last_memory_confidence for L1 prompt control.
         """
+        from luna.context.assembler import MemoryConfidence
+
         if not self.engine:
             logger.debug("Memory fetch: No engine available")
+            self._last_memory_confidence = MemoryConfidence(
+                match_count=0, relevant_count=0, avg_similarity=0.0,
+                best_lock_in="none", has_entity_match=False, query=query,
+            )
             return ""
 
         matrix = self.engine.get_actor("matrix")
         if not matrix:
             logger.warning("Memory fetch: Matrix actor not found")
+            self._last_memory_confidence = MemoryConfidence(
+                match_count=0, relevant_count=0, avg_similarity=0.0,
+                best_lock_in="none", has_entity_match=False, query=query,
+            )
             return ""
 
         if not matrix.is_ready:
             logger.warning(f"Memory fetch: Matrix not ready (state: {getattr(matrix, '_state', 'unknown')})")
+            self._last_memory_confidence = MemoryConfidence(
+                match_count=0, relevant_count=0, avg_similarity=0.0,
+                best_lock_in="none", has_entity_match=False, query=query,
+            )
             return ""
 
         logger.debug(f"Memory fetch: Searching for query '{query[:50]}...'")
@@ -1566,6 +1784,11 @@ Continue the conversation naturally, maintaining context from above."""
             # Try Memory Economy constellation assembly first (cluster-aware retrieval)
             constellation_context = await self._fetch_constellation_context(query, max_tokens, matrix)
             if constellation_context:
+                # Constellation retrieval implies high-quality matches
+                self._last_memory_confidence = MemoryConfidence(
+                    match_count=5, relevant_count=3, avg_similarity=0.0,
+                    best_lock_in="settled", has_entity_match=True, query=query,
+                )
                 return constellation_context
 
             # Try get_context if available (with scope awareness)
@@ -1577,21 +1800,51 @@ Continue the conversation naturally, maintaining context from above."""
                     scope=active_scopes[0] if len(active_scopes) == 1 else None,
                 )
                 if context:
+                    # Permission gate: strip DOCUMENT blocks from pre-formatted string
+                    bridge_result = await self._resolve_bridge()
+                    if bridge_result is None or not bridge_result.can_see_all:
+                        import re
+                        context = re.sub(
+                            r"<memory\s+type=['\"](?:DOCUMENT|document)['\"][^>]*>.*?</memory>",
+                            "", context, flags=re.DOTALL,
+                        ).strip()
+                        if not context:
+                            logger.info("Memory fetch: all content was DOCUMENT, stripped by permission gate")
                     # Prepend project header if active
                     if active_project:
                         context = f"[Active Project: {active_project}]\n\n{context}"
-                    logger.info(f"Memory fetch: Found context ({len(context)} chars, scopes={active_scopes})")
-                    return context
+                    if context.strip():
+                        logger.info(f"Memory fetch: Found context ({len(context)} chars, scopes={active_scopes})")
+                        self._last_memory_confidence = MemoryConfidence(
+                            match_count=1, relevant_count=1, avg_similarity=0.0,
+                            best_lock_in="fluid", has_entity_match=False, query=query,
+                        )
+                        return context
                 else:
                     logger.debug("Memory fetch: get_context returned empty")
 
             # Fallback to direct search
-            return await self._fetch_basic_memory_context(query, max_tokens, matrix)
+            result = await self._fetch_basic_memory_context(query, max_tokens, matrix)
+            if result:
+                self._last_memory_confidence = MemoryConfidence(
+                    match_count=1, relevant_count=1, avg_similarity=0.0,
+                    best_lock_in="drifting", has_entity_match=False, query=query,
+                )
+            else:
+                self._last_memory_confidence = MemoryConfidence(
+                    match_count=0, relevant_count=0, avg_similarity=0.0,
+                    best_lock_in="none", has_entity_match=False, query=query,
+                )
+            return result
 
         except Exception as e:
             logger.error(f"Memory fetch failed: {type(e).__name__}: {e}")
             import traceback
             logger.error(f"Memory fetch traceback: {traceback.format_exc()}")
+            self._last_memory_confidence = MemoryConfidence(
+                match_count=0, relevant_count=0, avg_similarity=0.0,
+                best_lock_in="none", has_entity_match=False, query=query,
+            )
             return ""
 
     async def _fetch_constellation_context(
@@ -1641,9 +1894,14 @@ Continue the conversation naturally, maintaining context from above."""
 
             cluster_dicts = [{"cluster": c, "score": score} for c, score in cluster_results]
             node_dicts = [
-                {"node_id": n.id, "content": n.content, "node_type": n.node_type, "lock_in": getattr(n, 'lock_in', 0.5)}
+                {"node_id": n.id, "id": n.id, "content": n.content, "node_type": n.node_type, "lock_in": getattr(n, 'lock_in', 0.5)}
                 for n in nodes
             ]
+
+            # Permission gate: strip DOCUMENT nodes the speaker can't see
+            from luna.identity.permissions import gate_content
+            bridge_result = await self._resolve_bridge()
+            node_dicts, _denied = await gate_content(node_dicts, bridge_result, source="constellation")
 
             constellation = assembler.assemble(
                 clusters=cluster_dicts,
@@ -1716,6 +1974,12 @@ Continue the conversation naturally, maintaining context from above."""
         nodes = filtered_nodes or nodes  # Fallback to all if filter removes everything
         logger.debug(f"Memory fetch: After filtering, {len(nodes)} nodes")
 
+        # Permission gate: strip DOCUMENT nodes the speaker can't access
+        from luna.identity.permissions import gate_content as _gate
+        bridge_result = await self._resolve_bridge()
+        nodes, denied = await _gate(nodes, bridge_result, source="basic_memory")
+        self._last_denied_count = len(denied)
+
         context_parts = []
         for node in nodes:
             age = self._humanize_age(node.created_at) if hasattr(node, 'created_at') else "unknown"
@@ -1758,6 +2022,7 @@ Continue the conversation naturally, maintaining context from above."""
         correlation_id: str,
         start_time: float,
         context_window: str = "",
+        bridge_result=None,
     ) -> None:
         """
         Fast delegation flow:
@@ -1796,6 +2061,7 @@ Continue the conversation naturally, maintaining context from above."""
             conversation_history=conversation_history,
             route="delegated",
             auto_fetch_memory=True,
+            bridge_result=bridge_result,
         ))
         enhanced_system_prompt = assembler_result.system_prompt
         self._last_system_prompt = assembler_result.system_prompt
@@ -1803,7 +2069,8 @@ Continue the conversation naturally, maintaining context from above."""
         self._last_prompt_meta = assembler_result.to_dict()
         print(f"✓ [DELEGATION] Assembler: identity={assembler_result.identity_source} "
               f"memory={assembler_result.memory_source} voice={assembler_result.voice_injected} "
-              f"temporal={assembler_result.gap_category} tokens≈{assembler_result.prompt_tokens}")
+              f"temporal={assembler_result.gap_category} access={assembler_result.access_injected} "
+              f"tokens≈{assembler_result.prompt_tokens}")
 
         # Memory context indicator — assembler already embedded memory in system_prompt
         # This is used below to decide query framing (knowledge queries check memories first)
@@ -1916,6 +2183,7 @@ Keep your response focused and conversational."""
 
             # Stream directly from provider to user (no Qwen narration pass)
             # Luna's voice is injected via enhanced_system_prompt, not post-hoc rewriting
+            provider_succeeded = False
             if provider and provider_name != "claude":
                 # Use registry provider — stream directly to callbacks
                 print(f"✓ [DELEGATION] Streaming from {provider_name} provider...")
@@ -1925,22 +2193,29 @@ Keep your response focused and conversational."""
                 for m in messages:
                     llm_messages.append(LLMMessage(m["role"], m["content"]))
 
-                async for text in provider.stream(
-                    messages=llm_messages,
-                    temperature=0.7,
-                    max_tokens=max_tokens,
-                ):
-                    if self._abort_requested:
-                        print(f"⚠ [DELEGATION] Aborted!")
-                        break
-                    response_text += text
-                    token_count += 1
-                    await self._stream_to_callbacks(text)
+                try:
+                    async for text in provider.stream(
+                        messages=llm_messages,
+                        temperature=0.7,
+                        max_tokens=max_tokens,
+                    ):
+                        if self._abort_requested:
+                            print(f"⚠ [DELEGATION] Aborted!")
+                            break
+                        response_text += text
+                        token_count += 1
+                        await self._stream_to_callbacks(text)
 
-                elapsed_ms = (time.time() - start_time) * 1000
-                print(f"✓ [DELEGATION] Streamed: {token_count} chunks via {provider_name} in {elapsed_ms:.0f}ms")
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    print(f"✓ [DELEGATION] Streamed: {token_count} chunks via {provider_name} in {elapsed_ms:.0f}ms")
+                    provider_succeeded = True
+                except Exception as provider_err:
+                    logger.warning(f"[DELEGATION] {provider_name} failed: {provider_err}, trying fallback chain...")
+                    print(f"⚠ [DELEGATION] {provider_name} failed, trying fallback chain...")
+                    response_text = ""
+                    token_count = 0
 
-            else:
+            if not provider_succeeded:
                 # Use FallbackChain for resilient inference
                 if self._fallback_chain:
                     print(f"✓ [DELEGATION] Streaming from FallbackChain...")
@@ -2007,11 +2282,31 @@ Keep your response focused and conversational."""
                 "delegated": True,
                 "planned": True,
                 "narration_applied": False,
+                "access_denied_count": self._last_denied_count,
             })
 
         except Exception as e:
             print(f"❌ [DELEGATION] Failed: {e}")
             logger.error(f"Delegation failed: {e}")
+
+            # Fall back to local inference if available
+            if self.local_available:
+                print(f"🏠 [DELEGATION→LOCAL] Falling back to local Qwen 3B...")
+                logger.info(f"Delegation failed, falling back to local inference: {e}")
+                try:
+                    await self._generate_local_only(
+                        user_message=user_message,
+                        system_prompt=system_prompt,
+                        max_tokens=max_tokens,
+                        correlation_id=correlation_id,
+                        start_time=start_time,
+                        context_window=context_window,
+                        bridge_result=bridge_result,
+                    )
+                    return
+                except Exception as local_err:
+                    logger.error(f"Local fallback also failed: {local_err}")
+
             await self.send_to_engine("generation_error", {
                 "error": str(e),
                 "correlation_id": correlation_id,
@@ -2105,6 +2400,7 @@ Keep your response focused and conversational."""
                     "output_tokens": token_count,
                     "latency_ms": total_elapsed_ms,
                     "delegated": True,
+                    "access_denied_count": self._last_denied_count,
                 })
             else:
                 # Pure local generation
@@ -2118,6 +2414,7 @@ Keep your response focused and conversational."""
                     "output_tokens": token_count,
                     "latency_ms": elapsed_ms,
                     "local": True,
+                    "access_denied_count": self._last_denied_count,
                 })
 
         except Exception as e:
@@ -2251,6 +2548,7 @@ OUTPUT:"""
         correlation_id: str,
         start_time: float,
         context_window: str = "",
+        bridge_result=None,
     ) -> None:
         """Fallback: Generate via LLM registry (or Claude) when local not available."""
         # Record user message to ring buffer (CRITICAL for history)
@@ -2377,6 +2675,7 @@ OUTPUT:"""
                 "output_tokens": token_count,
                 "latency_ms": elapsed_ms,
                 "fallback": True,  # Local not available
+                "access_denied_count": self._last_denied_count,
             })
 
         except Exception as e:

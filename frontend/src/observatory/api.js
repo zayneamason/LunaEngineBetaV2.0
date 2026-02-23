@@ -76,6 +76,13 @@ export const api = {
   recomputeLayout: () =>
     fetchJSON('/api/layout/recompute', { method: 'POST' }),
 
+  // Thread endpoints
+  threads: (status = null) => {
+    let url = '/api/threads'
+    if (status) url += `?status=${status}`
+    return fetchJSON(url)
+  },
+
   // Journal entries (from data/journal/ markdown files)
   journals: () => fetchJSON('/api/journals'),
   journalDetail: (filename) => fetchJSON(`/api/journals/${encodeURIComponent(filename)}`),

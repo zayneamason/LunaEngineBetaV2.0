@@ -44,6 +44,10 @@ class EventType(IntEnum):
     GENERATION_COMPLETE = 31
     ACTOR_MESSAGE = 32
 
+    # Identity events (FaceID)
+    IDENTITY_RECOGNIZED = 40
+    IDENTITY_LOST = 41
+
     # System events
     SHUTDOWN = 90
     HEARTBEAT = 91
@@ -79,6 +83,8 @@ class InputEvent:
                 return EventPriority.PARTIAL
             case EventType.MCP_REQUEST | EventType.MCP_TOOL_RESULT:
                 return EventPriority.MCP
+            case EventType.IDENTITY_RECOGNIZED | EventType.IDENTITY_LOST:
+                return EventPriority.INTERNAL
             case _:
                 return EventPriority.INTERNAL
 

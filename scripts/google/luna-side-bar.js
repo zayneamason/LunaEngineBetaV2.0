@@ -177,6 +177,6 @@ function setLunaApiUrl(newUrl) {
  */
 function getLunaApiUrl() {
   // This line is auto-updated by launch_luna.sh on every tunnel start
-  var url = 'https://decent-modification-contacted-commander.trycloudflare.com';  // AUTO-TUNNEL-URL
+  var url = 'https://peer-european-aruba-fibre.trycloudflare.com';  // AUTO-TUNNEL-URL
   return url;
 }

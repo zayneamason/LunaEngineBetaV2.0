@@ -55,9 +55,14 @@ class SandboxMatrix:
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
 
-        # Load sqlite-vec using aiosqlite's native methods
-        await self._db.enable_load_extension(True)
-        await self._db.load_extension(sqlite_vec.loadable_path())
+        # Load sqlite-vec — required for sandbox schema, optional for production reads
+        try:
+            await self._db.enable_load_extension(True)
+            await self._db.load_extension(sqlite_vec.loadable_path())
+        except (AttributeError, Exception) as e:
+            if not self._skip_schema:
+                raise  # Sandbox mode needs vec extension
+            # Production/read-only mode — vec not required for basic queries
 
         if not self._skip_schema:
             # Run schema — individual execute() calls to avoid executescript()

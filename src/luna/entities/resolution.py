@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,6 +33,94 @@ _missed_names_log: list[str] = []
 
 # Type alias for dict returns (for test compatibility)
 EntityDict = dict
+
+
+# ==========================================================================
+# Entity Stoplist — file-based, growable without code deploys.
+# Hardcoded set is fallback; data/entity_stoplist.json is authoritative.
+# ==========================================================================
+
+_HARDCODED_STOPLIST = {
+    "person", "people", "user", "users", "assistant", "system",
+    "speaker", "the speaker", "friend", "family", "someone", "everyone",
+    "other person", "the other person", "math teacher",
+    "printmaking enthusiast", "person a", "testuser",
+    "consciousness", "memories", "memory", "memory system", "memory systems",
+    "components", "systems", "cooking", "tacos", "ingredients",
+    "voice", "house", "self-image",
+    "a", "i", "we", "you", "it", "he", "she", "they", "me",
+    "my", "our", "your", "his", "her", "their",
+    "mcp server", "mcp tools", "ci pipeline", "github",
+    "luna_smart_fetch", "ai system", "ai companion", "ai",
+    "memory integration", "observability layer", "voice app",
+    "rotating history system", "interface prototype", "particle light",
+    "house container", "technical work", "new architecture",
+    "small friendly house container", "voice connection",
+    "voice to memory pipeline", "house design", "observability systems",
+    "personality monitoring", "personality engine", "voice integration",
+    "embodiment project", "memory system architecture",
+    "corporate ai systems", "extraction layers", "consciousness layers",
+    "conversation flow", "owls", "raccoon",
+}
+
+_STOPLIST_PATH = Path(__file__).parent.parent.parent.parent / "data" / "entity_stoplist.json"
+_REVIEW_QUEUE_PATH = Path(__file__).parent.parent.parent.parent / "data" / "entity_review_queue.json"
+
+# Minimum name length for entity creation (also used by detect_mentions)
+MIN_ENTITY_NAME_LENGTH = 2
+
+# Characters that indicate a technical identifier, not an entity name
+_TECH_IDENTIFIER_CHARS = set("_(){}[]/\\@#$%^&*+=<>|~`")
+
+
+def load_stoplist() -> set[str]:
+    """Load the stoplist from file, falling back to hardcoded."""
+    if _STOPLIST_PATH.exists():
+        try:
+            data = json.loads(_STOPLIST_PATH.read_text())
+            return {t.lower().strip() for t in data.get("terms", [])}
+        except (json.JSONDecodeError, OSError):
+            pass
+    return _HARDCODED_STOPLIST
+
+
+def add_to_stoplist(term: str) -> None:
+    """Add a term to the file-based stoplist."""
+    if _STOPLIST_PATH.exists():
+        data = json.loads(_STOPLIST_PATH.read_text())
+    else:
+        data = {"version": 1, "terms": list(_HARDCODED_STOPLIST)}
+
+    normalized = term.lower().strip()
+    if normalized not in {t.lower() for t in data["terms"]}:
+        data["terms"].append(normalized)
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _STOPLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _STOPLIST_PATH.write_text(json.dumps(data, indent=2))
+
+
+def _flag_entity_for_review(entity_id: str, name: str, entity_type: str) -> None:
+    """Add a newly created entity to the review queue file."""
+    if _REVIEW_QUEUE_PATH.exists():
+        try:
+            queue = json.loads(_REVIEW_QUEUE_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            queue = []
+    else:
+        queue = []
+
+    queue.append({
+        "entity_id": entity_id,
+        "name": name,
+        "type": entity_type,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    _REVIEW_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _REVIEW_QUEUE_PATH.write_text(json.dumps(queue, indent=2))
+
+
+# Module-level cache — loaded once, refreshed on add
+ENTITY_STOPLIST: set[str] = load_stoplist()
 
 
 class EntityResolver:
@@ -195,12 +284,13 @@ class EntityResolver:
         name: str,
         entity_type: str = "person",
         source: str = ""
-    ) -> Entity:
+    ) -> Optional[Entity]:
         """
         Resolve existing entity or create new one.
 
         If an entity with the given name exists (by name or alias), returns it.
-        Otherwise, creates a new entity with default values.
+        Otherwise, creates a new entity with default values — but ONLY if the
+        name passes validation (stoplist, min length, type checks).
 
         Args:
             name: Entity name to resolve or create
@@ -208,13 +298,42 @@ class EntityResolver:
             source: Source of creation (for audit trail)
 
         Returns:
-            Existing or newly created Entity
+            Existing or newly created Entity, or None if name is invalid
         """
         # Try to resolve first
         existing = await self.resolve_entity(name)
         if existing:
             logger.debug(f"Resolved existing entity: {existing.id}")
             return existing
+
+        # === CREATION GATES ===
+
+        stripped = name.strip()
+
+        # Gate 1: Stoplist (file-based, growable)
+        if stripped.lower() in ENTITY_STOPLIST:
+            logger.debug(f"Entity creation blocked by stoplist: '{name}'")
+            return None
+
+        # Gate 2: Minimum name length
+        if len(stripped) < MIN_ENTITY_NAME_LENGTH:
+            logger.debug(f"Entity creation blocked — name too short: '{name}'")
+            return None
+
+        # Gate 3: Person type validation — require capitalized name
+        if entity_type == "person" and stripped and not stripped[0].isupper():
+            logger.debug(f"Entity creation blocked — person name not capitalized: '{name}'")
+            return None
+
+        # Gate 4: Reject single lowercase words (common nouns, not proper nouns)
+        if " " not in stripped and stripped[0].islower():
+            logger.debug(f"Entity creation blocked — single lowercase word: '{name}'")
+            return None
+
+        # Gate 5: Reject technical identifiers (underscores, brackets, etc.)
+        if any(c in stripped for c in _TECH_IDENTIFIER_CHARS):
+            logger.debug(f"Entity creation blocked — technical identifier: '{name}'")
+            return None
 
         # Create new entity
         entity_id = self._normalize_id(name)
@@ -289,6 +408,9 @@ class EntityResolver:
         )
 
         logger.info(f"Created new entity: {entity_id} ({entity_type})")
+
+        # Flag for review in the next hygiene quest
+        _flag_entity_for_review(entity_id, name, entity_type)
 
         # Return the created entity
         return Entity(
@@ -1023,10 +1145,6 @@ class EntityResolver:
     # MENTION DETECTION (for context building)
     # =========================================================================
 
-    # Minimum length for entity name/alias matching
-    # Prevents garbage matches on single letters like "A", "I", "you"
-    MIN_ENTITY_NAME_LENGTH = 3
-
     def _is_word_boundary_match(self, name: str, text: str) -> bool:
         """
         Check if name appears as a whole word in text (not substring).
@@ -1088,8 +1206,13 @@ class EntityResolver:
                 entity = self._row_to_entity(row)
 
                 # Skip entities with very short names (prevents "A", "I", "you" garbage matches)
-                if len(entity.name) < self.MIN_ENTITY_NAME_LENGTH:
+                if len(entity.name) < MIN_ENTITY_NAME_LENGTH:
                     logger.debug(f"[TRACE]   - Skipping short name: '{entity.name}'")
+                    continue
+
+                # Skip entities on the stoplist
+                if entity.name.lower().strip() in ENTITY_STOPLIST:
+                    logger.debug(f"[TRACE]   - Skipping stoplist name: '{entity.name}'")
                     continue
 
                 logger.info(f"[TRACE]   - Checking: {entity.name}")
@@ -1106,7 +1229,7 @@ class EntityResolver:
                 # Check aliases using word boundary matching
                 for alias in entity.aliases:
                     # Skip short aliases too
-                    if len(alias) < self.MIN_ENTITY_NAME_LENGTH:
+                    if len(alias) < MIN_ENTITY_NAME_LENGTH:
                         continue
                     if self._is_word_boundary_match(alias, text):
                         mentioned.append(entity)

@@ -47,6 +47,7 @@ from mcp.server.fastmcp import FastMCP
 
 # Import tool modules
 from luna_mcp.tools import filesystem, memory, state, git, forge, qa, eden
+from luna_mcp.observatory import tools as observatory
 
 # Import auto-session functions
 from luna_mcp.tools.memory import (
@@ -915,6 +916,7 @@ async def dataroom_search(query: str, category: str = None, status: str = None, 
 
     Searches DOCUMENT nodes ingested from the Google Drive data room.
     Can filter by category (e.g. "2. Financials") or status ("Final", "Draft", "Needs Review").
+    Requires FaceID authentication — documents are gated by the dual-tier permission bridge.
 
     Args:
         query: Search text (e.g. "cost breakdown", "LOI", "team")
@@ -926,6 +928,14 @@ async def dataroom_search(query: str, category: str = None, status: str = None, 
         Formatted list of matching documents with links
     """
     try:
+        # Check FaceID identity — data room requires authentication
+        try:
+            status_resp = await state._call_api("GET", "/status")
+            identity = status_resp.get("identity", {})
+            if not identity.get("is_present"):
+                return "Data room access requires FaceID authentication. Please ensure the camera can see you."
+        except Exception:
+            pass  # If status check fails, let the gated API handle it
         params = {"query": query, "limit": limit}
         if category:
             params["category"] = category
@@ -1011,6 +1021,7 @@ async def dataroom_recent(days: int = 7) -> str:
     Get recently synced data room documents.
 
     Shows documents added or updated in the last N days.
+    Requires FaceID authentication.
 
     Args:
         days: Look back this many days (default 7)
@@ -1019,6 +1030,14 @@ async def dataroom_recent(days: int = 7) -> str:
         List of recently synced documents
     """
     try:
+        # Check FaceID identity
+        try:
+            status_resp = await state._call_api("GET", "/status")
+            identity = status_resp.get("identity", {})
+            if not identity.get("is_present"):
+                return "Data room access requires FaceID authentication. Please ensure the camera can see you."
+        except Exception:
+            pass
         response = await state._call_api("GET", f"/dataroom/recent?days={days}")
         docs = response.get("documents", [])
 
@@ -1040,6 +1059,232 @@ async def dataroom_recent(days: int = 7) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error getting recent documents: {str(e)}"
+
+
+# ==============================================================================
+# Observatory Tools — Memory Matrix diagnostics
+# ==============================================================================
+
+@mcp.tool()
+async def observatory_stats() -> str:
+    """
+    Database health overview: node/edge/entity/mention counts, lock-in distribution, DB size.
+
+    Returns:
+        JSON with counts by type, lock-in stats, and file size
+    """
+    import json
+    result = await observatory.tool_observatory_stats()
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_graph_dump(limit: int = 500, min_lock_in: float = 0.0) -> str:
+    """
+    Full graph snapshot for visualization.
+
+    Args:
+        limit: Maximum nodes to return (default 500)
+        min_lock_in: Minimum lock-in threshold (default 0.0)
+
+    Returns:
+        JSON with nodes and edges arrays
+    """
+    import json
+    result = await observatory.tool_observatory_graph_dump(limit, min_lock_in)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_search(query: str, method: str = "hybrid") -> str:
+    """
+    Multi-method search comparison: FTS5, vector, hybrid.
+
+    In diagnostic mode, vector search is unavailable (requires engine runtime).
+    Use luna_smart_fetch for live vector+hybrid search.
+
+    Args:
+        query: Search query
+        method: "fts5", "vector", "hybrid", or "all"
+
+    Returns:
+        JSON with search results and timing
+    """
+    import json
+    result = await observatory.tool_observatory_search(query, method)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_replay(query: str) -> str:
+    """
+    Trace the retrieval pipeline phase-by-phase with timing.
+
+    Shows FTS5 results, graph neighborhood, and retrieval parameters.
+    Vector and activation phases require engine runtime.
+
+    Args:
+        query: Query to trace through the pipeline
+
+    Returns:
+        JSON with phase-by-phase results and params
+    """
+    import json
+    result = await observatory.tool_observatory_replay(query)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_tune(param: str, value: float) -> str:
+    """
+    Adjust a retrieval parameter. Persists to data/observatory_config.json.
+
+    Available params: decay, min_activation, max_hops, token_budget,
+    sim_threshold, fts5_limit, vector_limit, rrf_k,
+    lock_in_node_weight, lock_in_access_weight, lock_in_edge_weight,
+    lock_in_age_weight, cluster_sim_threshold
+
+    Args:
+        param: Parameter name
+        value: New value
+
+    Returns:
+        JSON with updated params
+    """
+    import json
+    result = await observatory.tool_observatory_tune(param, value)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_entities(
+    entity_id: str = "", entity_type: str = "", limit: int = 20
+) -> str:
+    """
+    List or inspect entities in the knowledge graph.
+
+    With no args: lists all entities ranked by mention count.
+    With entity_id: returns full detail (mentions, relationships).
+    With entity_type: filters by type (person, persona, place, project).
+
+    Args:
+        entity_id: Specific entity to inspect (optional)
+        entity_type: Filter by type (optional)
+        limit: Max results for list mode (default 20)
+
+    Returns:
+        JSON with entity details or list
+    """
+    import json
+    result = await observatory.tool_observatory_entities(entity_id, entity_type, limit)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_maintenance_sweep() -> str:
+    """
+    Scan for graph health issues. Returns quest candidates (does NOT auto-create).
+
+    Checks: orphan entities, stale entities, fragmented profiles, drifting high-access nodes.
+
+    Returns:
+        JSON with candidate quests
+    """
+    import json
+    result = await observatory.tool_observatory_maintenance_sweep()
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_quest_board(
+    action: str = "list",
+    quest_id: str = "",
+    journal_text: str = "",
+    status: str = "",
+    quest_type: str = "",
+) -> str:
+    """
+    Manage observatory quests: list, accept, complete, or create from sweep.
+
+    Actions:
+    - "list": List quests (optionally filter by status/quest_type)
+    - "accept": Accept a quest (requires quest_id)
+    - "complete": Complete a quest (requires quest_id, optional journal_text)
+    - "create": Run maintenance sweep and create quests from candidates
+
+    Args:
+        action: "list", "accept", "complete", or "create"
+        quest_id: Quest ID for accept/complete
+        journal_text: Reflection text for completed quests
+        status: Filter by status (available, active, complete)
+        quest_type: Filter by type (scavenger, treasure_hunt, contract, side)
+
+    Returns:
+        JSON with action result
+    """
+    import json
+    result = await observatory.tool_observatory_quest_board(
+        action, quest_id, journal_text, status, quest_type
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def observatory_quest_create(
+    title: str,
+    objective: str,
+    quest_type: str = "side",
+    priority: str = "medium",
+    subtitle: str = "",
+    source: str = "manual",
+    journal_prompt: str = "",
+    target_entity_ids: str = "[]",
+    target_node_ids: str = "[]",
+) -> str:
+    """
+    Create a quest manually.
+
+    Args:
+        title: Quest title
+        objective: What needs to be done
+        quest_type: Type - side, contract, main, treasure_hunt, scavenger
+        priority: Priority - low, medium, high, urgent
+        subtitle: Short subtitle
+        source: Where this quest came from (e.g. "Luna diagnostic", "manual")
+        journal_prompt: Prompt for the journal entry on completion
+        target_entity_ids: JSON array of entity IDs to target (e.g. '["entity-abc"]')
+        target_node_ids: JSON array of node IDs to target (e.g. '["node-xyz"]')
+
+    Returns:
+        JSON with quest_id, title, status
+    """
+    import json
+    result = await observatory.tool_observatory_quest_create(
+        title, objective, quest_type, priority, subtitle,
+        source, journal_prompt, target_entity_ids, target_node_ids,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
+# ==============================================================================
+# Observatory: Entity Review Quest
+# ==============================================================================
+
+
+@mcp.tool()
+async def observatory_entity_review_quest() -> str:
+    """Check entity review queue and create a hygiene quest for pending entities.
+
+    Reads data/entity_review_queue.json (populated by the entity creation gate)
+    and creates a quest for Luna to review newly created entities. Clears the
+    queue after quest creation.
+
+    Returns:
+        JSON with status, pending count, and quest_id if created
+    """
+    import json
+    result = await observatory.tool_observatory_entity_review_quest()
+    return json.dumps(result, indent=2, default=str)
 
 
 # ==============================================================================

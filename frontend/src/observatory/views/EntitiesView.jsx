@@ -16,6 +16,12 @@ const LOCK_IN_COLORS = {
   crystallized: '#f59e0b',
 }
 
+const MENTION_TYPE_COLORS = {
+  subject: '#f59e0b',
+  focus: '#3b82f6',
+  reference: '#64748b',
+}
+
 export default function EntitiesView({ navigateTab }) {
   const { entities, selectedEntityId, entityDetail, selectEntity, fetchEntityDetail, fetchEntities } = useObservatoryStore()
   const [typeFilter, setTypeFilter] = useState(null)
@@ -248,33 +254,12 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
       )}
 
       {tab === 'knowledge' && (
-        <div>
-          {entity.mentions.length === 0 ? (
-            <div style={{ color: '#555', textAlign: 'center', paddingTop: 40 }}>
-              No knowledge nodes linked
-            </div>
-          ) : (
-            entity.mentions.map((mention, i) => (
-              <div key={i} style={{
-                padding: 12, background: '#0a0a14', marginBottom: 8, borderRadius: 4,
-                borderLeft: '3px solid ' + (mention.lock_in >= 0.85 ? LOCK_IN_COLORS.crystallized :
-                  mention.lock_in >= 0.70 ? LOCK_IN_COLORS.settled :
-                  mention.lock_in >= 0.20 ? LOCK_IN_COLORS.fluid : LOCK_IN_COLORS.drifting),
-                cursor: navigateTab && mention.id ? 'pointer' : 'default',
-              }}
-                onClick={() => navigateTab && mention.id && navigateTab('Graph', { nodeId: mention.id })}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <span style={{ color: '#888', fontSize: 10, textTransform: 'uppercase' }}>{mention.type}</span>
-                  <span style={{ color: '#666', fontSize: 10 }}>Lock-in: {(mention.lock_in * 100).toFixed(0)}%</span>
-                </div>
-                <div style={{ color: '#aaa', fontSize: 13, lineHeight: 1.5 }}>
-                  <AnnotatedText text={mention.content} entities={allEntities} onEntityClick={onEntityClick} />
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+        <KnowledgeTab
+          mentions={entity.mentions}
+          allEntities={allEntities}
+          onEntityClick={onEntityClick}
+          navigateTab={navigateTab}
+        />
       )}
 
       {tab === 'quests' && (
@@ -318,6 +303,114 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
               <div style={{ color: '#aaa', fontSize: 12 }}>{version.summary}</div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function KnowledgeTab({ mentions, allEntities, onEntityClick, navigateTab }) {
+  const [showRefs, setShowRefs] = useState(false)
+
+  if (!mentions || mentions.length === 0) {
+    return (
+      <div style={{ color: '#555', textAlign: 'center', paddingTop: 40 }}>
+        No knowledge nodes linked
+      </div>
+    )
+  }
+
+  // Separate high-signal from passing references
+  const highSignal = mentions.filter(
+    m => m.mention_type === 'subject' || m.mention_type === 'focus'
+  )
+  const references = mentions.filter(
+    m => m.mention_type === 'reference' || (!m.mention_type && (m.confidence || 1) < 0.5)
+  )
+  // Anything without mention_type (legacy data) goes to high-signal if confidence >= 0.5
+  const legacyHighSignal = mentions.filter(
+    m => !m.mention_type && (m.confidence || 1) >= 0.5
+  )
+  const allHighSignal = [...highSignal, ...legacyHighSignal].sort(
+    (a, b) => (b.confidence || 0) - (a.confidence || 0)
+  )
+  const referenceCount = references.length
+
+  return (
+    <div>
+      {allHighSignal.map((mention, i) => {
+        const mentionType = mention.mention_type || 'reference'
+        const confidence = mention.confidence != null ? mention.confidence : 1.0
+        const typeColor = MENTION_TYPE_COLORS[mentionType] || MENTION_TYPE_COLORS.reference
+        const lockInColor = mention.lock_in >= 0.85 ? LOCK_IN_COLORS.crystallized :
+          mention.lock_in >= 0.70 ? LOCK_IN_COLORS.settled :
+          mention.lock_in >= 0.20 ? LOCK_IN_COLORS.fluid : LOCK_IN_COLORS.drifting
+
+        return (
+          <div key={mention.node_id || i} style={{
+            padding: 12, background: '#0a0a14', marginBottom: 8, borderRadius: 4,
+            borderLeft: '3px solid ' + lockInColor,
+            cursor: navigateTab && mention.id ? 'pointer' : 'default',
+          }}
+            onClick={() => navigateTab && mention.id && navigateTab('Graph', { nodeId: mention.id })}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{
+                  background: typeColor + '22', color: typeColor, fontSize: 9,
+                  padding: '2px 6px', borderRadius: 3, textTransform: 'uppercase',
+                  fontWeight: 600, letterSpacing: 0.5,
+                }}>
+                  {mentionType} {(confidence * 100).toFixed(0)}%
+                </span>
+                <span style={{ color: '#888', fontSize: 10, textTransform: 'uppercase' }}>{mention.type}</span>
+              </div>
+              <span style={{ color: '#666', fontSize: 10 }}>Lock-in: {((mention.lock_in || 0) * 100).toFixed(0)}%</span>
+            </div>
+            <div style={{ color: '#aaa', fontSize: 13, lineHeight: 1.5 }}>
+              <AnnotatedText
+                text={mention.context_snippet || mention.content}
+                entities={allEntities}
+                onEntityClick={onEntityClick}
+              />
+            </div>
+          </div>
+        )
+      })}
+
+      {referenceCount > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <button
+            onClick={() => setShowRefs(!showRefs)}
+            style={{
+              background: '#1a1a2e', border: '1px solid #2a2a3e', color: '#888',
+              padding: '8px 16px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+              width: '100%', textAlign: 'left',
+            }}
+          >
+            ...and {referenceCount} passing reference{referenceCount !== 1 ? 's' : ''}
+            {showRefs ? ' \u25B2' : ' \u25BC'}
+          </button>
+          {showRefs && (
+            <div style={{ marginTop: 8 }}>
+              {references.map((m, i) => (
+                <div key={m.node_id || i} style={{
+                  padding: 8, background: '#0a0a14', marginBottom: 4,
+                  borderRadius: 4, fontSize: 12, display: 'flex', gap: 8,
+                  alignItems: 'baseline',
+                }}>
+                  <span style={{
+                    color: '#64748b', fontSize: 10, minWidth: 32, textAlign: 'right',
+                  }}>
+                    {((m.confidence || 0) * 100).toFixed(0)}%
+                  </span>
+                  <span style={{ color: '#888' }}>
+                    {m.context_snippet || (m.content && m.content.slice(0, 80)) || 'No content'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

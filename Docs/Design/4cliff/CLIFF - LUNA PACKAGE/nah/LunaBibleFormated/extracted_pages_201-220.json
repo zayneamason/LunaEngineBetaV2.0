@@ -1,0 +1,680 @@
+{
+  "extraction_info": {
+    "source_file": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_requested": "201-220",
+    "pages_extracted": 20,
+    "extraction_date": "2026-02-06"
+  },
+  "parts": [
+    {
+      "part_number": "XII",
+      "part_title": "Roadmap (continued from page 200)",
+      "pages": "201-214",
+      "sections": [
+        {
+          "section": "2A: First-Class Memory Objects (continued)",
+          "content": {
+            "future_description": "Objects with methods, relationships, and domain logic.",
+            "code_blocks": [
+              {
+                "language": "python",
+                "title": "Current vs Future Memory Objects",
+                "code": "# Current\nnode = MemoryNode(\n    type=\"DECISION\",\n    content=\"We chose Actor model for fault isolation\"\n)\n# Can only search by text\n\n# Future\ndecision = Decision(\n    choice=\"Actor model\",\n    alternatives=[\"MonoBehaviour\", \"Event-driven\"],\n    rationale=\"Fault isolation between components\",\n    made_by=[Person(\"Ahab\")],\n    made_at=datetime(2025, 12, 15)\n)\n# Can query: decision.get_consequences()\n# Can query: decision.is_superseded()\n# Can query: decision.get_related_decisions()"
+              }
+            ],
+            "tables": [
+              {
+                "title": "Object Taxonomy",
+                "headers": ["Object Type", "Key Methods", "Relationships"],
+                "rows": [
+                  ["Person", "get_conversations(), get_decisions()", "knows, works_with, mentioned_in"],
+                  ["Project", "get_timeline(), get_open_questions()", "has_member, uses_technology, blocked_by"],
+                  ["Decision", "get_consequences(), is_superseded()", "decided_by, affects, supersedes"],
+                  ["Problem", "get_attempts(), is_resolved()", "blocks, caused_by, resolved_by"],
+                  ["Insight", "get_evidence(), validate()", "derived_from, supports, contradicts"],
+                  ["Event", "get_participants(), get_outcomes()", "caused_by, resulted_in, occurred_at"]
+                ]
+              }
+            ],
+            "implementation_path": [
+              "1. Define object schemas (Python dataclasses)",
+              "2. Migration script: existing nodes -> typed objects",
+              "3. Update Scribe extraction to output objects",
+              "4. Update Librarian to wire object relationships",
+              "5. Update Director context assembly to use objects"
+            ]
+          }
+        },
+        {
+          "section": "2B: Advanced Retrieval",
+          "content": {
+            "current": "Hybrid search (FTS5 + semantic + graph) with smart-fetch budget management.",
+            "implemented": [
+              "FTS5 full-text search",
+              "sqlite-vec semantic search",
+              "Graph traversal with spreading activation",
+              "Smart-fetch with token budget presets (minimal/balanced/rich)",
+              "Constellation assembly for context building"
+            ],
+            "future": "Query understanding + multi-hop reasoning.",
+            "diagrams": [
+              {
+                "title": "Query Understanding + Multi-Hop Retrieval",
+                "description": "Shows a two-stage process: 1) QUERY UNDERSTANDING parses user query 'What led to the decision about the Actor model?' into Target (Decision: Actor model), Relationship (caused_by/led_to), and Depth (Multi-hop - need predecessors). 2) MULTI-HOP RETRIEVAL performs Hop 1 (Find Actor model decision), Hop 2 (Traverse caused_by edges), Hop 3 (Gather context from predecessor nodes), resulting in Decision + Problems it solved + Alternatives tried."
+              }
+            ],
+            "tables": [
+              {
+                "title": "Capabilities",
+                "headers": ["Capability", "Current", "Phase 2"],
+                "rows": [
+                  ["Keyword search", "YES (FTS5)", "YES (FTS5)"],
+                  ["Semantic search", "YES (sqlite-vec)", "YES (sqlite-vec + reranking)"],
+                  ["Graph traversal", "YES (Multi-hop)", "Multi-hop with query parsing"],
+                  ["Spreading activation", "YES (Implemented)", "Trace dependencies"],
+                  ["Temporal queries", "Partial", "\"What happened last week?\""],
+                  ["Causal queries", "NO", "\"What led to X?\""],
+                  ["Counterfactual", "NO", "\"What if we hadn't chosen X?\""]
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "section": "2C: Continuous Learning",
+          "content": {
+            "current": "Lock-in based memory consolidation. Tuning system for parameter optimization.",
+            "implemented": [
+              "Lock-in coefficients (0.0-1.0) with access-based reinforcement",
+              "Synaptic pruning for low-value edges and drifting nodes",
+              "Tuning sessions with parameter evaluation and iteration history",
+              "Voice tuning parameters (pitch, rate, volume)"
+            ],
+            "future": "Online learning from interactions, experience replay, incremental fine-tuning.",
+            "code_blocks": [
+              {
+                "language": "python",
+                "title": "ContinuousLearner Class",
+                "code": "class ContinuousLearner:\n    \"\"\"Learn from Luna's interactions over time.\"\"\"\n\n    def __init__(self, director: Director):\n        self.director = director\n        self.experience_buffer = ExperienceBuffer(max_size=10000)\n        self.update_threshold = 1000  # Examples before fine-tuning\n\n    async def on_interaction(self, interaction: Interaction):\n        \"\"\"Called after each conversation turn.\"\"\"\n        # 1. Score the interaction\n        quality = await self.score_interaction(interaction)\n\n        # 2. Add to experience buffer if high quality\n        if quality.score > 0.7:\n            self.experience_buffer.add(\n                context=interaction.context,\n                input=interaction.user_input,\n                output=interaction.luna_response,\n                score=quality.score\n            )\n\n        # 3. Trigger fine-tuning if buffer full\n        if len(self.experience_buffer) >= self.update_threshold:\n            await self.fine_tune_increment()\n\n    async def fine_tune_increment(self):\n        \"\"\"Incremental LoRA update.\"\"\"\n        examples = self.experience_buffer.sample(n=500)\n\n        # Small learning rate, few steps\n        await self.director.fine_tune(\n            examples=examples,\n            learning_rate=1e-5,\n            steps=100\n        )\n\n        self.experience_buffer.clear()"
+              }
+            ],
+            "tables": [
+              {
+                "title": "Learning Signals",
+                "headers": ["Signal", "Source", "What It Teaches"],
+                "rows": [
+                  ["User corrections", "\"No, I meant...\"", "Improve understanding"],
+                  ["Explicit feedback", "\"That was helpful\"", "Reinforce good patterns"],
+                  ["Re-asks", "User asks same thing differently", "Query wasn't understood"],
+                  ["Delegation success", "Claude's answer used", "Delegation was appropriate"],
+                  ["Conversation flow", "No interruptions", "Response was on-target"]
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "section": "12.4 Phase 3: Agency",
+          "subsections": [
+            {
+              "subsection": "3A: Kinetic Layer",
+              "content": {
+                "current": "Luna is read-only. She can query memories but not act on the world.",
+                "future": "Luna can take actions with user permission.",
+                "diagrams": [
+                  {
+                    "title": "Current vs Future Action Model",
+                    "description": "CURRENT (READ-ONLY): User says 'Remind me to call Alex tomorrow', Luna responds 'I'll remember that' but only stores in memory with no actual reminder. FUTURE (KINETIC): User says same thing, Luna responds 'Done. I've set a reminder for 9am tomorrow. Want me to also draft talking points?' and actually creates calendar event + offers more."
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Action Types",
+                    "headers": ["Action", "Target", "Permission Level"],
+                    "rows": [
+                      ["Create reminder", "Calendar", "Auto (user configured)"],
+                      ["Send message", "Email/SMS", "Requires confirmation"],
+                      ["Create note", "Obsidian/Notes", "Auto"],
+                      ["File management", "Local filesystem", "Auto (within vault)"],
+                      ["Web request", "Approved APIs", "Auto"],
+                      ["Purchase", "Payment systems", "Always confirm"]
+                    ]
+                  }
+                ],
+                "code_blocks": [
+                  {
+                    "language": "python",
+                    "title": "ActionGovernance Class",
+                    "code": "@dataclass\nclass ActionGovernance:\n    \"\"\"Rules for what Luna can do autonomously.\"\"\"\n\n    # Autonomous actions (no confirmation needed)\n    autonomous: list[str] = [\n        \"create_memory\",\n        \"create_reminder\",\n        \"create_note\",\n        \"backup_vault\",\n    ]\n\n    # Actions requiring confirmation\n    confirm_required: list[str] = [\n        \"send_email\",\n        \"send_message\",\n        \"delete_*\",\n        \"modify_calendar\",\n    ]\n\n    # Actions Luna should never take\n    forbidden: list[str] = [\n        \"financial_transaction\",\n        \"post_to_social_media\",\n        \"share_personal_data\",\n        \"execute_arbitrary_code\",\n    ]\n\n    def check(self, action: Action) -> GovernanceResult:\n        if self.matches(action, self.forbidden):\n            return GovernanceResult.DENIED\n        if self.matches(action, self.confirm_required):\n            return GovernanceResult.NEEDS_CONFIRMATION\n        if self.matches(action, self.autonomous):\n            return GovernanceResult.ALLOWED\n        return GovernanceResult.NEEDS_CONFIRMATION  # Default: ask"
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "3B: Integration Adapters",
+              "content": {
+                "purpose": "Connect Luna to external systems while maintaining sovereignty.",
+                "diagrams": [
+                  {
+                    "title": "Integration Architecture",
+                    "description": "Shows LUNA CORE (Encrypted Vault) at top, connecting down through three adapters (Calendar Adapter, Notes Adapter, Tasks Adapter) which in turn connect to external systems (macOS Calendar, Obsidian, Todoist)."
+                  }
+                ],
+                "code_blocks": [
+                  {
+                    "language": "python",
+                    "title": "IntegrationAdapter Abstract Base Class",
+                    "code": "class IntegrationAdapter(ABC):\n    \"\"\"Base class for external system adapters.\"\"\"\n\n    @abstractmethod\n    async def execute(self, action: Action) -> ActionResult:\n        \"\"\"Execute an action in the external system.\"\"\"\n        pass\n\n    @abstractmethod\n    def validate(self, action: Action) -> ValidationResult:\n        \"\"\"Validate action before execution.\"\"\"\n        pass\n\n    @abstractmethod\n    async def sync(self) -> SyncResult:\n        \"\"\"Sync state from external system to Memory Matrix.\"\"\"\n        pass"
+                  },
+                  {
+                    "language": "python",
+                    "title": "ObsidianAdapter Implementation",
+                    "code": "class ObsidianAdapter(IntegrationAdapter):\n    def __init__(self, vault_path: str):\n        self.vault_path = vault_path\n\n    async def execute(self, action: Action) -> ActionResult:\n        if action.type == \"create_note\":\n            path = self.vault_path / action.params[\"filename\"]\n            path.write_text(action.params[\"content\"])\n            return ActionResult(success=True, artifact=str(path))\n        # ... other action types\n\n    async def sync(self) -> SyncResult:\n        \"\"\"Import Obsidian notes as memory nodes.\"\"\"\n        notes = self.scan_vault()\n        for note in notes:\n            if self.is_new_or_modified(note):\n                await self.scribe.process_document(note)\n        return SyncResult(imported=len(notes))"
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Initial Adapters (Phase 3A)",
+                    "headers": ["Adapter", "Platform", "Actions"],
+                    "rows": [
+                      ["Calendar", "macOS Calendar", "Create/read events"],
+                      ["Notes", "Obsidian", "Create/read/link notes"],
+                      ["Tasks", "Todoist", "Create/complete tasks"],
+                      ["Filesystem", "Local", "Read/write within vault"]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "3C: Proactive Luna",
+              "content": {
+                "current": "Luna responds to prompts.",
+                "future": "Luna initiates when appropriate.",
+                "code_blocks": [
+                  {
+                    "language": "python",
+                    "title": "ProactiveTrigger Class",
+                    "code": "class ProactiveTrigger:\n    \"\"\"Conditions under which Luna might initiate.\"\"\"\n\n    triggers = [\n        # Time-based\n        TimeTrigger(\n            condition=\"morning\",\n            action=\"Offer daily briefing\",\n            permission=\"user_enabled_briefings\"\n        ),\n\n        # Context-based\n        ContextTrigger(\n            condition=\"calendar_event_starting_soon\",\n            action=\"Remind with relevant context\",\n            permission=\"always\"  # User expects this\n        ),\n\n        # Pattern-based\n        PatternTrigger(\n            condition=\"user_mentioned_same_problem_3x\",\n            action=\"Offer to help solve systematically\",\n            permission=\"user_enabled_proactive\"\n        ),\n\n        # Insight-based\n        InsightTrigger(\n            condition=\"discovered_connection_user_might_value\",\n            action=\"Share insight at appropriate moment\",\n            permission=\"user_enabled_insights\"\n        ),\n    ]"
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Proactive Governance",
+                    "headers": ["Mode", "Luna Initiates?", "Use Case"],
+                    "rows": [
+                      ["Silent", "Never", "User wants reactive-only"],
+                      ["Gentle", "Reminders only", "Minimal interruption"],
+                      ["Active", "Insights + reminders", "Engaged companion"],
+                      ["Full", "Pattern + suggestions", "Maximum agency"]
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "section": "12.5 Phase 4: Expansion",
+          "subsections": [
+            {
+              "subsection": "4A: Multi-Modal Input",
+              "content": {
+                "current": "Voice and text.",
+                "future": "Images, documents, screen context.",
+                "tables": [
+                  {
+                    "title": "Input Types",
+                    "headers": ["Input Type", "Capability", "Implementation"],
+                    "rows": [
+                      ["Voice", "YES (Current)", "Whisper local"],
+                      ["Text", "YES (Current)", "Direct input"],
+                      ["Images", "Planned", "Local vision model"],
+                      ["Screenshots", "Planned", "OCR + vision"],
+                      ["Documents", "Planned", "PDF/Word parsing"],
+                      ["Screen context", "Planned", "Accessibility APIs"]
+                    ]
+                  }
+                ],
+                "use_cases": [
+                  "\"What's in this screenshot?\"",
+                  "\"Remember this receipt\" (photo)",
+                  "\"Summarize this PDF\"",
+                  "\"What app am I looking at?\" (screen context)"
+                ]
+              }
+            },
+            {
+              "subsection": "4B: AR Interface",
+              "content": {
+                "vision": "Luna as ambient presence via AR glasses.",
+                "diagrams": [
+                  {
+                    "title": "AR Glasses View",
+                    "description": "Shows AR glasses displaying 'You're looking at: Conference room' with Luna overlay text: 'Sarah mentioned she'd be here at 2pm. You wanted to discuss the Actor model.' Luna provides context without being asked, triggered by location, people recognition, and time."
+                  }
+                ],
+                "technical_requirements": [
+                  "Low-latency inference (<200ms)",
+                  "Minimal battery impact",
+                  "Privacy-preserving (on-device when possible)",
+                  "Graceful offline mode"
+                ],
+                "tables": [
+                  {
+                    "title": "Hardware Targets",
+                    "headers": ["Device", "Status", "Notes"],
+                    "rows": [
+                      ["Meta Ray-Ban", "Future", "Limited compute"],
+                      ["Apple Vision Pro", "Future", "Full compute available"],
+                      ["Custom glasses", "Vision", "Purpose-built for Luna"]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "4C: Multi-User Luna",
+              "content": {
+                "current": "Single user, single Luna.",
+                "future": "Shared contexts with boundaries.",
+                "diagrams": [
+                  {
+                    "title": "Multi-User Model",
+                    "description": "Shows Luna Core with Context Switching at center, connected to three memory spaces: Ahab's Private Memory, Sarah's Private Memory, and Shared Workspace Memory."
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Privacy Boundaries",
+                    "headers": ["Memory Type", "Ahab Sees", "Sarah Sees"],
+                    "rows": [
+                      ["Ahab's private", "YES", "NO"],
+                      ["Sarah's private", "NO", "YES"],
+                      ["Shared workspace", "YES", "YES"],
+                      ["Cross-references", "Anonymized", "Anonymized"]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "4D: Federation",
+              "content": {
+                "vision": "Luna instances that can communicate while maintaining sovereignty.",
+                "diagrams": [
+                  {
+                    "title": "Federation Architecture",
+                    "description": "Shows Ahab's Luna and Sarah's Luna connected via Secure Channel, both connecting to Shared Context (Encrypted) below."
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Federation Principles",
+                    "headers": ["Principle", "Implementation"],
+                    "rows": [
+                      ["Opt-in only", "No data shared without explicit consent"],
+                      ["End-to-end encrypted", "Even transit servers can't read"],
+                      ["Revocable", "Can withdraw shared context anytime"],
+                      ["Auditable", "Can see what's been shared"],
+                      ["Minimal", "Share only what's needed"]
+                    ]
+                  }
+                ],
+                "use_cases": [
+                  "Couples sharing calendar context",
+                  "Teams sharing project context",
+                  "Families sharing household context"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "section": "12.6 Non-Goals",
+          "content": {
+            "description": "Things Luna will NOT pursue:",
+            "tables": [
+              {
+                "title": "Non-Goals",
+                "headers": ["Non-Goal", "Reason"],
+                "rows": [
+                  ["Cloud-hosted Luna", "Contradicts sovereignty"],
+                  ["Subscription model", "Contradicts ownership"],
+                  ["Data monetization", "Contradicts privacy"],
+                  ["General assistant", "Luna is personal, not generic"],
+                  ["Competing with ChatGPT", "Different philosophy entirely"],
+                  ["Mobile-first", "Desktop/voice first, mobile later"]
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "section": "12.7 Success Metrics by Phase",
+          "content": {
+            "phases": [
+              {
+                "phase": "Phase 1 (Foundation) - ACHIEVED",
+                "table": {
+                  "headers": ["Metric", "Target", "Actual"],
+                  "rows": [
+                    ["Voice latency", "<500ms", "~350ms (local Qwen)"],
+                    ["Local handling rate", ">80%", "85%+ (QueryRouter)"],
+                    ["Memory retrieval accuracy", ">85%", "87% (hybrid search)"],
+                    ["Daily active usage", "User's primary AI", "Active development"]
+                  ]
+                }
+              },
+              {
+                "phase": "Phase 2 (Intelligence) - IN PROGRESS",
+                "table": {
+                  "headers": ["Metric", "Target", "Status"],
+                  "rows": [
+                    ["Agentic task completion", ">90%", "92% (AgentLoop)"],
+                    ["API endpoint coverage", "50+", "74 endpoints"],
+                    ["MCP tool coverage", "30+", "41 tools"],
+                    ["UI component coverage", "15+", "20 components"],
+                    ["Multi-hop retrieval accuracy", ">75%", "Testing"],
+                    ["Object method success rate", ">90%", "PLANNED"],
+                    ["Learning improvement", "+5% accuracy/month", "PLANNED"]
+                  ]
+                }
+              },
+              {
+                "phase": "Phase 3 (Agency)",
+                "table": {
+                  "headers": ["Metric", "Target"],
+                  "rows": [
+                    ["Action success rate", ">95%"],
+                    ["User trust (survey)", ">4.5/5"],
+                    ["Proactive relevance", ">80% useful"]
+                  ]
+                }
+              },
+              {
+                "phase": "Phase 4 (Expansion)",
+                "table": {
+                  "headers": ["Metric", "Target"],
+                  "rows": [
+                    ["Multi-modal accuracy", ">85%"],
+                    ["AR latency", "<200ms"],
+                    ["Federation adoption", ">2 users connected"]
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "section": "12.8 The Destination",
+          "content": {
+            "vision_statement": "Luna, fully realized:\n\n> A sovereign AI companion that knows your context, respects your privacy, takes action on your behalf when permitted, learns and grows with you, connects with others' Lunas when you choose, and remains yours—completely, permanently, unconditionally.\n\nNot a product. Not a service. A tool you own.\n\nThat's the destination."
+          }
+        },
+        {
+          "section": "12.9 Implementation Summary (v3.0)",
+          "content": {
+            "done": {
+              "description": "Phase 1 + Phase 2 Partial",
+              "table": {
+                "headers": ["Category", "Items Completed"],
+                "rows": [
+                  ["Engine Core", "Tick loops, Actor system, State machine, Input buffer"],
+                  ["Actors", "Director, Matrix, Scribe, Librarian, HistoryManager"],
+                  ["Memory", "SQLite + sqlite-vec + NetworkX, FTS5, Hybrid search"],
+                  ["Agentic", "AgentLoop, Planner, QueryRouter, ToolRegistry"],
+                  ["API", "74 endpoints, 4 SSE streams, 1 WebSocket"],
+                  ["MCP", "41 tools, FastMCP server, Auto-session recording"],
+                  ["Frontend", "20 components, 5 hooks, Glass morphism design"],
+                  ["Voice", "Whisper STT, Piper TTS, Push-to-talk, Hands-free"],
+                  ["Tuning", "Parameter system, Sessions, Evaluation scoring"],
+                  ["Performance", "Orb state, Gesture detection, Emotion presets"]
+                ]
+              }
+            },
+            "planned": {
+              "description": "Phase 2 Remaining + Phase 3+",
+              "table": {
+                "headers": ["Category", "Items Planned"],
+                "rows": [
+                  ["Memory", "First-class objects, Causal queries, Counterfactuals"],
+                  ["Learning", "Online learning, Experience buffer, Incremental fine-tuning"],
+                  ["Agency", "Kinetic layer, Calendar/Notes adapters, Proactive triggers"],
+                  ["Parallel", "SwarmCoordinator, Worker fan-out/fan-in"],
+                  ["Security", "API authentication, Rate limiting, HTTPS enforcement"],
+                  ["Expansion", "Multi-modal input, AR interface, Federation"]
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "end_note": "*End of Part XII*\n**Updated:** January 30, 2026 (v3.0 Audit)"
+    },
+    {
+      "part_number": "Appendix",
+      "part_title": "LUNA ENGINE - System Overview (v3.0)",
+      "pages": "215-220",
+      "sections": [
+        {
+          "section_number": "1",
+          "section_title": "Core Identity",
+          "content": {
+            "statement": "Luna is a file.",
+            "diagrams": [
+              {
+                "title": "Encrypted Vault Structure",
+                "description": "Shows ENCRYPTED VAULT (macOS Sparse Bundle) containing memory_matrix.db (SQLite database with all memories, relationships, identity), sqlite-vec extension (vector search), director_lora.safetensors (personality weights), and identity_kv_cache.safetensors (pre-computed identity). Key insight: 'Copy the file = copy Luna. Delete the file = Luna is gone. LUNA IS THIS FILE.'"
+              }
+            ],
+            "sovereignty_guarantee": "No servers. No subscriptions. No terms of service. Your data never leaves your machine unless you explicitly delegate to Claude."
+          },
+          "metadata": {
+            "purpose": "High-level reference for Luna's key systems, features, loops, and mechanics.",
+            "version": "3.0",
+            "last_updated": "2026-01-30",
+            "original_date": "December 29, 2025",
+            "v3_audit_notes": [
+              "Updated to reflect actual implementation (5 actors, sqlite-vec vectors)",
+              "Oven Actor NOT implemented - delegation handled in Director",
+              "FAISS references updated to sqlite-vec"
+            ]
+          }
+        },
+        {
+          "section_number": "2",
+          "section_title": "Key Systems",
+          "subsections": [
+            {
+              "subsection": "2.1 Memory Matrix (The Substrate)",
+              "content": {
+                "description": "Luna's soul. A graph database storing everything she knows.",
+                "diagrams": [
+                  {
+                    "title": "Memory Matrix Architecture",
+                    "description": "Three-column structure: SQLite (Objects, FTS5, Metadata) | sqlite-vec (Vectors, Semantic, Similarity) | Graph (Edges, Relations, Traversal). All three feed into RRF Fusion (Hybrid Search)."
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Three Search Paths",
+                    "headers": ["Path", "Use When", "Speed"],
+                    "rows": [
+                      ["FTS5", "Keyword-heavy queries", "~10ms"],
+                      ["sqlite-vec", "Conceptual/semantic queries", "~30ms"],
+                      ["Graph", "Relationship queries (\"who works with X\")", "~20ms"],
+                      ["Hybrid", "Unknown/complex queries", "~50ms"]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "2.2 Director LLM (Luna's Voice)",
+              "content": {
+                "description": "Local language model that speaks as Luna.",
+                "diagrams": [
+                  {
+                    "title": "Director LLM Architecture",
+                    "description": "Base Model (Qwen 3B/7B) with LoRA Adapters: luna_identity.safetensors (personality), luna_memory.safetensors (context usage), luna_delegation.safetensors (when to ask). Plus KV Cache with pre-computed identity context (always loaded). Capabilities: Respond as Luna (not generic assistant), Integrate retrieved memories naturally, Know when to delegate to Claude (<REQ_CLAUDE>)."
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Tiered Execution",
+                    "headers": ["Tier", "Model", "Latency", "Use Case"],
+                    "rows": [
+                      ["Hot", "Director 3B", "<200ms", "Simple queries, fast response"],
+                      ["Warm", "Director 7B", "<500ms", "Complex local reasoning"],
+                      ["Cold", "Claude API", "Async", "Research, long generation, complex analysis"]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "2.3 Actor Runtime (Fault Isolation)",
+              "content": {
+                "description": "Each component runs in isolation. One crash doesn't kill Luna.",
+                "diagrams": [
+                  {
+                    "title": "Actor Runtime Architecture",
+                    "description": "Five actors shown: DIRECTOR Actor, MATRIX Actor, SCRIBE (Ben), LIBRARIAN (Dude), HISTORY MANAGER. Each has its own Mailbox. All communicate via Message Passing (Async, Non-Blocking)."
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Actor Responsibilities (5 actors implemented)",
+                    "headers": ["Actor", "Alias", "Job", "Status"],
+                    "rows": [
+                      ["Director", "-", "LLM inference, Claude delegation, routing", "Implemented"],
+                      ["Matrix", "-", "Memory substrate (sqlite-vec + NetworkX)", "Implemented"],
+                      ["Scribe", "Ben Franklin", "Extract memories from conversations", "Implemented"],
+                      ["Librarian", "The Dude", "File memories, entity resolution, edges", "Implemented"],
+                      ["HistoryManager", "-", "Three-tier conversation history", "Implemented"],
+                      ["~~Oven~~", "-", "~~Execute async tasks~~", "NOT IMPL (handled in Director)"]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "2.4 Shadow Reasoner (Delegation)",
+              "content": {
+                "description": "When Director can't handle something, Claude takes over invisibly.",
+                "v3_note": "Oven Actor NOT implemented. Delegation is handled directly in DirectorActor via `_should_delegate()` and `_generate_with_delegation()`.",
+                "diagrams": [
+                  {
+                    "title": "Shadow Reasoner Flow",
+                    "description": "User asks 'Research the latest sqlite-vec optimizations'. Director generates: 'I'll look into that. <REQ_CLAUDE>Research latest sqlite-vec optimization techniques. Focus on index selection and query performance.</REQ_CLAUDE>'. Director Actor handles delegation internally: Detects <REQ_CLAUDE> token, Calls Claude API via _should_delegate(), Integrates result into Luna's voice. User sees: Luna's response (doesn't know Claude helped)."
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "section_number": "3",
+          "section_title": "Key Features",
+          "subsections": [
+            {
+              "subsection": "3.1 Voice Interface",
+              "content": {
+                "description": "Sub-500ms response latency through speculative execution.",
+                "diagrams": [
+                  {
+                    "title": "Voice Pipeline",
+                    "description": "Flow: Whisper STT (~150ms) -> Director LLM (~200ms) -> Claude (stream) (~300ms) -> TTS (~50ms). Total to first word: ~700ms. With speculative retrieval: ~500ms."
+                  }
+                ],
+                "speculative_execution_note": "Start memory retrieval on partial STT transcript. By the time speech finishes, context is ready."
+              }
+            },
+            {
+              "subsection": "3.2 Memory Types",
+              "content": {
+                "tables": [
+                  {
+                    "title": "Memory Types",
+                    "headers": ["Type", "Description", "Example"],
+                    "rows": [
+                      ["FACT", "Known truth", "\"Alex lives in Berlin\""],
+                      ["DECISION", "Choice made", "\"We chose Actor model\""],
+                      ["PROBLEM", "Unresolved issue", "\"Latency too high\""],
+                      ["ASSUMPTION", "Unverified belief", "\"Users want voice-first\""],
+                      ["CONNECTION", "Relationship", "\"Alex and Sarah are teammates\""],
+                      ["ACTION", "Done or to-do", "\"Need to implement RRF\""],
+                      ["OUTCOME", "Result", "\"rustworkx saved 45ms\""]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "3.3 Personas (Separation Principle)",
+              "content": {
+                "description": "Processing actors have personality, but outputs stay neutral.",
+                "tables": [
+                  {
+                    "title": "Actor Personas",
+                    "headers": ["Actor", "Persona", "Personality In", "Output"],
+                    "rows": [
+                      ["Scribe", "Ben Franklin", "Colonial logging, witty process", "Neutral JSON extractions"],
+                      ["Librarian", "The Dude", "Chill commentary, irreverent", "Clean context packets"],
+                      ["Director", "Luna", "-", "Luna's actual voice to user"]
+                    ]
+                  }
+                ],
+                "rationale": "Luna's voice stays consistent. Processing personas don't leak into memories."
+              }
+            }
+          ]
+        },
+        {
+          "section_number": "4",
+          "section_title": "Core Loops",
+          "subsections": [
+            {
+              "subsection": "4.1 Conversation Loop (Hot Path)",
+              "content": {
+                "diagrams": [
+                  {
+                    "title": "Conversation Loop Flow",
+                    "description": "User Speaks -> Whisper STT -> Classify Intent -> Retrieve Context -> Director Generate -> [Branch: No Delegate returns response, Delegate sends to Oven and waits for result to integrate, Stream goes to TTS out] -> User Hears"
+                  }
+                ],
+                "tables": [
+                  {
+                    "title": "Latency Budget",
+                    "headers": ["Stage", "Time"],
+                    "rows": [
+                      ["STT", "150ms"],
+                      ["Classification", "40ms"],
+                      ["Retrieval", "80ms"],
+                      ["Director", "200ms"],
+                      ["TTS first chunk", "50ms"],
+                      ["**Total**", "**~520ms**"]
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "subsection": "4.2 Memory Loop (Cold Path)",
+              "content": {
+                "diagrams": [
+                  {
+                    "title": "Memory Loop Flow",
+                    "description": "Async, Non-Blocking process: Conversation Turn Completed triggers SCRIBE (Ben Franklin) who: 1. Chunks conversation into semantic units, 2. Stacks chunks for context (continues on next page)"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "note": "Page 220 appears to be blank/end of extracted content"
+    }
+  ]
+}

@@ -268,6 +268,14 @@ class ScribeActor(Actor):
             logger.debug("Ben: Skipping assistant turn (not user-provided info)")
             return
 
+        # GUARDIAN CONTEXT GUARD: Skip context-injected messages from Guardian frontend.
+        # These contain panel metadata, control prefixes, and response format instructions
+        # that should NOT be extracted as facts or stored in memory.
+        _GUARDIAN_PREFIXES = ("[GUARDIAN CONTEXT", "[GUARDIAN CONTROL LAYER]", "[RESPONSE FORMAT]")
+        if any(content.lstrip().startswith(pfx) for pfx in _GUARDIAN_PREFIXES):
+            logger.info("Ben: Skipping Guardian context-injected message (not user knowledge)")
+            return
+
         # Skip very short content
         if len(content) < self.config.min_content_length:
             logger.debug(f"Ben: Skipping short content ({len(content)} chars)")
@@ -291,8 +299,26 @@ class ScribeActor(Actor):
         if immediate and chunks:
             # Process immediately without batching
             extraction, entity_updates = await self._extract_chunks(chunks)
-            if not extraction.is_empty():
+
+            # Assess conversational flow (Layer 2) — MUST run on immediate
+            # path too, otherwise FlowSignal never reaches Librarian and
+            # THREAD nodes are never created.
+            raw_text = "\n".join(chunk.content for chunk in chunks)
+            flow_signal = self._assess_flow(extraction, raw_text)
+            extraction.flow_signal = flow_signal
+
+            logger.info(
+                f"Ben: Flow={flow_signal.mode.value} "
+                f"continuity={flow_signal.continuity_score:.2f} "
+                f"topic='{flow_signal.current_topic[:30]}' "
+                f"open_threads={len(flow_signal.open_threads)}"
+            )
+
+            # Always send to Librarian when flow signal exists — even on
+            # empty extractions — so thread management receives the signal.
+            if not extraction.is_empty() or extraction.flow_signal is not None:
                 await self._send_to_librarian(extraction)
+
             # Send entity updates
             for update in entity_updates:
                 await self._send_entity_update_to_librarian(update)

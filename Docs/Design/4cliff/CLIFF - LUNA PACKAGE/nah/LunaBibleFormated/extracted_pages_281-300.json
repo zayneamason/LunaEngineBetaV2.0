@@ -1,0 +1,878 @@
+{
+  "extraction_metadata": {
+    "source_file": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_requested": "281-300",
+    "pages_extracted": 20,
+    "extraction_date": "2026-02-06"
+  },
+  "parts": [
+    {
+      "part_number": "XV",
+      "part_title": "API Reference",
+      "pages": "281-297 (partial, continues from earlier pages)",
+      "sections": [
+        {
+          "section": "Tuning Parameter Endpoints (continued)",
+          "endpoints": [
+            {
+              "method": "GET",
+              "path": "/tuning/params/{name}",
+              "description": "Get a parameter value",
+              "path_parameters": [
+                {"parameter": "name", "type": "string", "description": "Parameter name (use `/` for path-style names)"}
+              ],
+              "response": [
+                {"field": "name", "type": "string", "description": "Parameter name"},
+                {"field": "value", "type": "float", "description": "Current value"},
+                {"field": "default", "type": "float", "description": "Default value"},
+                {"field": "bounds", "type": "tuple", "description": "(min, max) bounds"},
+                {"field": "step", "type": "float", "description": "Step size for adjustments"},
+                {"field": "category", "type": "string", "description": "Parameter category"},
+                {"field": "description", "type": "string", "description": "Parameter description"},
+                {"field": "is_overridden", "type": "bool", "description": "Whether value differs from default"}
+              ],
+              "curl_example": "curl http://localhost:8000/tuning/params/memory/lock_in_threshold"
+            },
+            {
+              "method": "POST",
+              "path": "/tuning/params/{name}",
+              "description": "Set a parameter value",
+              "path_parameters": [
+                {"parameter": "name", "type": "string", "description": "Parameter name"}
+              ],
+              "request_body": [
+                {"field": "value", "type": "float", "description": "New parameter value"}
+              ],
+              "response": [
+                {"field": "name", "type": "string", "description": "Parameter name"},
+                {"field": "previous_value", "type": "float", "description": "Previous value"},
+                {"field": "new_value", "type": "float", "description": "New value"},
+                {"field": "eval_score", "type": "float", "description": "Evaluation score (if tuning session active)"},
+                {"field": "iteration", "type": "int", "description": "Iteration number (if tuning session active)"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/tuning/params/memory/lock_in_threshold \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"value\": 0.7}'"
+            },
+            {
+              "method": "POST",
+              "path": "/tuning/param-reset/{name}",
+              "description": "Reset a parameter to its default value",
+              "path_parameters": [
+                {"parameter": "name", "type": "string", "description": "Parameter name"}
+              ],
+              "response": [
+                {"field": "name", "type": "string", "description": "Parameter name"},
+                {"field": "previous_value", "type": "float", "description": "Previous value"},
+                {"field": "new_value", "type": "float", "description": "Default value (now set)"},
+                {"field": "was_overridden", "type": "bool", "description": "Whether it was previously overridden"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/tuning/param-reset/memory/lock_in_threshold"
+            },
+            {
+              "method": "POST",
+              "path": "/tuning/session/new",
+              "description": "Start a new tuning session for systematic parameter optimization",
+              "request_body": [
+                {"field": "focus", "type": "string", "required": false, "default": "all", "description": "Focus area: `memory`, `routing`, `latency`, `context`, `all`"},
+                {"field": "notes", "type": "string", "required": false, "default": "", "description": "Session notes"}
+              ],
+              "response": [
+                {"field": "session_id", "type": "string", "description": "Session identifier"},
+                {"field": "focus", "type": "string", "description": "Focus area"},
+                {"field": "started_at", "type": "string", "description": "Start timestamp"},
+                {"field": "best_iteration", "type": "int", "description": "Best iteration number"},
+                {"field": "best_score", "type": "float", "description": "Best score achieved"},
+                {"field": "iteration_count", "type": "int", "description": "Number of iterations"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/tuning/session/new \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"focus\": \"memory\", \"notes\": \"Testing lock-in thresholds\"}'"
+            },
+            {
+              "method": "GET",
+              "path": "/tuning/session",
+              "description": "Get current tuning session",
+              "response": [
+                {"field": "active", "type": "bool", "description": "Whether a session is active"},
+                {"field": "session_id", "type": "string", "description": "Session identifier"},
+                {"field": "focus", "type": "string", "description": "Focus area"},
+                {"field": "started_at", "type": "string", "description": "Start timestamp"},
+                {"field": "best_iteration", "type": "int", "description": "Best iteration number"},
+                {"field": "best_score", "type": "float", "description": "Best score"},
+                {"field": "iteration_count", "type": "int", "description": "Number of iterations"},
+                {"field": "iterations", "type": "list", "description": "Iteration details"}
+              ],
+              "curl_example": "curl http://localhost:8000/tuning/session"
+            },
+            {
+              "method": "POST",
+              "path": "/tuning/session/end",
+              "description": "End the current tuning session",
+              "response": [
+                {"field": "ended", "type": "bool", "description": "Whether session was ended"},
+                {"field": "session_id", "type": "string", "description": "Session identifier"},
+                {"field": "best_iteration", "type": "int", "description": "Best iteration number"},
+                {"field": "best_score", "type": "float", "description": "Best score achieved"},
+                {"field": "total_iterations", "type": "int", "description": "Total iterations run"},
+                {"field": "message", "type": "string", "description": "Status message (if no session)"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/tuning/session/end"
+            },
+            {
+              "method": "POST",
+              "path": "/tuning/eval",
+              "description": "Run evaluation to score current parameter settings",
+              "query_parameters": [
+                {"parameter": "category", "type": "string", "default": "null", "description": "Category to evaluate"}
+              ],
+              "response": [
+                {"field": "overall_score", "type": "float", "description": "Overall evaluation score"},
+                {"field": "memory_recall_score", "type": "float", "description": "Memory recall performance"},
+                {"field": "context_retention_score", "type": "float", "description": "Context retention performance"},
+                {"field": "routing_score", "type": "float", "description": "Routing decision quality"},
+                {"field": "avg_latency_ms", "type": "float", "description": "Average latency"},
+                {"field": "p95_latency_ms", "type": "float", "description": "95th percentile latency"},
+                {"field": "total_tests", "type": "int", "description": "Total tests run"},
+                {"field": "passed_tests", "type": "int", "description": "Tests passed"},
+                {"field": "failed_tests", "type": "int", "description": "Tests failed"}
+              ],
+              "curl_example": "curl -X POST \"http://localhost:8000/tuning/eval?category=memory\""
+            },
+            {
+              "method": "GET",
+              "path": "/tuning/compare",
+              "description": "Compare two iterations from the current tuning session",
+              "query_parameters": [
+                {"parameter": "iter1", "type": "int", "default": "1", "description": "First iteration number"},
+                {"parameter": "iter2", "type": "int", "default": "latest", "description": "Second iteration number"}
+              ],
+              "response": [
+                {"field": "iteration_1", "type": "int", "description": "First iteration number"},
+                {"field": "iteration_2", "type": "int", "description": "Second iteration number"},
+                {"field": "score_1", "type": "float", "description": "First iteration score"},
+                {"field": "score_2", "type": "float", "description": "Second iteration score"},
+                {"field": "score_diff", "type": "float", "description": "Score difference (iter2 - iter1)"},
+                {"field": "param_diffs", "type": "dict", "description": "Parameter value differences"},
+                {"field": "metric_diffs", "type": "dict", "description": "Metric differences"}
+              ],
+              "curl_example": "curl \"http://localhost:8000/tuning/compare?iter1=1&iter2=5\""
+            },
+            {
+              "method": "GET",
+              "path": "/tuning/best",
+              "description": "Get parameters from the best iteration",
+              "response": [
+                {"field": "best_iteration", "type": "int", "description": "Best iteration number"},
+                {"field": "best_score", "type": "float", "description": "Best score achieved"},
+                {"field": "params", "type": "dict", "description": "Parameter values from best iteration"}
+              ],
+              "curl_example": "curl http://localhost:8000/tuning/best"
+            },
+            {
+              "method": "POST",
+              "path": "/tuning/apply-best",
+              "description": "Apply parameters from the best iteration to the current configuration",
+              "response": [
+                {"field": "applied", "type": "int", "description": "Number of parameters applied"},
+                {"field": "best_iteration", "type": "int", "description": "Best iteration number"},
+                {"field": "best_score", "type": "float", "description": "Best score"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/tuning/apply-best"
+            },
+            {
+              "method": "GET",
+              "path": "/tuning/sessions",
+              "description": "List recent tuning sessions",
+              "query_parameters": [
+                {"parameter": "limit", "type": "int", "default": "10", "description": "Maximum sessions to return"}
+              ],
+              "response": [
+                {"field": "sessions", "type": "list", "description": "Session summary objects"},
+                {"field": "count", "type": "int", "description": "Total session count"}
+              ],
+              "curl_example": "curl \"http://localhost:8000/tuning/sessions?limit=5\""
+            }
+          ]
+        },
+        {
+          "section_number": "10",
+          "section_title": "Ring Buffer Endpoints",
+          "description": "These endpoints manage the conversation ring buffer",
+          "endpoints": [
+            {
+              "method": "GET",
+              "path": "/api/ring/status",
+              "description": "Get current ring buffer status",
+              "response": [
+                {"field": "current_turns", "type": "int", "description": "Current turn count in buffer"},
+                {"field": "max_turns", "type": "int", "description": "Maximum turns capacity"},
+                {"field": "topics", "type": "list[string]", "description": "Detected conversation topics (max 10)"},
+                {"field": "recent_messages", "type": "list[dict]", "description": "Recent messages (last 6)"}
+              ],
+              "curl_example": "curl http://localhost:8000/api/ring/status",
+              "example_response": {
+                "current_turns": 8,
+                "max_turns": 10,
+                "topics": ["python", "machine learning", "data processing"],
+                "recent_messages": [
+                  {"role": "user", "content": "How do I use pandas?"},
+                  {"role": "assistant", "content": "Pandas is a powerful data..."}
+                ]
+              }
+            },
+            {
+              "method": "POST",
+              "path": "/api/ring/config",
+              "description": "Configure the ring buffer size",
+              "request_body": [
+                {"field": "max_turns", "type": "int", "required": true, "constraints": "2-20", "description": "Maximum turns capacity"}
+              ],
+              "response": [
+                {"field": "status", "type": "string", "description": "\"configured\""},
+                {"field": "previous_max_turns", "type": "int", "description": "Previous capacity"},
+                {"field": "new_max_turns", "type": "int", "description": "New capacity"},
+                {"field": "current_turns", "type": "int", "description": "Current turn count"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/api/ring/config \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"max_turns\": 15}'",
+              "example_response": {
+                "status": "configured",
+                "previous_max_turns": 10,
+                "new_max_turns": 15,
+                "current_turns": 8
+              }
+            },
+            {
+              "method": "POST",
+              "path": "/api/ring/clear",
+              "description": "Clear the ring buffer, resetting conversation memory",
+              "response": [
+                {"field": "status", "type": "string", "description": "\"cleared\""},
+                {"field": "cleared_turns", "type": "int", "description": "Number of turns cleared"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/api/ring/clear",
+              "example_response": {
+                "status": "cleared",
+                "cleared_turns": 8
+              }
+            }
+          ]
+        },
+        {
+          "section_number": "11",
+          "section_title": "System Endpoints",
+          "description": "System-level control endpoints",
+          "endpoints": [
+            {
+              "method": "POST",
+              "path": "/api/system/relaunch",
+              "description": "Trigger a system relaunch. Executes the relaunch script in the background.",
+              "response": [
+                {"field": "status", "type": "string", "description": "\"restarting\""},
+                {"field": "message", "type": "string", "description": "Status message"}
+              ],
+              "curl_example": "curl -X POST http://localhost:8000/api/system/relaunch",
+              "example_response": {
+                "status": "restarting",
+                "message": "Luna Engine is restarting..."
+              }
+            }
+          ]
+        },
+        {
+          "section_number": "12",
+          "section_title": "SSE Event Reference",
+          "description": "Complete reference for all Server-Sent Events across streaming endpoints",
+          "endpoints": [
+            {
+              "endpoint": "POST /stream",
+              "events": [
+                {"event": "token", "fields": "text: string", "description": "Generated token chunk"},
+                {"event": "done", "fields": "model: string, input_tokens: int, output_tokens: int, latency_ms: float, delegated: bool, local: bool, fallback: bool", "description": "Generation complete with metadata"},
+                {"event": "error", "fields": "error: string", "description": "Error message"}
+              ]
+            },
+            {
+              "endpoint": "POST /persona/stream",
+              "description": "Uses typed JSON data format (no named SSE events)",
+              "events": [
+                {"type": "context", "fields": "memory: array, state: object", "description": "Memory items and engine state (sent first)"},
+                {"type": "token", "fields": "text: string", "description": "Generated token chunk"},
+                {"type": "done", "fields": "response: string, metadata: object", "description": "Full response and metadata"},
+                {"type": "error", "fields": "message: string", "description": "Error message"}
+              ],
+              "memory_item_fields": [
+                "id: string - Memory node ID",
+                "content: string - Content (truncated to 200 chars)",
+                "type: string - Node type (FACT, DECISION, etc.)",
+                "source: string - Source identifier"
+              ],
+              "state_fields": [
+                "session_id: string - Current session",
+                "is_processing: bool - Always true during streaming",
+                "state: string - Engine state name",
+                "model: string - Current model"
+              ]
+            },
+            {
+              "endpoint": "GET /thoughts",
+              "events": [
+                {"event": "status", "fields": "connected: bool, is_processing: bool, goal: string", "description": "Initial connection status"},
+                {"event": "thought", "fields": "type: \"thought\", message: string, is_processing: bool, goal: string", "description": "Internal thought/progress"},
+                {"event": "phase", "fields": "type: \"phase\", phase: string, is_processing: bool, goal: string", "description": "Processing phase change"},
+                {"event": "step", "fields": "type: \"step\", step_num: int, total_steps: int, description: string, is_processing: bool, goal: string", "description": "Plan step execution"},
+                {"event": "ping", "fields": "is_processing: bool, pending: int", "description": "Keepalive (every 15s)"}
+              ],
+              "thought_message_prefixes": [
+                {"prefix": "[DIRECT]", "meaning": "Direct response (no planning)"},
+                {"prefix": "[PLAN]", "meaning": "Creating a plan"},
+                {"prefix": "[STEP]", "meaning": "Executing plan step"},
+                {"prefix": "[TOOL]", "meaning": "Using a tool"},
+                {"prefix": "[OK]", "meaning": "Success"},
+                {"prefix": "[ERROR]", "meaning": "Error occurred"},
+                {"prefix": "[ABORT]", "meaning": "Task aborted"}
+              ],
+              "processing_phases": [
+                {"phase": "idle", "description": "No active processing"},
+                {"phase": "planning", "description": "Creating a plan"},
+                {"phase": "observing", "description": "Gathering context"},
+                {"phase": "thinking", "description": "Processing/reasoning"},
+                {"phase": "acting", "description": "Executing actions"}
+              ]
+            },
+            {
+              "endpoint": "GET /voice/stream",
+              "events": [
+                {"event": "status", "fields": "connected: bool, status: string, running: bool", "description": "Voice system status"},
+                {"event": "transcription", "fields": "type: \"transcription\", text: string", "description": "User speech transcribed"},
+                {"event": "response", "fields": "type: \"response\", text: string", "description": "Luna's response ready"},
+                {"event": "ping", "fields": "running: bool", "description": "Keepalive (every 10s)"}
+              ],
+              "voice_status_values": [
+                {"status": "inactive", "description": "Voice system not started"},
+                {"status": "idle", "description": "Ready, not recording"},
+                {"status": "listening", "description": "Recording user speech"},
+                {"status": "thinking", "description": "Processing/generating"},
+                {"status": "speaking", "description": "Playing TTS audio"}
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "13",
+          "section_title": "Error Handling",
+          "subsections": [
+            {
+              "title": "HTTP Status Codes",
+              "table": [
+                {"code": "200", "meaning": "Success", "when_returned": "Request completed successfully"},
+                {"code": "400", "meaning": "Bad Request", "when_returned": "Invalid request body or parameters"},
+                {"code": "404", "meaning": "Not Found", "when_returned": "Resource not found (node, parameter, etc.)"},
+                {"code": "500", "meaning": "Internal Server Error", "when_returned": "Operation failed unexpectedly"},
+                {"code": "503", "meaning": "Service Unavailable", "when_returned": "Engine not ready or required actor unavailable"},
+                {"code": "504", "meaning": "Gateway Timeout", "when_returned": "Response timeout exceeded"}
+              ]
+            },
+            {
+              "title": "Error Response Format",
+              "code_block": {
+                "language": "json",
+                "code": "{\n  \"detail\": \"Error message describing what went wrong\"\n}"
+              }
+            },
+            {
+              "title": "Common Error Scenarios",
+              "examples": [
+                {
+                  "name": "Engine Not Ready (503)",
+                  "response": {"detail": "Engine not ready"}
+                },
+                {
+                  "name": "Actor Not Available (503)",
+                  "response": {"detail": "Director not available"}
+                },
+                {
+                  "name": "Resource Not Found (404)",
+                  "response": {"detail": "Node not found: node_xyz"}
+                },
+                {
+                  "name": "Validation Error (422)",
+                  "response": {
+                    "detail": [
+                      {
+                        "loc": ["body", "message"],
+                        "msg": "field required",
+                        "type": "value_error.missing"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "title": "SSE Error Events",
+              "description": "Errors during streaming are sent as SSE events",
+              "examples": [
+                {
+                  "endpoint": "/stream",
+                  "format": "event: error\ndata: {\"error\": \"Timeout waiting for tokens\"}"
+                },
+                {
+                  "endpoint": "/persona/stream",
+                  "format": "data: {\"type\": \"error\", \"message\": \"Director not available\"}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section_number": "14",
+          "section_title": "Examples",
+          "examples": [
+            {
+              "name": "Basic Conversation",
+              "code_block": {
+                "language": "bash",
+                "code": "# Send a message and get response\ncurl -X POST http://localhost:8000/message \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"message\": \"What is the capital of France?\"}'"
+              }
+            },
+            {
+              "name": "Streaming Response",
+              "code_block": {
+                "language": "bash",
+                "code": "# Stream response token by token\ncurl -X POST http://localhost:8000/stream \\\n  -H \"Content-Type: application/json\" \\\n  -H \"Accept: text/event-stream\" \\\n  -d '{\"message\": \"Write a haiku about programming\"}'"
+              }
+            },
+            {
+              "name": "Context-Aware Streaming",
+              "code_block": {
+                "language": "bash",
+                "code": "# Get context first, then stream response\ncurl -X POST http://localhost:8000/persona/stream \\\n  -H \"Content-Type: application/json\" \\\n  -H \"Accept: text/event-stream\" \\\n  -d '{\"message\": \"What have we discussed?\"}'"
+              }
+            },
+            {
+              "name": "Monitor Thoughts",
+              "code_block": {
+                "language": "bash",
+                "code": "# Open a persistent connection to monitor Luna's thinking\ncurl http://localhost:8000/thoughts \\\n  -H \"Accept: text/event-stream\""
+              }
+            },
+            {
+              "name": "Create Memory",
+              "code_block": {
+                "language": "bash",
+                "code": "# Create a new memory node\ncurl -X POST http://localhost:8000/memory/nodes \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"node_type\": \"PREFERENCE\",\n    \"content\": \"User prefers concise explanations\",\n    \"importance\": 0.8\n  }'"
+              }
+            },
+            {
+              "name": "Search Memory",
+              "code_block": {
+                "language": "bash",
+                "code": "# Get settled facts\ncurl \"http://localhost:8000/memory/nodes?node_type=FACT&lock_in_state=settled&limit=10\""
+              }
+            },
+            {
+              "name": "Reinforce Important Memory",
+              "code_block": {
+                "language": "bash",
+                "code": "# Reinforce a memory to protect from pruning\ncurl -X POST http://localhost:8000/memory/nodes/node_abc123/reinforce"
+              }
+            },
+            {
+              "name": "Start Voice Session",
+              "code_block": {
+                "language": "bash",
+                "code": "# Start voice with hands-free mode\ncurl -X POST http://localhost:8000/voice/start \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"hands_free\": true}'\n\n# Monitor voice events\ncurl http://localhost:8000/voice/stream \\\n  -H \"Accept: text/event-stream\""
+              }
+            },
+            {
+              "name": "Tuning Workflow",
+              "code_block": {
+                "language": "bash",
+                "code": "# Start tuning session focused on memory\ncurl -X POST http://localhost:8000/tuning/session/new \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"focus\": \"memory\"}'\n\n# Adjust a parameter\ncurl -X POST http://localhost:8000/tuning/params/memory/lock_in_threshold \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"value\": 0.65}'\n\n# Run evaluation\ncurl -X POST http://localhost:8000/tuning/eval\n\n# Compare iterations\ncurl \"http://localhost:8000/tuning/compare?iter1=1&iter2=2\"\n\n# Apply best settings\ncurl -X POST http://localhost:8000/tuning/apply-best\n\n# End session\ncurl -X POST http://localhost:8000/tuning/session/end"
+              }
+            },
+            {
+              "name": "Health Check Script",
+              "code_block": {
+                "language": "bash",
+                "code": "#!/bin/bash\n# Check if Luna is healthy\nresponse=$(curl -s http://localhost:8000/health)\nstatus=$(echo $response | jq -r '.status')\n\nif [ \"$status\" = \"healthy\" ]; then\n  echo \"Luna is running\"\n  exit 0\nelse\n  echo \"Luna is not healthy: $response\"\n  exit 1\nfi"
+              }
+            },
+            {
+              "name": "JavaScript Client Example",
+              "code_block": {
+                "language": "javascript",
+                "code": "// Streaming with fetch API\nasync function talkToLuna(message) {\n  const response = await fetch('http://localhost:8000/persona/stream', {\n    method: 'POST',\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ message })\n  });\n\n  const reader = response.body.getReader();\n  const decoder = new TextDecoder();\n\n  while (true) {\n    const { done, value } = await reader.read();\n    if (done) break;\n\n    const text = decoder.decode(value);\n    const lines = text.split('\\n');\n\n    for (const line of lines) {\n      if (line.startsWith('data: ')) {\n        const data = JSON.parse(line.slice(6));\n\n        switch (data.type) {\n          case 'context':\n            console.log('Memory:', data.memory);\n            console.log('State:', data.state);\n            break;\n          case 'token':\n            process.stdout.write(data.text);\n            break;\n          case 'done':\n            console.log('\\n---');\n            console.log('Metadata:', data.metadata);\n            break;\n          case 'error':\n            console.error('Error:', data.message);\n            break;\n        }\n      }\n    }\n  }\n}\n\n// Monitor thoughts with EventSource\nconst thoughts = new EventSource('http://localhost:8000/thoughts');\n\nthoughts.addEventListener('thought', (e) => {\n  const data = JSON.parse(e.data);\n  console.log(`[${data.is_processing ? 'THINKING' : 'IDLE'}] ${data.message}`);\n});\n\nthoughts.addEventListener('phase', (e) => {\n  const data = JSON.parse(e.data);\n  console.log(`Phase: ${data.phase}`);\n});"
+              }
+            }
+          ]
+        },
+        {
+          "section_title": "Endpoint Summary",
+          "table": [
+            {"category": "Core", "count": 7, "description": "Health, status, message, abort, interrupt, thoughts"},
+            {"category": "Streaming (SSE)", "count": 4, "description": "/stream, /persona/stream, /thoughts, /voice/stream"},
+            {"category": "WebSocket", "count": 1, "description": "/ws/orb"},
+            {"category": "Ring Buffer", "count": 3, "description": "Status, config, clear"},
+            {"category": "Memory", "count": 13, "description": "Node CRUD, access, reinforce, search, smart-fetch, add-edge, trace"},
+            {"category": "Extraction", "count": 4, "description": "Trigger, prune, stats, history"},
+            {"category": "Hub/History", "count": 10, "description": "Session, turn, tier, search management"},
+            {"category": "Voice", "count": 7, "description": "Start, stop, status, listen, speak, stream"},
+            {"category": "Tuning", "count": 12, "description": "Parameters, sessions, eval, compare"},
+            {"category": "Clusters", "count": 4, "description": "Stats, list, get, constellation"},
+            {"category": "Debug", "count": 3, "description": "Conversation cache, personality, context"},
+            {"category": "Slash Commands", "count": 19, "description": "Health, find-person, stats, search, recent, etc."},
+            {"category": "LLM Provider", "count": 3, "description": "Providers, current, switch"},
+            {"category": "System", "count": 2, "description": "Relaunch, set-app-context"},
+            {"category": "Total Engine API", "count": 74, "description": ""},
+            {"category": "MCP API Proxy", "count": 25, "description": "Engine API proxy for Claude Desktop"},
+            {"category": "MCP Tools", "count": 41, "description": "Filesystem, memory, session, state, git, forge"}
+          ]
+        },
+        {
+          "section_title": "MCP Integration",
+          "subsections": [
+            {
+              "title": "MCP Server (FastMCP)",
+              "details": {
+                "location": "/src/luna_mcp/server.py",
+                "protocol": "stdio (for Claude Desktop)",
+                "name": "Luna-Hub-MCP-V1",
+                "port_api_proxy": 8742
+              }
+            },
+            {
+              "title": "MCP Tool Categories (41 Total)",
+              "table": [
+                {"category": "Filesystem", "count": 3, "tools": "luna_read, luna_write, luna_list"},
+                {"category": "Memory", "count": 9, "tools": "luna_smart_fetch, memory_matrix_search, memory_matrix_add_node, memory_matrix_add_edge, memory_matrix_get_context, memory_matrix_trace, luna_save_memory, luna_start_session, luna_record_turn"},
+                {"category": "Session", "count": 5, "tools": "luna_end_session, luna_get_current_session, luna_auto_session_status, luna_flush_session, luna_detect_context"},
+                {"category": "State", "count": 2, "tools": "luna_get_state, luna_set_app_context"},
+                {"category": "Git", "count": 2, "tools": "luna_git_sync, luna_git_status"},
+                {"category": "Persona Forge", "count": 20, "tools": "forge_load, forge_assay, forge_gaps, forge_mint, forge_export, forge_status, forge_list_sources, forge_read_raw, forge_add_example, forge_add_batch, forge_search, forge_read_matrix, forge_read_turns, character_list, character_load, character_modulate, character_save, character_show, vk_run, vk_list, vk_probes"}
+              ]
+            },
+            {
+              "title": "Auto-Session Recording",
+              "description": "The MCP layer implements automatic session recording",
+              "features": [
+                "Sessions start automatically on first tool activity",
+                "Turns are buffered and flushed every 4 turns",
+                "Sessions end after 5 minutes of inactivity",
+                "Extraction is triggered on session end"
+              ]
+            }
+          ]
+        },
+        {
+          "section_title": "Changelog",
+          "table": [
+            {"version": "3.0.0", "date": "Jan 30, 2026", "description": "v3.0 Bible Audit - Updated endpoint counts (74 total), added MCP section"},
+            {"version": "2.4.0", "date": "Jan 25, 2026", "description": "Initial release of Part XV: API Reference"}
+          ]
+        }
+      ]
+    },
+    {
+      "part_number": "XVI",
+      "part_title": "Luna Hub UI",
+      "version": "3.0",
+      "date": "January 30, 2026",
+      "status": "COMPLETE (v3.0 Audit)",
+      "frontend_path": "/frontend/src/",
+      "framework": "React 18.2.0 + Vite + Tailwind CSS",
+      "sections": [
+        {
+          "section_number": "16.1",
+          "section_title": "Overview",
+          "description": "The Luna Hub is the web-based control interface for the Luna Engine. It provides real-time monitoring of Luna's consciousness state, conversation management, voice interaction controls, and developer debugging tools.",
+          "technology_stack": [
+            {"layer": "Framework", "technology": "React 18.2.0", "purpose": "Component-based UI"},
+            {"layer": "Build Tool", "technology": "Vite", "purpose": "Fast HMR and bundling"},
+            {"layer": "Styling", "technology": "Tailwind CSS", "purpose": "Utility-first styling"},
+            {"layer": "Charts", "technology": "Recharts 3.6.0", "purpose": "Data visualization"},
+            {"layer": "State", "technology": "Custom Hooks", "purpose": "API communication"},
+            {"layer": "Real-time", "technology": "Server-Sent Events", "purpose": "Live updates"}
+          ],
+          "architecture_principles": [
+            "No External State Library - Custom hooks manage all state (no Redux, no React Query)",
+            "Hooks-Based API Layer - Five custom hooks (`useLunaAPI`, `useChat`, `useVoice`, `useOrbState`, `useOrbFollow`)",
+            "Glass Morphism Design - Consistent dark mode aesthetic with blur effects",
+            "SSE for Real-Time - Server-Sent Events for voice status and thought streams",
+            "WebSocket for Orb - Real-time orb state updates via `/ws/orb`",
+            "Polling for Status - 2-second intervals for engine health and consciousness"
+          ]
+        },
+        {
+          "section_number": "16.2",
+          "section_title": "Architecture",
+          "component_hierarchy": {
+            "description": "Component Hierarchy (20 Components)",
+            "diagram": "LunaHub (App.jsx)\n|\n+-- GradientOrb (x3) --------------- Background visual elements\n|\n+-- Header ------------------------- Branding and toggle controls\n|   +-- StatusDot ----------------- Connection indicator\n|\n+-- Main Grid (12-column)\n|   |\n|   +-- Left Column (col-span-7)\n|   |   +-- ChatPanel ------------- Conversation interface\n|   |       +-- GlassCard --------- Container\n|   |       +-- LunaOrb ----------- Animated orb (uses useOrbState, useOrbFollow)\n|   |       +-- Messages ---------- Role-based bubbles\n|   |       +-- Input ------------- Text entry\n|   |       +-- VoiceTuningPanel -- Voice settings modal\n|   |       +-- OrbSettingsPanel -- Orb settings modal\n|   |\n|   +-- Right Column (col-span-5)\n|       +-- VoicePanel ------------ Voice controls\n|       |   +-- GlassCard\n|       |   +-- StatusIndicator\n|       |   +-- PTT Button\n|       |\n|       +-- EngineStatus ---------- Engine health\n|       |   +-- GlassCard\n|       |   +-- StatusDot (actors)\n|       |   +-- Context ring viz\n|       |\n|       +-- ThoughtStream --------- Internal process stream\n|       |   +-- GlassCard\n|       |   +-- SSE connection\n|       |\n|       +-- ConversationCache ----- Memory view (collapsible)\n|       |   +-- GlassCard\n|       |\n|       +-- ConsciousnessMonitor -- Mood/coherence\n|           +-- GlassCard\n|           +-- StatusDot\n|\n+-- Modal Overlays\n|   +-- ContextDebugPanel --------- Context window debug\n|   +-- PersonalityMonitorPanel --- Personality patches\n|\n+-- Slide-Out Panels\n|   +-- TuningPanel --------------- Parameter adjustment\n|\n+-- Unused/Orphan (exported but not rendered)\n|   +-- LunaAutoTuner ------------- Auto-optimization modal\n|   +-- MemoryEconomyPanel -------- Memory economy stats\n|   +-- LLMProviderDropdown ------- Provider switcher\n|\n+-- Footer ------------------------ Version and credits"
+          },
+          "data_flow_diagram": {
+            "description": "Shows how data flows from Luna Engine Backend API through Custom Hooks to App.jsx and down to components",
+            "flow": "Luna Engine Backend API (port 8000) -> /health, /stream, /status, /consc., /voice, /stream -> CUSTOM HOOKS (useLunaAPI(), useChat(), useVoice()) -> App.jsx (LunaHub) orchestrates all hooks and passes props down -> ChatPanel, VoicePanel, EngineStatus (components receive via props)"
+          },
+          "api_integration_pattern": {
+            "description": "Pattern: Hook provides state + actions, component renders",
+            "code_block": {
+              "language": "javascript",
+              "code": "const {\n  status,         // Server state\n  consciousness,  // Server state\n  isConnected,    // Derived boolean\n  isLoading,      // Request in progress\n  error,          // Error message\n  sendMessage,    // Action function\n  relaunchSystem, // Action function\n} = useLunaAPI();\n\n// Components receive via props or use hook directly\n<EngineStatus\n  status={status}\n  isConnected={isConnected}\n  onRelaunch={relaunchSystem}\n/>"
+            }
+          }
+        },
+        {
+          "section_number": "16.3",
+          "section_title": "Core Components",
+          "components": [
+            {
+              "name": "ChatPanel",
+              "file": "/frontend/src/components/ChatPanel.jsx",
+              "lines": 158,
+              "description": "The main conversation interface for text-based interaction with Luna",
+              "props": [
+                {"prop": "onSend", "type": "(text: string) => void", "required": true, "description": "Callback when user sends message"},
+                {"prop": "isLoading", "type": "boolean", "required": true, "description": "Shows loading indicator when true"},
+                {"prop": "messages", "type": "Message[]", "required": false, "description": "Array of chat messages"},
+                {"prop": "debugKeywords", "type": "string[]", "required": false, "description": "Keywords to highlight in debug mode"}
+              ],
+              "message_object_interface": {
+                "language": "typescript",
+                "code": "interface Message {\n  id?: number;\n  role: 'user' | 'assistant';\n  content: string;\n  streaming?: boolean;     // True while tokens arriving\n  error?: boolean;         // True if generation failed\n  model?: string;          // Model used for generation\n  delegated?: boolean;     // True if Claude was used\n  local?: boolean;         // True if local model used\n  fallback?: boolean;      // True if fallback model used\n  tokens?: number;         // Output token count\n  latency?: number;        // Generation time in ms\n  metadata?: object;       // Additional metadata\n}"
+              },
+              "features": [
+                "Auto-scroll to latest message",
+                "Shift+Enter for newlines, Enter to submit",
+                "Keyword highlighting in debug mode",
+                "Message metadata display (delegated/local/cloud indicators)",
+                "Loading indicator with animated dots"
+              ],
+              "code_pattern": {
+                "description": "Keyword highlighting implementation",
+                "language": "jsx",
+                "code": "// Keyword highlighting implementation\nconst highlightKeywords = (text) => {"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "diagrams": [
+    {
+      "page": "297-298",
+      "type": "ASCII Component Hierarchy",
+      "description": "Shows the complete React component tree for Luna Hub UI with 20 components, organized by layout position (Header, Main Grid with Left/Right columns, Modal Overlays, Slide-Out Panels, Footer). Indicates parent-child relationships and component purposes."
+    },
+    {
+      "page": "298-299",
+      "type": "ASCII Data Flow Diagram",
+      "description": "Illustrates data flow from Luna Engine Backend API (port 8000) through various endpoints (/health, /stream, /status, /consc., /voice) to Custom Hooks layer (useLunaAPI, useChat, useVoice), then to App.jsx which orchestrates and passes props to child components (ChatPanel, VoicePanel, EngineStatus)."
+    }
+  ],
+  "tables": [
+    {
+      "page": "281",
+      "title": "GET /tuning/params/{name} Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 8
+    },
+    {
+      "page": "281",
+      "title": "POST /tuning/params/{name} Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 5
+    },
+    {
+      "page": "282",
+      "title": "POST /tuning/param-reset/{name} Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 4
+    },
+    {
+      "page": "282",
+      "title": "POST /tuning/session/new Request/Response Fields",
+      "headers": ["Field", "Type", "Required", "Default", "Description"],
+      "row_count": 8
+    },
+    {
+      "page": "283",
+      "title": "GET /tuning/session Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 8
+    },
+    {
+      "page": "283",
+      "title": "POST /tuning/session/end Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 6
+    },
+    {
+      "page": "284",
+      "title": "POST /tuning/eval Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 10
+    },
+    {
+      "page": "284-285",
+      "title": "GET /tuning/compare Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 7
+    },
+    {
+      "page": "285",
+      "title": "GET /tuning/best Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 3
+    },
+    {
+      "page": "285",
+      "title": "POST /tuning/apply-best Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 3
+    },
+    {
+      "page": "286",
+      "title": "GET /tuning/sessions Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 2
+    },
+    {
+      "page": "286",
+      "title": "GET /api/ring/status Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 4
+    },
+    {
+      "page": "287",
+      "title": "POST /api/ring/config Request/Response Fields",
+      "headers": ["Field", "Type", "Required", "Constraints", "Description"],
+      "row_count": 5
+    },
+    {
+      "page": "288",
+      "title": "POST /api/ring/clear Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 2
+    },
+    {
+      "page": "288",
+      "title": "POST /api/system/relaunch Response Fields",
+      "headers": ["Field", "Type", "Description"],
+      "row_count": 2
+    },
+    {
+      "page": "289",
+      "title": "POST /stream SSE Events",
+      "headers": ["Event", "Fields", "Description"],
+      "row_count": 3
+    },
+    {
+      "page": "289",
+      "title": "POST /persona/stream SSE Events",
+      "headers": ["Type", "Fields", "Description"],
+      "row_count": 4
+    },
+    {
+      "page": "290",
+      "title": "GET /thoughts SSE Events",
+      "headers": ["Event", "Fields", "Description"],
+      "row_count": 5
+    },
+    {
+      "page": "290",
+      "title": "Thought Message Prefixes",
+      "headers": ["Prefix", "Meaning"],
+      "row_count": 7
+    },
+    {
+      "page": "290",
+      "title": "Processing Phases",
+      "headers": ["Phase", "Description"],
+      "row_count": 5
+    },
+    {
+      "page": "291",
+      "title": "GET /voice/stream SSE Events",
+      "headers": ["Event", "Fields", "Description"],
+      "row_count": 4
+    },
+    {
+      "page": "291",
+      "title": "Voice Status Values",
+      "headers": ["Status", "Description"],
+      "row_count": 5
+    },
+    {
+      "page": "291",
+      "title": "HTTP Status Codes",
+      "headers": ["Code", "Meaning", "When Returned"],
+      "row_count": 6
+    },
+    {
+      "page": "296",
+      "title": "Endpoint Summary",
+      "headers": ["Category", "Count", "Description"],
+      "row_count": 17
+    },
+    {
+      "page": "296",
+      "title": "MCP Tool Categories",
+      "headers": ["Category", "Count", "Tools"],
+      "row_count": 6
+    },
+    {
+      "page": "297",
+      "title": "Changelog",
+      "headers": ["Version", "Date", "Description"],
+      "row_count": 2
+    },
+    {
+      "page": "297",
+      "title": "Technology Stack",
+      "headers": ["Layer", "Technology", "Purpose"],
+      "row_count": 6
+    },
+    {
+      "page": "300",
+      "title": "ChatPanel Props",
+      "headers": ["Prop", "Type", "Required", "Description"],
+      "row_count": 4
+    }
+  ],
+  "code_blocks": [
+    {"page": "281", "language": "bash", "description": "curl example for GET /tuning/params/{name}"},
+    {"page": "281-282", "language": "bash", "description": "curl example for POST /tuning/params/{name}"},
+    {"page": "282", "language": "bash", "description": "curl example for POST /tuning/param-reset/{name}"},
+    {"page": "283", "language": "bash", "description": "curl example for POST /tuning/session/new"},
+    {"page": "283", "language": "bash", "description": "curl example for GET /tuning/session"},
+    {"page": "283", "language": "bash", "description": "curl example for POST /tuning/session/end"},
+    {"page": "284", "language": "bash", "description": "curl example for POST /tuning/eval"},
+    {"page": "285", "language": "bash", "description": "curl example for GET /tuning/compare"},
+    {"page": "285", "language": "bash", "description": "curl example for GET /tuning/best"},
+    {"page": "285", "language": "bash", "description": "curl example for POST /tuning/apply-best"},
+    {"page": "286", "language": "bash", "description": "curl example for GET /tuning/sessions"},
+    {"page": "286", "language": "bash", "description": "curl example for GET /api/ring/status"},
+    {"page": "286", "language": "json", "description": "Example response for GET /api/ring/status"},
+    {"page": "287", "language": "bash", "description": "curl example for POST /api/ring/config"},
+    {"page": "287", "language": "json", "description": "Example response for POST /api/ring/config"},
+    {"page": "288", "language": "bash", "description": "curl example for POST /api/ring/clear"},
+    {"page": "288", "language": "json", "description": "Example response for POST /api/ring/clear"},
+    {"page": "288", "language": "bash", "description": "curl example for POST /api/system/relaunch"},
+    {"page": "288", "language": "json", "description": "Example response for POST /api/system/relaunch"},
+    {"page": "291-292", "language": "json", "description": "Error response format examples"},
+    {"page": "292", "language": "text", "description": "SSE error event format"},
+    {"page": "293", "language": "bash", "description": "Basic conversation example"},
+    {"page": "293", "language": "bash", "description": "Streaming response example"},
+    {"page": "293", "language": "bash", "description": "Context-aware streaming example"},
+    {"page": "293", "language": "bash", "description": "Monitor thoughts example"},
+    {"page": "293", "language": "bash", "description": "Create memory example"},
+    {"page": "293", "language": "bash", "description": "Search memory example"},
+    {"page": "293", "language": "bash", "description": "Reinforce memory example"},
+    {"page": "294", "language": "bash", "description": "Start voice session example"},
+    {"page": "294", "language": "bash", "description": "Tuning workflow example"},
+    {"page": "294", "language": "bash", "description": "Health check script"},
+    {"page": "295-296", "language": "javascript", "description": "JavaScript client example with fetch API and EventSource"},
+    {"page": "299", "language": "javascript", "description": "API integration pattern with useLunaAPI hook"},
+    {"page": "300", "language": "typescript", "description": "Message interface definition"},
+    {"page": "300", "language": "jsx", "description": "Keyword highlighting implementation (partial)"}
+  ]
+}

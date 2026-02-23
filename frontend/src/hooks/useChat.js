@@ -64,6 +64,13 @@ const parseSlashCommand = (text) => {
     '/voight-kampff': { endpoint: '/slash/voight-kampff', method: 'GET' },
     // System prompt diagnostic
     '/prompt': { endpoint: '/slash/prompt', method: 'GET' },
+    // FaceID management
+    '/faceid': {
+      endpoint: args
+        ? `/slash/faceid/${encodeURIComponent(args)}`
+        : '/slash/faceid',
+      method: args && (args.startsWith('set-pin') || args.startsWith('reset')) ? 'POST' : 'GET',
+    },
   };
 
   const cmd = commands[command];
@@ -177,6 +184,10 @@ export function useChat() {
       const response = await fetch(`http://127.0.0.1:8000${parsed.endpoint}`, {
         method: parsed.method,
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
       const data = await response.json();
 
@@ -353,6 +364,7 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
                     latency: result.metadata?.generation_time_ms,
                     delegated: result.metadata?.model?.includes('claude'),
                     local: result.metadata?.model?.includes('qwen'),
+                    accessDeniedCount: result.metadata?.access_denied_count || 0,
                   }
                 : m
             )

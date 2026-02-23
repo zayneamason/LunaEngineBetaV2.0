@@ -230,7 +230,12 @@ class MatrixActor(Actor):
         tokens: Optional[int] = None,
     ) -> str:
         """
-        Store a conversation turn as a FACT memory node.
+        Store a conversation turn as a CONVERSATION_TURN node.
+
+        These are raw archival records, NOT extracted knowledge.
+        Entity linking is disabled to prevent mention pollution.
+        The extraction pipeline (Scribe -> Librarian) handles
+        knowledge extraction separately.
 
         Args:
             session_id: Session identifier
@@ -241,7 +246,6 @@ class MatrixActor(Actor):
         Returns:
             The node ID
         """
-        # Store conversation turns as FACT nodes
         metadata = {
             "tags": ["conversation", role, session_id],
             "session_id": session_id,
@@ -250,20 +254,23 @@ class MatrixActor(Actor):
             metadata["tokens"] = tokens
 
         return await self._matrix.add_node(
-            node_type="FACT",
+            node_type="CONVERSATION_TURN",
             content=f"[{role}] {content}",
             source="conversation",
             metadata=metadata,
+            link_entities=False,
         )
 
     async def get_recent_turns(self, session_id: Optional[str] = None, limit: int = 10) -> list:
-        """Get recent conversation turns (searches FACT nodes tagged as conversation)."""
+        """Get recent conversation turns (searches CONVERSATION_TURN nodes)."""
         if not self._initialized:
             return []
 
-        # Search for conversation-tagged nodes
-        results = await self.search(f"conversation {session_id or ''}", limit=limit)
-        return results
+        return await self._matrix.search_nodes(
+            query=session_id or "conversation",
+            node_type="CONVERSATION_TURN",
+            limit=limit,
+        )
 
     async def get_context(
         self,

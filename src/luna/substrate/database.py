@@ -110,6 +110,7 @@ class MemoryDatabase:
 
         # Run migrations for existing databases
         await self._migrate_scope_columns()
+        await self._migrate_ambassador_tables()
 
         logger.debug("Schema loaded successfully")
 
@@ -146,6 +147,29 @@ class MemoryDatabase:
                 logger.debug(f"Scope index skip: {e}")
 
         await self._connection.commit()
+
+    async def _migrate_ambassador_tables(self) -> None:
+        """Create ambassador protocol tables if missing (v2.2 migration)."""
+        migration_path = Path(__file__).parent.parent.parent.parent / "migrations" / "004_ambassador_protocol.sql"
+        if not migration_path.exists():
+            logger.debug("Ambassador migration file not found, skipping")
+            return
+
+        try:
+            # Check if table already exists
+            cursor = await self._connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='ambassador_protocol'"
+            )
+            if await cursor.fetchone():
+                logger.debug("Ambassador tables already exist, skipping migration")
+                return
+
+            migration_sql = migration_path.read_text()
+            await self._connection.executescript(migration_sql)
+            await self._connection.commit()
+            logger.info("Migration: created ambassador_protocol and ambassador_audit_log tables")
+        except Exception as e:
+            logger.debug(f"Ambassador migration skip: {e}")
 
     async def close(self) -> None:
         """

@@ -1,0 +1,806 @@
+{
+  "pages": "81-100",
+  "sections": [
+    {
+      "part": "V",
+      "title": "The Librarian (continued from previous pages)",
+      "status": "IMPLEMENTED",
+      "sections": [
+        {
+          "section": "5.8",
+          "title": "Context Retrieval (continued)",
+          "content": "Code block continuation showing the retrieve_context method implementation.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "Context retrieval implementation with search path routing",
+              "code": "start_time = time.monotonic()\nbudget = self.BUDGET_PRESETS[request.budget_preset]\n\n# 1. Route query to optimal search path\nsearch_path = self.router.route(request.query)\n\n# 2. Execute search\nif search_path == SearchPath.FTS5:\n    nodes = await self.matrix.fts5_search(request.query)\n    method = \"fts5\"\nelif search_path == SearchPath.FAISS:\n    embedding = self.embed(request.query)\n    nodes = await self.matrix.faiss_search(embedding)\n    method = \"faiss\"\nelif search_path == SearchPath.GRAPH:\n    entities = extract_entities(request.query)\n    nodes = await self.matrix.graph_search(entities)\n    method = \"graph\"\nelse:  # HYBRID\n    nodes = await self.matrix.hybrid_search(request.query)\n    method = \"hybrid\"\n\n# 3. Apply recency weighting\nnodes = self.apply_recency_weight(nodes, request.recency_weight)\n\n# 4. Trim to budget\nnodes, edges = self.trim_to_budget(nodes, budget, request.include_graph)\n\n# 5. Package result\nreturn ContextPacket(\n    nodes=nodes,\n    edges=edges,\n    token_count=self.count_tokens(nodes, edges),\n    search_method=method,\n    retrieval_ms=int((time.monotonic() - start_time) * 1000),\n    confidence_range=(\n        min(n.confidence for n in nodes) if nodes else 0,\n        max(n.confidence for n in nodes) if nodes else 0\n    )\n)"
+            },
+            {
+              "language": "python",
+              "description": "trim_to_budget method implementation",
+              "code": "def trim_to_budget(\n    self,\n    nodes: list[MemoryNode],\n    budget: int,\n    include_graph: bool\n) -> tuple[list[MemoryNode], list[MemoryEdge]]:\n    \"\"\"Trim nodes to fit token budget, optionally include edges.\"\"\"\n    result_nodes = []\n    result_edges = []\n    current_tokens = 0\n\n    for node in nodes:\n        node_tokens = count_tokens(node.content)\n\n        if current_tokens + node_tokens > budget:\n            break\n\n        result_nodes.append(node)\n        current_tokens += node_tokens\n\n        if include_graph:\n            # Add relevant edges (up to 10% of remaining budget)\n            edge_budget = int((budget - current_tokens) * 0.1)\n            edges = self.get_edges_for_node(node.id, budget=edge_budget)\n            result_edges.extend(edges)\n            current_tokens += sum(count_tokens(e.type) for e in edges)\n\n    return result_nodes, result_edges"
+            }
+          ]
+        },
+        {
+          "section": "5.9",
+          "title": "Filing Contract",
+          "status": "IMPLEMENTED",
+          "content": "The formal interface between Ben and The Dude.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "FilingResult dataclass and file function",
+              "code": "@dataclass\nclass FilingResult:\n    objects_created: list[UUID]\n    objects_merged: list[tuple[str, UUID]]  # (name, existing_id)\n    edges_created: list[UUID]\n    edges_skipped: list[str]  # reasons\n    inferred_edges: list[UUID]\n    filing_time_ms: int\n\nasync def file(extraction: ExtractionOutput) -> FilingResult:\n    \"\"\"\n    File extracted objects and edges into the Substrate.\n\n    Called by the Scribe when extraction is complete.\n    Returns detailed results for debugging/monitoring.\n    \"\"\"\n    ..."
+            }
+          ],
+          "tables": [
+            {
+              "title": "Filing Guarantees",
+              "headers": ["Guarantee", "Implementation"],
+              "rows": [
+                ["Idempotency", "Same extraction filed twice produces same result"],
+                ["Atomicity", "Either all objects/edges filed or none"],
+                ["Consistency", "No orphan edges (both endpoints must exist)"],
+                ["Deduplication", "Entity resolution prevents duplicates"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "5.10",
+          "title": "Performance Notes",
+          "status": "IMPLEMENTED (NetworkX, rustworkx migration deferred)",
+          "subsections": [
+            {
+              "title": "Graph Library Choice",
+              "content": "The current implementation uses NetworkX (not rustworkx as originally planned).",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Current NetworkX implementation",
+                  "code": "import networkx as nx\n\n# Current implementation (NetworkX)\nself._graph = nx.DiGraph()\nself._graph.add_node(node_id, **node_data)\nself._graph.add_edge(from_id, to_id, **edge_data)\nneighbors = list(self._graph.neighbors(node_id))"
+                },
+                {
+                  "language": "python",
+                  "description": "Future rustworkx migration (if needed)",
+                  "code": "import rustworkx as rx\n\n# rustworkx (100x faster for large graphs)\nneighbors = rx.bfs_successors(G, node_idx)"
+                }
+              ],
+              "notes": [
+                "Rationale: NetworkX is sufficient for current scale (thousands of nodes). The rustworkx migration is deferred until performance profiling indicates need.",
+                "Future Optimization: If graph operations become a bottleneck (>10K nodes), migrate to rustworkx.",
+                "See Part III Section 3.9 for migration details."
+              ]
+            },
+            {
+              "title": "Latency Budget",
+              "diagrams": [
+                {
+                  "type": "latency_breakdown",
+                  "title": "CONTEXT RETRIEVAL (target: <100ms)",
+                  "components": [
+                    {"operation": "Query routing", "time": "5ms"},
+                    {"operation": "Bloom filter check", "time": "1ms"},
+                    {"operation": "FTS5/FAISS/Graph search", "time": "50-80ms"},
+                    {"operation": "Trim to budget", "time": "5ms"}
+                  ],
+                  "total": "61-91ms"
+                },
+                {
+                  "type": "latency_breakdown",
+                  "title": "FILING (async, non-blocking)",
+                  "components": [
+                    {"operation": "Entity resolution", "time": "5-20ms"},
+                    {"operation": "Edge creation", "time": "10ms"},
+                    {"operation": "Embedding storage", "time": "5ms"}
+                  ],
+                  "total": "20-35ms"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section": "5.11",
+          "title": "Librarian Statistics",
+          "status": "IMPLEMENTED",
+          "content": "The Dude tracks comprehensive filing statistics.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "Filing statistics dictionary",
+              "code": "{\n  \"filings_count\": 150,        # Total filing operations\n  \"nodes_created\": 1234,       # New entities added\n  \"nodes_merged\": 567,         # Deduplicated to existing\n  \"edges_created\": 890,        # Relationships filed\n  \"context_retrievals\": 450,   # Context queries served\n  \"entity_updates_filed\": 123, # Profile updates filed\n  \"entity_versions_created\": 180, # Version records created\n  \"avg_filing_time_ms\": 35,    # Average operation time\n  \"cache_size\": 456,           # Alias cache entries\n  \"inference_queue_size\": 0    # Pending inference work\n}"
+            }
+          ]
+        },
+        {
+          "section": "5.12",
+          "title": "The Dude's Principles",
+          "tables": [
+            {
+              "title": "The Dude's Principles",
+              "headers": ["Principle", "Implementation"],
+              "rows": [
+                ["Separation", "Personality in process, neutrality in output"],
+                ["Lazy Inference", "Don't infer everything immediately; batch and defer"],
+                ["Confidence Tracking", "Every edge knows how certain we are"],
+                ["Prune Aggressively", "Low-value connections cost more than they're worth"],
+                ["Budget Awareness", "Never return more context than requested"]
+              ]
+            }
+          ],
+          "quotes": [
+            "\"The Dude abides.\" - The Dude"
+          ],
+          "content": "The Dude abides by these principles. He files things where they belong, connects what should be connected, and cleans up the mess. No drama. Just good filing."
+        }
+      ],
+      "end_marker": "End of Part V (v3.0)"
+    },
+    {
+      "part": "VI-B",
+      "title": "Conversation Tiers",
+      "version": "3.0",
+      "last_updated": "2026-01-30",
+      "status": "Implemented",
+      "implementation_files": [
+        "src/luna/actors/history_manager.py",
+        "src/luna/memory/ring.py"
+      ],
+      "sections": [
+        {
+          "section": "Overview",
+          "content": "Luna's conversation system uses a three-tier memory model that provides:\n1. Guaranteed continuity through an always-loaded Active Window\n2. Smart retrieval of recent context via hybrid search\n3. Long-term memory through Memory Matrix integration\n4. Token efficiency through intelligent compression\n\nThis system is managed by the HistoryManagerActor, which operates within Luna Engine's tick-based actor model."
+        },
+        {
+          "section": "The Three-Tier Model",
+          "diagrams": [
+            {
+              "type": "tier_architecture",
+              "tiers": [
+                {
+                  "tier": 1,
+                  "name": "ACTIVE WINDOW",
+                  "characteristics": [
+                    "Last 5-10 turns (full text)",
+                    "Always loaded into context",
+                    "Ring buffer, FIFO rotation",
+                    "Budget: ~1000 tokens max",
+                    "Guarantees conversational continuity"
+                  ],
+                  "transition": "(as window slides)"
+                },
+                {
+                  "tier": 2,
+                  "name": "RECENT BUFFER",
+                  "characteristics": [
+                    "Last 50-100 turns (compressed summaries)",
+                    "Searchable via FTS5 + sqlite-vec",
+                    "Retrieved on-demand when referenced",
+                    "Budget: ~500-1500 tokens when loaded",
+                    "Handles 'what did we just discuss?' queries"
+                  ],
+                  "transition": "(after age threshold: 60 minutes)"
+                },
+                {
+                  "tier": 3,
+                  "name": "ARCHIVE (Memory Matrix)",
+                  "characteristics": [
+                    "All history older than Recent Buffer",
+                    "Extracted into semantic memory nodes",
+                    "Full Memory Matrix search capabilities",
+                    "Infinite retention with smart retrieval",
+                    "Accessed via existing smart_fetch"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Configuration",
+          "content": "The HistoryManager is configured via HistoryConfig.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "HistoryConfig dataclass",
+              "code": "@dataclass\nclass HistoryConfig:\n    max_active_tokens: int = 1000     # Token budget for Active tier\n    max_active_turns: int = 10        # Hard limit on turn count\n    max_recent_age_minutes: int = 60  # Age threshold for archival\n    compression_enabled: bool = True  # Enable Scribe compression\n    default_search_limit: int = 3     # Results per search\n    search_type: str = \"hybrid\"       # \"hybrid\", \"keyword\", or \"semantic\"\n    app_context: str = \"terminal\"     # Current interface"
+            }
+          ],
+          "notes": ["Verified from code: These defaults match `src/luna/actors/history_manager.py` lines 41-49."],
+          "tables": [
+            {
+              "title": "Token Budgets",
+              "headers": ["Tier", "Token Budget", "Turns", "Purpose"],
+              "rows": [
+                ["Active", "1000 tokens max", "10 max", "Guaranteed continuity"],
+                ["Recent", "~500-1500 tokens", "50-100 compressed", "Conditional search results"],
+                ["Archive", "Via Memory Matrix", "Unlimited", "Long-term semantic storage"]
+              ]
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Rotation Triggers",
+              "content": "Rotation from Active to Recent occurs when either:\n- `total_tokens > max_active_tokens` (1000)\n- `turn_count > max_active_turns` (10)"
+            }
+          ]
+        },
+        {
+          "section": "Tier Rotation Process",
+          "subsections": [
+            {
+              "title": "Active to Recent Rotation",
+              "content": "Rotation triggers when the Active tier exceeds budget constraints.",
+              "code_blocks": [
+                {
+                  "language": "text",
+                  "description": "Active to Recent rotation process",
+                  "code": "1. add_turn() called\n2. Check budget: total_tokens > max_active_tokens OR turn_count > max_active_turns\n3. Find oldest Active turn\n4. Update tier = 'recent'\n5. Queue for compression (if enabled)\n6. Continue until budget satisfied"
+                }
+              ]
+            },
+            {
+              "title": "Recent to Archive Rotation",
+              "content": "Archive rotation triggers based on age.",
+              "code_blocks": [
+                {
+                  "language": "text",
+                  "description": "Recent to Archive rotation process",
+                  "code": "1. tick() called every 500ms-1s\n2. Find Recent turns where:\n   - compressed IS NOT NULL\n   - compressed_at < (now - max_recent_age_minutes)\n   - archived_at IS NULL\n3. Queue for extraction\n4. Scribe extracts semantic nodes\n5. Librarian files to Memory Matrix\n6. Mark tier = 'archived'"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Compression Pipeline",
+          "content": "When turns rotate from Active to Recent, they enter the compression queue.",
+          "steps": [
+            "1. HistoryManager queues turn for compression",
+            "2. Scribe (Ben Franklin) compresses via `compress_turn(content, role)`",
+            "3. Compressed summary stored in `conversation_turns.compressed`",
+            "4. Embedding generated for semantic search capability",
+            "5. Compression marked complete"
+          ],
+          "code_blocks": [
+            {
+              "language": "text",
+              "description": "Compression Prompt (Scribe)",
+              "code": "Extract the essence of this conversation turn.\n\nInstructions:\n- Identify the key decision, fact, or topic discussed\n- Compress to one sentence, under 50 words\n- Focus on what was decided, learned, or asked\n- Preserve any specific names, numbers, or decisions\n- Use past tense"
+            }
+          ]
+        },
+        {
+          "section": "Search Capabilities",
+          "subsections": [
+            {
+              "title": "Hybrid Search (Default)",
+              "content": "The Recent tier supports three search modes.",
+              "tables": [
+                {
+                  "title": "Search Modes",
+                  "headers": ["Mode", "Method", "Use Case"],
+                  "rows": [
+                    ["`keyword`", "FTS5 full-text search", "Exact phrase matching"],
+                    ["`semantic`", "sqlite-vec vector similarity", "Conceptual similarity"],
+                    ["`hybrid`", "FTS5 + sqlite-vec combined", "Best of both"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Backward Reference Detection",
+              "content": "The system automatically detects when a user references recent conversation.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Backward reference markers",
+                  "code": "backward_markers = [\n    \"earlier\", \"before\", \"ago\", \"just\",\n    \"we discussed\", \"you said\", \"you mentioned\", \"you told\",\n    \"what did\", \"when did\", \"why did\",\n    \"last time\", \"previously\", \"remember when\",\n    \"what we\", \"as we\", \"like we\"\n]"
+                }
+              ],
+              "notes": ["When detected, Recent tier is searched and results injected into context."]
+            }
+          ]
+        },
+        {
+          "section": "ConversationRing Integration",
+          "content": "The ConversationRing (`src/luna/memory/ring.py`) provides a guaranteed working memory buffer that operates independently of the tier system.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "ConversationRing class",
+              "code": "class ConversationRing:\n    \"\"\"\n    Fixed-size ring buffer for conversation history.\n\n    Guarantees:\n    - Last N turns are always available\n    - O(1) insert and eviction\n    - Cannot be displaced by retrieval\n    - FIFO eviction (oldest falls off naturally)\n    \"\"\"\n\n    def __init__(self, max_turns: int = 6):\n        self._buffer: deque = deque(maxlen=max_turns)\n        self._max_turns = max_turns"
+            }
+          ],
+          "tables": [
+            {
+              "title": "Ring Buffer Properties",
+              "headers": ["Property", "Value", "Purpose"],
+              "rows": [
+                ["`max_turns`", "6 (default)", "3 conversation exchanges"],
+                ["Eviction", "FIFO automatic", "Oldest turn drops when full"],
+                ["Persistence", "In-memory only", "Fast access for Director"]
+              ]
+            }
+          ],
+          "notes": [
+            "Verified from code:",
+            "- `src/luna/memory/ring.py` line 43: `def __init__(self, max_turns: int = 6)`",
+            "- `src/luna/context/pipeline.py` line 110: `ConversationRing(max_turns=max_ring_turns)`",
+            "- `src/luna/actors/director.py` line 141: `ConversationRing(max_turns=6)`"
+          ],
+          "key_principle": "Ring fills FIRST. Retrieval gets leftovers. History can never be displaced.",
+          "content_continued": "The ConversationRing is structurally prior to Memory Matrix retrieval in context building. This ensures conversational continuity is never sacrificed for memory retrieval."
+        },
+        {
+          "section": "Database Schema",
+          "subsections": [
+            {
+              "title": "conversation_turns Table",
+              "code_blocks": [
+                {
+                  "language": "sql",
+                  "description": "conversation_turns table schema",
+                  "code": "CREATE TABLE IF NOT EXISTS conversation_turns (\n    id INTEGER PRIMARY KEY AUTOINCREMENT,\n    session_id TEXT NOT NULL,\n    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),\n    content TEXT NOT NULL,\n    compressed TEXT,\n    tokens INTEGER NOT NULL,\n    tier TEXT NOT NULL CHECK(tier IN ('active', 'recent', 'archived')) DEFAULT 'active',\n    context_refs TEXT,\n    created_at DATETIME,\n    compressed_at REAL,\n    archived_at REAL,\n    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE\n);"
+                }
+              ]
+            },
+            {
+              "title": "history_fts Virtual Table (FTS5)",
+              "code_blocks": [
+                {
+                  "language": "sql",
+                  "description": "FTS5 virtual table for full-text search",
+                  "code": "CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(\n    compressed,\n    content=conversation_turns,\n    content_rowid=turn_id,\n    tokenize='porter unicode61'\n);"
+                }
+              ]
+            },
+            {
+              "title": "history_embeddings Virtual Table (sqlite-vec)",
+              "code_blocks": [
+                {
+                  "language": "sql",
+                  "description": "sqlite-vec virtual table for vector search",
+                  "code": "CREATE VIRTUAL TABLE IF NOT EXISTS history_embeddings USING vec0(\n    turn_id INTEGER PRIMARY KEY,\n    embedding FLOAT[1536]  -- text-embedding-3-small dimensions\n);"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Message Types",
+          "content": "The HistoryManagerActor handles these message types.",
+          "tables": [
+            {
+              "title": "Message Types",
+              "headers": ["Type", "Purpose", "Payload"],
+              "rows": [
+                ["`add_turn`", "Add conversation turn", "`{role, content, tokens, session_id}`"],
+                ["`get_active_window`", "Get Active tier", "`{session_id, limit}`"],
+                ["`search_recent`", "Search Recent tier", "`{query, limit, search_type}`"],
+                ["`rotate_tier`", "Move turn to tier", "`{turn_id, tier}`"],
+                ["`check_budget`", "Check rotation needed", "`{session_id}`"],
+                ["`queue_compression`", "Queue for Scribe", "`{turn_id}`"],
+                ["`queue_extraction`", "Queue for archival", "`{turn_id}`"],
+                ["`create_session`", "Start new session", "`{app_context}`"],
+                ["`end_session`", "End current session", "`{session_id}`"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Actor Integration",
+          "subsections": [
+            {
+              "title": "Flow: User Message to History",
+              "code_blocks": [
+                {
+                  "language": "text",
+                  "description": "User message to history flow",
+                  "code": "1. Engine receives user input\n2. Engine calls HistoryManager.add_turn(role=\"user\", content=message)\n3. HistoryManager inserts into conversation_turns (tier='active')\n4. HistoryManager checks budget, rotates if needed\n5. Director generates response\n6. Engine calls HistoryManager.add_turn(role=\"assistant\", content=response)"
+                }
+              ]
+            },
+            {
+              "title": "Flow: Context Building",
+              "code_blocks": [
+                {
+                  "language": "text",
+                  "description": "Context building flow",
+                  "code": "1. PersonaCore builds context for Director\n2. HistoryManager.get_active_window() returns Active tier\n3. If backward reference detected:\n   - HistoryManager.search_recent(query) returns relevant Recent turns\n4. Context assembled: Active history + Recent results + Memory Matrix"
+                }
+              ]
+            },
+            {
+              "title": "Tick Processing",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Tick processing method",
+                  "code": "async def tick(self) -> None:\n    \"\"\"Called every 500ms-1s by engine.\"\"\"\n    await self._process_compression_queue()  # One per tick\n    await self._process_extraction_queue()   # One per tick\n    await self._check_archivable_turns()     # Age-based archival"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Performance Targets",
+          "tables": [
+            {
+              "title": "Performance Targets",
+              "headers": ["Operation", "Target", "Notes"],
+              "rows": [
+                ["Add turn", "<5ms", "Simple INSERT"],
+                ["Get active window", "<10ms", "10 row SELECT"],
+                ["Search recent (keyword)", "<50ms", "FTS5 query"],
+                ["Search recent (hybrid)", "<150ms", "FTS5 + vector"],
+                ["Compress turn", "<500ms", "Local LLM inference"],
+                ["Extract turn", "<1500ms", "Full Memory Matrix extraction"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Statistics",
+          "content": "The HistoryManager tracks operational statistics.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "HistoryManager statistics",
+              "code": "{\n  \"turns_added\": 42,\n  \"rotations\": 12,\n  \"compressions_queued\": 10,\n  \"extractions_queued\": 5,\n  \"embeddings_generated\": 8,\n  \"searches_performed\": 15,\n  \"current_session\": \"uuid-string\",\n  \"is_ready\": True\n}"
+            }
+          ]
+        },
+        {
+          "section": "Session Management",
+          "content": "Sessions group conversation turns by interaction period.",
+          "code_blocks": [
+            {
+              "language": "python",
+              "description": "Session management examples",
+              "code": "# Create session\nsession_id = await history_manager.create_session(app_context=\"terminal\")\n\n# End session\nawait history_manager.end_session(session_id)\n\n# Get active session\nsession = await history_manager.get_active_session()"
+            }
+          ],
+          "subsections": [
+            {
+              "title": "Session Lifecycle",
+              "code_blocks": [
+                {
+                  "language": "text",
+                  "description": "Session lifecycle diagram",
+                  "code": "create_session() -> session active\n    |\n    v\nadd_turn() ... add_turn()  (conversation)\n    |\n    v\nend_session() -> session closed"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Relationship to Other Actors",
+          "tables": [
+            {
+              "title": "Actor Relationships",
+              "headers": ["Actor", "Relationship"],
+              "rows": [
+                ["**Director**", "Reads ConversationRing for immediate context"],
+                ["**Scribe**", "Compresses turns, extracts for archival"],
+                ["**Librarian**", "Files extracted nodes to Memory Matrix"],
+                ["**Matrix**", "Provides database access, stores archived content"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Key Design Principles",
+          "content": "1. **Guaranteed Continuity**: Active Window is always loaded, never displaced\n2. **Token Efficiency**: Compression reduces storage while preserving meaning\n3. **Graceful Degradation**: Falls back to simpler search if vector fails\n4. **Sovereignty**: All data stored locally in SQLite\n5. **Tick-Based Processing**: One compression/extraction per tick prevents blocking"
+        },
+        {
+          "section": "Implementation Files",
+          "tables": [
+            {
+              "title": "Implementation Files",
+              "headers": ["File", "Purpose"],
+              "rows": [
+                ["`src/luna/actors/history_manager.py`", "HistoryManagerActor implementation"],
+                ["`src/luna/memory/ring.py`", "ConversationRing buffer"],
+                ["`src/luna/actors/scribe.py`", "Compression via Ben Franklin"],
+                ["`src/luna/substrate/database.py`", "SQLite schema and queries"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "References",
+          "content": "- **Part III**: Memory Matrix (Archive tier destination)\n- **Part IV**: The Scribe (Compression pipeline)\n- **Part V**: The Librarian (Filing extracted nodes)\n- **Part VII**: Runtime Engine (Tick-based actor model)"
+        },
+        {
+          "section": "Integration with Director LLM",
+          "content": "The conversation tier system integrates with the Director's context building.",
+          "subsections": [
+            {
+              "title": "Context Pipeline Flow",
+              "code_blocks": [
+                {
+                  "language": "text",
+                  "description": "Context pipeline flow diagram",
+                  "code": "1. ContextPipeline.build_context(message)\n    |-- ConversationRing provides immediate history (6 turns)\n    |-- HistoryManager.get_active_window() provides Active tier\n    |-- If backward reference detected:\n    |   |-- HistoryManager.search_recent() provides relevant Recent turns\n    |-- Memory Matrix provides long-term context"
+                }
+              ]
+            },
+            {
+              "title": "Token Budget Distribution",
+              "tables": [
+                {
+                  "title": "Token Budget Distribution",
+                  "headers": ["Component", "Budget", "Priority"],
+                  "rows": [
+                    ["ConversationRing", "~400 tokens", "Highest (never displaced)"],
+                    ["Active Window", "~1000 tokens", "High"],
+                    ["Recent Search Results", "~500-1500 tokens", "Conditional"],
+                    ["Memory Matrix Retrieval", "Remaining budget", "Lowest"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Self-Routing Optimization",
+              "content": "The ContextPipeline uses a self-routing flag to skip redundant memory retrieval.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Self-routing optimization",
+                  "code": "# If topic is already in the ring buffer, skip memory lookup\nif topic_in_ring:\n    used_retrieval = False"
+                }
+              ],
+              "notes": ["This prevents unnecessary database queries when the conversation context is sufficient."]
+            }
+          ]
+        }
+      ],
+      "closing_quote": "*Conversation is the thread. Memory is the tapestry.*\n*The tiers ensure Luna never forgets the moment while preserving the whole.*\n\n--- Ahab, January 2026"
+    },
+    {
+      "part": "VI",
+      "title": "The Director LLM",
+      "version": "3.0",
+      "last_updated": "2026-01-30",
+      "status": "Implemented",
+      "implementation_files": [
+        "src/luna/actors/director.py",
+        "src/luna/inference/local.py"
+      ],
+      "sections": [
+        {
+          "section": "6.1",
+          "title": "The Paradigm Shift",
+          "content": "The original Bible defined the Director as a **state machine** - a reactive system that managed conversation flow through state transitions (IDLE -> LISTENING -> PROCESSING -> SPEAKING).\n\nThat model is incomplete. It describes *orchestration* but not *cognition*.",
+          "new_model": {
+            "description": "The Director is a **local LLM fine-tuned to BE Luna** - not prompted to act like her, but trained with her personality in the weights. The state machine becomes an *orchestration layer* that coordinates when the Director thinks, not the Director itself.",
+            "diagrams": [
+              {
+                "type": "architecture",
+                "title": "THE DIRECTOR",
+                "components": [
+                  {
+                    "name": "LOCAL LLM (Luna's Mind)",
+                    "characteristics": [
+                      "Fine-tuned Qwen 3B/7B with LoRA adapter",
+                      "Personality in weights, not prompts",
+                      "Queries Memory Matrix directly",
+                      "Knows when to delegate (trained behavior)"
+                    ]
+                  },
+                  {
+                    "name": "ORCHESTRATION LAYER (State Machine)",
+                    "characteristics": [
+                      "Manages conversation state",
+                      "Handles interrupts and barge-in",
+                      "Coordinates with Voice Actor",
+                      "Triggers speculative execution"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "tables": [
+            {
+              "title": "Why This Matters",
+              "headers": ["Aspect", "Prompted Claude", "Local Director LLM"],
+              "rows": [
+                ["Personality source", "System prompt (injected)", "Model weights (inherent)"],
+                ["Consistency", "Varies per API call", "Same model every time"],
+                ["Sovereignty", "Mind is rented", "Mind is owned"],
+                ["Latency", "Network round-trip", "Local inference"],
+                ["Continuity", "Fresh instance each call", "Persistent identity"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "6.2",
+          "title": "Model Specification",
+          "subsections": [
+            {
+              "title": "Base Model",
+              "tables": [
+                {
+                  "title": "Base Model Specification",
+                  "headers": ["Property", "Specification"],
+                  "rows": [
+                    ["Architecture", "Qwen 2.5 Instruct"],
+                    ["Default Model", "`Qwen/Qwen2.5-3B-Instruct`"],
+                    ["Fallback Model", "`mlx-community/Qwen2.5-3B-Instruct-4bit`"],
+                    ["Local Path", "`models/Qwen2.5-3B-Instruct-MLX-4bit`"],
+                    ["Quantization", "4-bit for memory efficiency"],
+                    ["Inference Runtime", "MLX on Apple Silicon"]
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "LoRA Adapter",
+              "tables": [
+                {
+                  "title": "LoRA Adapter Specification",
+                  "headers": ["Property", "Specification"],
+                  "rows": [
+                    ["Method", "LoRA (Low-Rank Adaptation)"],
+                    ["Rank", "16"],
+                    ["Alpha", "16"],
+                    ["Target Modules", "q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj"],
+                    ["Adapter Path", "`models/luna_lora_mlx/`"],
+                    ["Training Framework", "Unsloth"],
+                    ["Status", "Optional - auto-detected if present"]
+                  ]
+                }
+              ],
+              "notes": [
+                "**LoRA Loading Priority:**",
+                "1. If `LOCAL_MODEL_PATH` exists with `model.safetensors` -> use local model",
+                "2. If Luna LoRA adapter exists at `LUNA_LORA_PATH` -> use full-precision model with adapter",
+                "3. If `use_4bit=True` and no LoRA -> download 4-bit quantized model",
+                "4. Fallback -> download from HuggingFace"
+              ]
+            },
+            {
+              "title": "Tiered Deployment",
+              "diagrams": [
+                {
+                  "type": "deployment_tiers",
+                  "tiers": [
+                    {
+                      "name": "HOT PATH (Local Qwen 3B)",
+                      "use_cases": [
+                        "Voice conversation",
+                        "Quick acknowledgments",
+                        "Simple memory retrieval"
+                      ],
+                      "target": "<200ms to first token",
+                      "complexity_threshold": "< 0.15"
+                    },
+                    {
+                      "name": "DELEGATED PATH (Multi-Provider)",
+                      "trigger": "Complexity >= 0.15 OR delegation signals",
+                      "use_cases": [
+                        "Complex reasoning",
+                        "Multi-step memory synthesis",
+                        "Code analysis/generation",
+                        "Deep research queries",
+                        "Memory-related questions"
+                      ],
+                      "provider_priority": [
+                        "1. LLM Registry provider (Groq/Gemini/Claude)",
+                        "2. Direct Claude API fallback"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Multi-LLM Provider System",
+              "content": "The Director supports hot-swappable cloud providers via the LLM Registry.",
+              "configuration": "`/config/llm_providers.json`",
+              "tables": [
+                {
+                  "title": "Provider Options",
+                  "headers": ["Provider", "Default Model", "Context Window", "Free Tier"],
+                  "rows": [
+                    ["**Groq**", "`llama-3.3-70b-versatile`", "128,000", "Yes (30 RPM)"],
+                    ["**Gemini**", "`gemini-2.0-flash`", "1,000,000", "Yes (15 RPM, 1M tokens/day)"],
+                    ["**Claude**", "`claude-3-haiku-20240307`", "200,000", "No (pay-as-you-go)"]
+                  ]
+                }
+              ],
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "LLMProvider Protocol",
+                  "code": "@runtime_checkable\nclass LLMProvider(Protocol):\n    name: str\n\n    @property\n    def is_available(self) -> bool: ...\n\n    async def complete(\n        self,\n        messages: list[Message],\n        temperature: float = 0.7,\n        max_tokens: int = 1024,\n        model: str | None = None\n    ) -> CompletionResult: ...\n\n    async def stream(...) -> AsyncIterator[str]: ...\n    def list_models(self) -> list[str]: ..."
+                },
+                {
+                  "language": "python",
+                  "description": "Runtime provider switching",
+                  "code": "from luna.llm import get_registry\nregistry = get_registry()\nregistry.set_current(\"gemini\")  # Hot-swap provider"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "section": "6.3",
+          "title": "The Identity Buffer",
+          "content": "The Identity Buffer is a **2048-token context prefix** that Luna always has access to - her \"working memory\" that persists across turns.",
+          "subsections": [
+            {
+              "title": "Contents",
+              "code_blocks": [
+                {
+                  "language": "yaml",
+                  "description": "Identity Buffer structure",
+                  "code": "Identity Buffer:\n  user_context:\n    name: \"Ahab\"\n    relationship: \"creator, collaborator\"\n    current_mood: \"focused, mission-mode\"  # Updated dynamically\n\n  current_focus:\n    topic: \"Luna Sovereign Architecture\"\n    project: \"Eclissi Beta\"\n    recent_decisions:\n      - \"Director LLM over prompted Claude\"\n      - \"Actor model for runtime\"\n      - \"Shadow Reasoner for delegation\"\n\n  active_threads:\n    - \"Bible v2.0 update\"\n    - \"Mars College preparation\"\n    - \"7B training in progress\"\n\n  key_relationships:\n    - name: \"Ben Franklin\"\n      role: \"The Scribe\"\n    - name: \"The Dude\"\n      role: \"The Librarian\"\n    - name: \"Gemini\"\n      role: \"Optimization collaborator\""
+                }
+              ]
+            },
+            {
+              "title": "Update Contract",
+              "content": "The Identity Buffer updates **on every Memory Matrix retrieval**, not at session end.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Identity buffer update function",
+                  "code": "async def update_identity_buffer(retrieved_context: list, current_buffer: dict) -> dict:\n    \"\"\"\n    Evaluate if retrieved context warrants buffer update.\n    Called after every Tier 2/3 memory retrieval.\n    \"\"\"\n    # Extract topic from retrieval\n    new_topic = extract_dominant_topic(retrieved_context)\n\n    # Check for significant topic shift\n    if topic_divergence(new_topic, current_buffer[\"current_focus\"][\"topic\"]) > 0.4:\n        current_buffer[\"current_focus\"][\"topic\"] = new_topic\n\n    # Update mood if emotional content detected\n    if emotional_valence := detect_emotion(retrieved_context):\n        current_buffer[\"user_context\"][\"current_mood\"] = emotional_valence\n\n    # Rotate recent decisions (keep last 3)\n    if decisions := extract_decisions(retrieved_context):\n        current_buffer[\"current_focus\"][\"recent_decisions\"] = (\n            decisions + current_buffer[\"current_focus\"][\"recent_decisions\"]\n        )[:3]\n\n    return current_buffer"
+                }
+              ]
+            },
+            {
+              "title": "Persistence",
+              "content": "The Identity Buffer is persisted as a **pre-computed KV cache** using MLX.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "KV cache persistence",
+                  "code": "from mlx_lm import cache_prompt\n\n# One-time: Bake the Identity Buffer into KV cache\nidentity_prompt = format_identity_buffer(current_buffer)\ncache_prompt(\n    model=\"qwen2.5-7b-luna\",\n    prompt=identity_prompt,\n    output_path=\"~/.luna/identity_buffer.safetensors\"\n)\n\n# Runtime: Load cached KV (zero inference cost)\nkv_cache = load_kv_cache(\"~/.luna/identity_buffer.safetensors\")\nresponse = generate(prompt, kv_cache=kv_cache, max_kv_size=8192)"
+                }
+              ],
+              "benefit": "**Benefit:** The Identity Buffer costs zero inference time - it's pre-computed and pinned at the start of every generation."
+            }
+          ]
+        },
+        {
+          "section": "6.4",
+          "title": "Memory Integration",
+          "content": "The Director queries the Memory Matrix directly, not through a separate retrieval service.",
+          "subsections": [
+            {
+              "title": "Injection Format",
+              "content": "Retrieved memories are injected with temporal attribution.",
+              "code_blocks": [
+                {
+                  "language": "xml",
+                  "description": "Memory injection format",
+                  "code": "<memory source=\"journal\" date=\"2025-12-20\" relevance=\"0.94\">\n  Ahab expressed frustration with Hub complexity.\n  Decided to explore \"game engine\" framing for the runtime.\n</memory>\n\n<memory source=\"conversation\" date=\"2025-12-28\" relevance=\"0.89\">\n  Deep dive on Thiel/Palantir. Concluded that Luna represents\n  \"resistance architecture\" against centralized AI control.\n</memory>"
+                }
+              ],
+              "notes": ["**Why Temporal Attribution:** The Director sees timestamps and naturally uses temporal language (\"last week you mentioned...\", \"remember when we decided...\"). This triggers human perception of **continuity** rather than **retrieval**."]
+            },
+            {
+              "title": "Associative Recall",
+              "content": "When an entity is mentioned, the Director doesn't just search - it **hops** through the graph.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "description": "Associative recall function",
+                  "code": "def associative_recall(entity_name: str, depth: int = 1) -> list[Node]:\n    \"\"\"\n    Pull entity node + immediate neighbors.\n    Makes Luna \"remember\" connections without explicit search.\n    \"\"\"\n    node = matrix.find_node(entity_name)\n    if not node:\n        return []\n\n    # Get 1-hop neighbors via graph traversal\n    neighbors = rustworkx.bfs_successors(matrix.graph, node.id, depth)\n\n    return [node] + [matrix.get_node(n) for n in neighbors]"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

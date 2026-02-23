@@ -15,8 +15,11 @@ import {
   VoiceBlendPanel,
   VoiceSystemSpecPanel,
   PromptInspectorPanel,
+  IdentityBadge,
+  FaceIDCapture,
 } from './components';
 import { useLunaAPI } from './hooks/useLunaAPI';
+import { useIdentity } from './hooks/useIdentity';
 import { useChat } from './hooks/useChat';
 import { useVoice } from './hooks/useVoice';
 import KozmoApp from './kozmo/KozmoApp';
@@ -44,6 +47,14 @@ const Eclissi = () => {
     error: chatError,
     send,
   } = useChat();
+
+  // FaceID identity hook (WebSocket + browser camera capture)
+  const {
+    identity, isPresent, entityName, lunaTier, confidence,
+    captureState, startRecognition, stopRecognition,
+    resetIdentity, startEnrollment, enrollCount,
+    videoRef, bboxes,
+  } = useIdentity();
 
   // Voice hook for TTS when voice mode is active
   const voice = useVoice();
@@ -75,12 +86,44 @@ const Eclissi = () => {
   const [qaStatus, setQaStatus] = useState({ passed: true, failures: 0, lastId: null });
   const [qaFlash, setQaFlash] = useState(false); // Flash animation on failure
 
-  // Fetch entity list for keyword highlighting (once on mount)
+  // Fetch entity list for highlighting (primary: Luna API, fallback: Observatory)
   useEffect(() => {
-    fetch('/observatory/api/entities')
-      .then(res => res.ok ? res.json() : null)
-      .then(data => { if (data?.entities) setKnownEntities(data.entities); })
-      .catch(() => {}); // Silent fail — Observatory may not be running
+    let cancelled = false;
+    let retryTimer = null;
+
+    const fetchEntities = async (attempt = 0) => {
+      if (cancelled) return;
+      // Primary: Luna's own endpoint (always available when engine runs)
+      try {
+        const res = await fetch('/api/entities');
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.entities?.length > 0) {
+            setKnownEntities(data.entities);
+            return;
+          }
+        }
+      } catch {}
+      // Fallback: Observatory sandbox
+      try {
+        const res = await fetch('/observatory/api/entities');
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.entities?.length > 0) {
+            setKnownEntities(data.entities);
+            return;
+          }
+        }
+      } catch {}
+      // Retry with backoff (up to 5 attempts)
+      if (attempt < 5) {
+        const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
+        retryTimer = setTimeout(() => fetchEntities(attempt + 1), delay);
+      }
+    };
+
+    fetchEntities();
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, []);
 
   // Fetch debug context for keywords when debug mode is on
@@ -269,6 +312,15 @@ const Eclissi = () => {
                 KOZMO
               </button>
 
+              {/* GUARDIAN Link */}
+              <a
+                href="/guardian/"
+                className="px-3 py-1.5 text-xs rounded border transition-all bg-kozmo-bg border-kozmo-border text-kozmo-muted hover:border-[#e09f3e]/50 hover:text-[#e09f3e]"
+                style={{ textDecoration: 'none' }}
+              >
+                GUARDIAN
+              </a>
+
               {/* Observatory Toggle */}
               <button
                 onClick={() => { setObservatoryMode(!observatoryMode); setKozmoMode(false); }}
@@ -375,6 +427,28 @@ const Eclissi = () => {
                 📋 {promptMode ? 'PROMPT' : 'Prompt'}
               </button>
 
+              {isPresent ? (
+                <IdentityBadge
+                  isPresent={isPresent}
+                  entityName={entityName}
+                  lunaTier={lunaTier}
+                  dataroomTier={identity?.dataroom_tier}
+                  confidence={confidence}
+                  onReset={(pin) => startEnrollment(entityName || 'Ahab', pin)}
+                />
+              ) : (
+                <FaceIDCapture
+                  captureState={captureState}
+                  onStart={startRecognition}
+                  onStop={stopRecognition}
+                  onReset={resetIdentity}
+                  onEnroll={(pin) => startEnrollment(entityName || 'Ahab', pin)}
+                  videoRef={videoRef}
+                  bboxes={bboxes}
+                  enrollCount={enrollCount}
+                />
+              )}
+
               <div className="flex items-center gap-3">
                 <StatusDot status={isConnected ? 'connected' : 'disconnected'} />
                 <span className="text-sm text-white/50">
@@ -414,6 +488,8 @@ const Eclissi = () => {
                   isLoading={isStreaming}
                   debugKeywords={debugMode ? debugKeywords : []}
                   entities={knownEntities}
+                  identityName={isPresent ? entityName : null}
+                  identityTier={isPresent ? lunaTier : null}
                 />
               </div>
 
@@ -423,7 +499,7 @@ const Eclissi = () => {
                 <VoicePanel voiceHook={voice} />
 
                 {/* Engine Status */}
-                <EngineStatus status={status} isConnected={isConnected} onRelaunch={relaunchSystem} />
+                <EngineStatus status={status} isConnected={isConnected} onRelaunch={relaunchSystem} identity={identity} />
 
                 {/* Conversation Cache - What Luna remembers */}
                 <ConversationCache isConnected={isConnected} entities={knownEntities} />

@@ -1,0 +1,706 @@
+{
+  "extraction_metadata": {
+    "source_pdf": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_requested": "301-320",
+    "pages_extracted": 20,
+    "extraction_date": "2026-02-06"
+  },
+  "part": {
+    "number": "XVI",
+    "title": "Luna Hub UI",
+    "description": "Frontend component documentation for the Luna Hub interface"
+  },
+  "sections": [
+    {
+      "section_number": "16.3",
+      "title": "Chat Components (continued from page 300)",
+      "subsections": [
+        {
+          "component": "ChatPanel (continued)",
+          "code_blocks": [
+            {
+              "language": "javascript",
+              "description": "Debug keyword highlighting and auto-scroll effect",
+              "code": "if (!debugKeywords?.length) return text;\nlet highlighted = text;\ndebugKeywords.forEach(keyword => {\n  const regex = new RegExp(`(${keyword})`, 'gi');\n  highlighted = highlighted.replace(\n    regex,\n    '<span class=\"bg-cyan-500/30 text-cyan-200 px-1 rounded\">$1</span>'\n  );\n});\nreturn highlighted;\n};\n\n// Auto-scroll effect\nuseEffect(() => {\n  messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });\n}, [messages]);"
+            }
+          ]
+        },
+        {
+          "component": "VoicePanel",
+          "file": "/frontend/src/components/VoicePanel.jsx",
+          "lines": 432,
+          "description": "Voice interaction controls with push-to-talk and hands-free modes.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["voiceHook", "UseVoiceReturn", "No", "Shared voice hook from parent"]
+            ]
+          },
+          "internal_state": {
+            "table_headers": ["State", "Type", "Description"],
+            "rows": [
+              ["isHolding", "boolean", "Push-to-talk button held"],
+              ["lastAction", "object | null", "Last action result for feedback"],
+              ["recordingDuration", "number", "Seconds recording"],
+              ["audioLevel", "number", "Simulated audio level (0-1)"],
+              ["wantHandsFree", "boolean", "Preferred mode (default true)"]
+            ]
+          },
+          "voice_states": {
+            "code_block": {
+              "language": "javascript",
+              "code": "export const VoiceState = {\n  INACTIVE: 'inactive',  // Voice system not started\n  IDLE: 'idle',          // Ready, waiting for input\n  LISTENING: 'listening', // Recording user speech\n  THINKING: 'thinking',  // Processing / generating\n  SPEAKING: 'speaking',  // Playing Luna's response\n};"
+            }
+          },
+          "features": [
+            "Voice system start/stop toggle",
+            "Hands-free vs Push-to-talk mode",
+            "Visual status indicator with pulse animations",
+            "Push-to-talk button (mouse and touch events)",
+            "Recording duration display",
+            "Transcription and response display"
+          ],
+          "code_pattern": {
+            "language": "jsx",
+            "description": "Push-to-talk handler",
+            "code": "// Push-to-talk handler\nconst handleMicDown = useCallback(async (e) => {\n  e.preventDefault();\n  if (!isRunning || isThinking || isSpeaking) return;\n  setIsHolding(true);\n  await startListening();\n}, [isRunning, isThinking, isSpeaking, startListening]);\n\nconst handleMicUp = useCallback(async (e) => {\n  e.preventDefault();\n  if (!isHolding) return;\n  setIsHolding(false);\n  const result = await stopListening();\n  setLastAction(result);\n}, [isHolding, stopListening]);"
+          }
+        },
+        {
+          "component": "EngineStatus",
+          "file": "/frontend/src/components/EngineStatus.jsx",
+          "lines": 238,
+          "description": "Displays engine health, actor status, and context window visualization.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["status", "EngineStatus", "No", "Engine status object"],
+              ["isConnected", "boolean", "Yes", "Connection state"],
+              ["onRelaunch", "() => Promise<void>", "No", "Relaunch callback"]
+            ]
+          },
+          "status_object": {
+            "language": "typescript",
+            "code": "interface EngineStatus {\n  state?: string;           // RUNNING, STOPPED, etc.\n  uptime_seconds?: number;\n  cognitive_ticks?: number;\n  events_processed?: number;\n  messages_generated?: number;\n  actors?: string[];        // List of active actors\n  buffer_size?: number;     // Pending events\n  context?: ContextStatus;\n  agentic?: AgenticStatus;\n}\n\ninterface ContextStatus {\n  token_budget?: number;\n  used_tokens?: number;\n  ring_breakdown?: {\n    CORE: number;\n    INNER: number;\n    MIDDLE: number;\n    OUTER: number;\n  };\n}"
+          },
+          "features": [
+            "Engine state indicator (RUNNING, etc.)",
+            "Uptime formatting (hours/minutes/seconds)",
+            "Stats grid (ticks, events, messages)",
+            "Active actors list with status dots",
+            "Agentic processing status",
+            "Context window ring visualization",
+            "Relaunch button with loading state"
+          ]
+        }
+      ]
+    },
+    {
+      "section_number": "16.4",
+      "title": "Monitoring Components",
+      "subsections": [
+        {
+          "component": "ConsciousnessMonitor",
+          "file": "/frontend/src/components/ConsciousnessMonitor.jsx",
+          "lines": 126,
+          "description": "Displays Luna's current consciousness state including mood and attention topics.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["consciousness", "ConsciousnessData", "No", "Consciousness state"]
+            ]
+          },
+          "consciousness_object": {
+            "language": "typescript",
+            "code": "interface ConsciousnessData {\n  mood?: string;                    // curious, focused, etc.\n  coherence?: number;               // 0-1\n  attention_topics?: number;        // Count of active topics\n  focused_topics?: { name: string; weight: number }[];\n  top_traits?: [string, number][];  // [name, weight] pairs\n  tick_count?: number;\n}"
+          },
+          "features": [
+            "Mood display with status dot color",
+            "Coherence progress bar (0-100%)",
+            "Active attention topics with weight bars",
+            "Top personality traits with emoji indicators"
+          ],
+          "trait_emoji_map": {
+            "language": "javascript",
+            "code": "const traitEmojis = {\n  curiosity: '*',\n  warmth: '<3',\n  playfulness: '~',\n  directness: '>',\n  patience: '...',\n  creativity: '+',\n  focus: 'o',\n  empathy: '()',\n};"
+          }
+        },
+        {
+          "component": "PersonalityMonitorPanel",
+          "file": "/frontend/src/components/PersonalityMonitorPanel.jsx",
+          "lines": 553,
+          "description": "Modal overlay for detailed personality monitoring and patch system visualization.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["isOpen", "boolean", "Yes", "Controls visibility"],
+              ["onClose", "() => void", "Yes", "Close callback"]
+            ]
+          },
+          "tabs": {
+            "table_headers": ["Tab", "Content"],
+            "rows": [
+              ["Overview", "Pie chart (topics), bar chart (lock-in states), quick stats"],
+              ["Patches", "List of personality patches with expandable details"],
+              ["Maintenance", "Session reflection stats, bootstrap status"]
+            ]
+          },
+          "api_endpoint": "GET /debug/personality - Polled every 3 seconds when open",
+          "features": [
+            "Recharts integration (PieChart, BarChart)",
+            "Color-coded topic distribution",
+            "Lock-in state visualization (DRIFTING, FLUID, SETTLED)",
+            "Patch details with click-to-expand",
+            "Maintenance statistics"
+          ]
+        },
+        {
+          "component": "ContextDebugPanel",
+          "file": "/frontend/src/components/ContextDebugPanel.jsx",
+          "lines": 282,
+          "description": "Modal overlay for debugging the revolving context window.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["isOpen", "boolean", "Yes", "Controls visibility"],
+              ["onClose", "() => void", "Yes", "Close callback"],
+              ["highlightKeywords", "string[]", "No", "Keywords to highlight"]
+            ]
+          },
+          "ring_colors": {
+            "language": "javascript",
+            "code": "const RING_COLORS = {\n  CORE: { border: 'yellow-500', bg: 'yellow-500/10', text: 'yellow-400' },\n  INNER: { border: 'red-500', bg: 'red-500/10', text: 'red-400' },\n  MIDDLE: { border: 'orange-500', bg: 'orange-500/10', text: 'orange-400' },\n  OUTER: { border: 'gray-500', bg: 'gray-500/10', text: 'gray-400' },\n};"
+          },
+          "source_icons": {
+            "language": "javascript",
+            "code": "const SOURCE_ICONS = {\n  identity: 'DNA',\n  conversation: 'speech',\n  memory: 'brain',\n  tool: 'wrench',\n  task: 'clipboard',\n  scribe: 'pencil',\n  librarian: 'books',\n};"
+          },
+          "features": [
+            "Stats bar (turn, tokens, items)",
+            "Ring filter buttons (ALL, CORE, INNER, MIDDLE, OUTER)",
+            "Keywords display bar",
+            "Context items with expandable content",
+            "TTL and relevance display per item"
+          ]
+        },
+        {
+          "component": "ConversationCache",
+          "file": "/frontend/src/components/ConversationCache.jsx",
+          "lines": 182,
+          "description": "Collapsible panel showing Luna's conversation memory buffer.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["isConnected", "boolean", "Yes", "Connection state"]
+            ]
+          },
+          "features": [
+            "Collapsible header with message count",
+            "Usage bar (percentage of max capacity)",
+            "Stats (messages, tokens, max turns)",
+            "Message list with role-based styling",
+            "Age indicator per message"
+          ]
+        },
+        {
+          "component": "ThoughtStream",
+          "file": "/frontend/src/components/ThoughtStream.jsx",
+          "lines": 171,
+          "description": "Real-time stream of Luna's internal processing via SSE.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["apiUrl", "string", "No", "API base URL (default: localhost:8000)"]
+            ]
+          },
+          "phase_colors": {
+            "table_headers": ["Phase", "Color", "Icon"],
+            "rows": [
+              ["OBSERVE", "blue-400", "eye"],
+              ["THINK", "violet-400", "brain"],
+              ["ACT", "emerald-400", "lightning"],
+              ["PLAN", "amber-400", "clipboard"],
+              ["REFLECT", "pink-400", "mirror"]
+            ]
+          },
+          "sse_events": {
+            "table_headers": ["Event", "Fields", "Purpose"],
+            "rows": [
+              ["status", "{ processing, goal }", "Processing state"],
+              ["thought", "{ phase, content, timestamp }", "New thought"],
+              ["ping", "{}", "Keep-alive"]
+            ]
+          },
+          "features": [
+            "SSE connection to /thoughts",
+            "Phase-based color coding",
+            "Current goal display",
+            "Processing indicator",
+            "Auto-scroll to latest thought",
+            "Reconnection on error (2s delay)",
+            "Keeps last 50 thoughts only"
+          ]
+        }
+      ]
+    },
+    {
+      "section_number": "16.5",
+      "title": "Developer Tools",
+      "subsections": [
+        {
+          "component": "TuningPanel",
+          "file": "/frontend/src/components/TuningPanel.jsx",
+          "lines": 814,
+          "description": "Slide-out panel for Luna parameter tuning and system configuration.",
+          "props": {
+            "table_headers": ["Prop", "Type", "Required", "Description"],
+            "rows": [
+              ["isOpen", "boolean", "Yes", "Controls visibility"],
+              ["onClose", "() => void", "Yes", "Close callback"]
+            ]
+          },
+          "tabs": {
+            "table_headers": ["Tab", "Purpose"],
+            "rows": [
+              ["Parameters", "Browse and adjust Luna's tunable parameters"],
+              ["Session", "Manage tuning sessions, view iteration history"],
+              ["Evaluate", "Run evaluations, view scores"]
+            ]
+          },
+          "api_endpoints": {
+            "table_headers": ["Endpoint", "Method", "Purpose"],
+            "rows": [
+              ["/tuning/params", "GET", "List parameters"],
+              ["/tuning/params/:name", "GET", "Get parameter details"],
+              ["/tuning/params/:name", "POST", "Set parameter value"],
+              ["/tuning/param-reset/:name", "POST", "Reset to default"],
+              ["/tuning/session", "GET", "Get session status"],
+              ["/tuning/session/new", "POST", "Start session"],
+              ["/tuning/session/end", "POST", "End session"],
+              ["/tuning/eval", "POST", "Run evaluation"],
+              ["/tuning/apply-best", "POST", "Apply best params"],
+              ["/api/ring/status", "GET", "Ring buffer status"],
+              ["/api/ring/config", "POST", "Configure ring size"],
+              ["/api/ring/clear", "POST", "Clear conversation memory"],
+              ["/api/system/relaunch", "POST", "Restart engine"]
+            ]
+          },
+          "features": [
+            "Parameter browser with category filter",
+            "Slider controls with min/max/default",
+            "Pending changes tracking (apply/reset)",
+            "Tuning session management",
+            "Focus areas (all, memory, routing, latency)",
+            "Iteration history with scores",
+            "Ring buffer configuration",
+            "Evaluation runner with score visualization",
+            "System relaunch control"
+          ]
+        }
+      ]
+    },
+    {
+      "section_number": "16.6",
+      "title": "Design System",
+      "subsections": [
+        {
+          "title": "Color Palette",
+          "brand_colors": {
+            "table_headers": ["Token", "Hex", "Usage"],
+            "rows": [
+              ["luna-violet", "#8b5cf6", "Primary accent, consciousness"],
+              ["luna-cyan", "#06b6d4", "Secondary accent, connection"],
+              ["luna-pink", "#ec4899", "Tertiary accent, personality"]
+            ]
+          },
+          "background_colors": {
+            "table_headers": ["Token", "Hex/RGBA", "Usage"],
+            "rows": [
+              ["slate-950", "#0f172a", "Main background"],
+              ["white/5", "rgba(255,255,255,0.05)", "Glass card base"],
+              ["white/8", "rgba(255,255,255,0.08)", "Glass card hover"],
+              ["white/10", "rgba(255,255,255,0.10)", "Borders, dividers"],
+              ["black/60", "rgba(0,0,0,0.60)", "Modal overlay"]
+            ]
+          },
+          "status_colors": {
+            "table_headers": ["Status", "Token", "Hex", "Glow"],
+            "rows": [
+              ["Active/Connected", "emerald-400", "#34d399", "shadow-emerald-400/50"],
+              ["Loading/Syncing", "blue-400", "#60a5fa", "shadow-blue-400/50"],
+              ["Warning", "amber-400", "#fbbf24", "shadow-amber-400/50"],
+              ["Error", "red-400", "#f87171", "shadow-red-400/50"],
+              ["Neutral", "gray-400", "#9ca3af", "shadow-gray-400/50"]
+            ]
+          },
+          "mood_colors": {
+            "table_headers": ["Mood", "Token", "Hex"],
+            "rows": [
+              ["Curious", "violet-400", "#a78bfa"],
+              ["Focused", "cyan-400", "#22d3ee"],
+              ["Playful", "pink-400", "#f472b6"],
+              ["Thoughtful", "indigo-400", "#818cf8"]
+            ]
+          }
+        },
+        {
+          "title": "Typography",
+          "font_stack": {
+            "language": "css",
+            "code": "font-family: system-ui, -apple-system, sans-serif;"
+          },
+          "type_scale": {
+            "table_headers": ["Class", "Size", "Weight", "Usage"],
+            "rows": [
+              ["text-3xl", "1.875rem", "font-light", "Page titles"],
+              ["text-2xl", "1.5rem", "font-light", "Large statistics"],
+              ["text-lg", "1.125rem", "font-light", "Section headers"],
+              ["text-sm", "0.875rem", "-", "Body text"],
+              ["text-xs", "0.75rem", "-", "Metadata"],
+              ["text-[10px]", "10px", "-", "Micro labels"]
+            ]
+          },
+          "text_opacity": {
+            "table_headers": ["Opacity", "Usage"],
+            "rows": [
+              ["text-white/90", "Primary text, headings"],
+              ["text-white/80", "Body text"],
+              ["text-white/60", "Muted text"],
+              ["text-white/40", "Labels"],
+              ["text-white/30", "Hints, placeholders"]
+            ]
+          }
+        },
+        {
+          "title": "Spacing",
+          "description": "Uses Tailwind's default spacing scale.",
+          "spacing_patterns": {
+            "table_headers": ["Pattern", "Classes", "Pixels"],
+            "rows": [
+              ["Panel padding", "p-4 or p-6", "16px or 24px"],
+              ["Compact padding", "p-3", "12px"],
+              ["Element gap", "gap-2", "8px"],
+              ["Section gap", "gap-4", "16px"],
+              ["Main grid gap", "gap-6", "24px"]
+            ]
+          }
+        },
+        {
+          "title": "Glass Morphism",
+          "description": "The signature visual style uses backdrop blur with subtle transparency.",
+          "glasscard_base": {
+            "language": "jsx",
+            "code": "// GlassCard.jsx implementation\nconst baseClasses = 'backdrop-blur-xl bg-white/5 rounded-2xl transition-all duration-300';\nconst borderClasses = dashed\n  ? 'border border-dashed border-white/20'\n  : 'border border-white/10';\nconst hoverClasses = onClick && hover\n  ? 'cursor-pointer hover:bg-white/[0.08] hover:border-white/20'\n  : '';"
+          },
+          "global_glass_utility": {
+            "language": "css",
+            "code": "/* index.css */\n.glass {\n  backdrop-filter: blur(20px);\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.1);\n}\n\n.glass:hover {\n  background: rgba(255, 255, 255, 0.08);\n  border-color: rgba(255, 255, 255, 0.2);\n}"
+          }
+        },
+        {
+          "title": "Animations",
+          "custom_tailwind_animations": {
+            "language": "javascript",
+            "code": "// tailwind.config.js\nanimation: {\n  'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',\n  'breathe': 'breathe 4s ease-in-out infinite',\n},\nkeyframes: {\n  breathe: {\n    '0%, 100%': { transform: 'scale(1)' },\n    '50%': { transform: 'scale(1.05)' },\n  }\n},"
+          },
+          "usage_patterns": {
+            "table_headers": ["Animation", "Classes", "Usage"],
+            "rows": [
+              ["Loading pulse", "animate-pulse", "Status dots"],
+              ["Slow pulse", "animate-pulse-slow", "Background orbs"],
+              ["Spin", "animate-spin", "Processing spinner"],
+              ["Ping", "animate-ping", "Voice status ring"]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "16.7",
+      "title": "Hooks Reference",
+      "subsections": [
+        {
+          "hook": "useLunaAPI",
+          "file": "/frontend/src/hooks/useLunaAPI.js",
+          "lines": 242,
+          "description": "Core API communication hook for engine status and streaming.",
+          "return_value": {
+            "language": "typescript",
+            "code": "{\n  // State\n  status: EngineStatus | null,\n  consciousness: ConsciousnessData | null,\n  isConnected: boolean,\n  isLoading: boolean,\n  error: string | null,\n\n  // Actions\n  sendMessage: (text: string) => Promise<Response | null>,\n  streamMessage: (text: string, onToken, onComplete) => Promise<void>,\n  streamPersona: (text: string, callbacks) => Promise<void>,\n  abort: () => Promise<void>,\n  relaunchSystem: () => Promise<Response | null>,\n  refresh: () => Promise<void>,\n}"
+          },
+          "polling_endpoints": {
+            "table_headers": ["Endpoint", "Interval", "Purpose"],
+            "rows": [
+              ["/health", "2000ms", "Connection check"],
+              ["/status", "2000ms", "Engine status"],
+              ["/consciousness", "2000ms", "Consciousness state"]
+            ]
+          },
+          "streaming_endpoints": {
+            "table_headers": ["Endpoint", "Method", "Pattern"],
+            "rows": [
+              ["/stream", "POST", "Legacy SSE streaming"],
+              ["/persona/stream", "POST", "Context-first streaming"]
+            ]
+          }
+        },
+        {
+          "hook": "useChat",
+          "file": "/frontend/src/hooks/useChat.js",
+          "lines": 113,
+          "description": "Chat message management with streaming support.",
+          "return_value": {
+            "language": "typescript",
+            "code": "{\n  // State\n  messages: Message[],\n  context: object | null,\n  isStreaming: boolean,\n  isLoading: boolean,     // From useLunaAPI\n  error: string | null,   // From useLunaAPI\n\n  // Actions\n  send: (text: string) => Promise<void>,\n  stop: () => void,\n  clear: () => void,\n}"
+          },
+          "dependencies": [
+            "streamPersona() - Context-first streaming",
+            "abort() - Cancel generation",
+            "isLoading - Request state",
+            "error - Error state"
+          ],
+          "token_accumulation_pattern": {
+            "language": "javascript",
+            "code": "const streamingRef = useRef('');\n\nawait streamPersona(text, {\n  onToken: (token) => {\n    streamingRef.current += token;\n    setMessages((prev) =>\n      prev.map((m) =>\n        m.id === assistantMsgId\n          ? { ...m, content: streamingRef.current }\n          : m\n      )\n    );\n  },\n});"
+          }
+        },
+        {
+          "hook": "useVoice",
+          "file": "/frontend/src/hooks/useVoice.js",
+          "lines": 287,
+          "description": "Voice interaction state machine with SSE connection.",
+          "return_value": {
+            "language": "typescript",
+            "code": "{\n  // State\n  voiceState: VoiceState,\n  isRunning: boolean,\n  transcription: string | null,\n  response: string | null,\n  error: string | null,\n  handsFree: boolean,\n\n  // Actions\n  startVoice: (handsFreeMode?: boolean) => Promise<Response | null>,\n  stopVoice: () => Promise<Response | null>,\n  startListening: () => Promise<Response | null>,\n  stopListening: () => Promise<Response>,\n  speakResponse: (text: string) => Promise<Response | null>,\n\n  // Derived State\n  isListening: boolean,\n  isThinking: boolean,\n  isSpeaking: boolean,\n  isIdle: boolean,\n  isInactive: boolean,\n}"
+          },
+          "sse_connection": {
+            "endpoint": "/voice/stream",
+            "auto_reconnect": "Yes (3 second delay)",
+            "events": ["status", "transcription", "response", "ping"]
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "16.8",
+      "title": "SSE Integration",
+      "subsections": [
+        {
+          "title": "Connection Management",
+          "description": "The Luna Hub maintains three SSE connections for real-time updates.",
+          "sse_streams": {
+            "table_headers": ["Component/Hook", "Endpoint", "Purpose"],
+            "rows": [
+              ["useVoice", "/voice/stream", "Voice state updates"],
+              ["ThoughtStream", "/thoughts", "Internal process stream"],
+              ["useLunaAPI.streamPersona", "/persona/stream", "Token streaming"]
+            ]
+          }
+        },
+        {
+          "title": "Voice Stream Events",
+          "code": {
+            "language": "javascript",
+            "code": "// useVoice.js SSE connection\nconst es = new EventSource(`${API_BASE}/voice/stream`);\n\nes.addEventListener('status', (e) => {\n  const data = JSON.parse(e.data);\n  setIsRunning(data.running);\n  if (data.status) setVoiceState(data.status);\n});\n\nes.addEventListener('transcription', (e) => {\n  const data = JSON.parse(e.data);\n  setTranscription(data.text);\n});\n\nes.addEventListener('response', (e) => {\n  const data = JSON.parse(e.data);\n  setResponse(data.text);\n});\n\nes.addEventListener('ping', (e) => {\n  const data = JSON.parse(e.data);\n  setIsRunning(data.running);\n});"
+          }
+        },
+        {
+          "title": "Thought Stream Events",
+          "code": {
+            "language": "javascript",
+            "code": "// ThoughtStream.jsx SSE connection\nconst eventSource = new EventSource(`${apiUrl}/thoughts`);\n\neventSource.addEventListener('status', (event) => {\n  const data = JSON.parse(event.data);\n  setIsProcessing(data.processing);\n  if (data.goal) setCurrentGoal(data.goal);\n});\n\neventSource.addEventListener('thought', (event) => {\n  const thought = JSON.parse(event.data);\n  setThoughts(prev => [...prev.slice(-49), thought]);\n});"
+          }
+        },
+        {
+          "title": "Reconnection Logic",
+          "code": {
+            "language": "javascript",
+            "code": "// Common pattern for auto-reconnect\nes.onerror = (err) => {\n  console.error('SSE error:', err);\n  es.close();\n  if (eventSourceRef.current === es) {\n    eventSourceRef.current = null;\n    setTimeout(connectStream, 3000);  // Reconnect after 3s\n  }\n};"
+          }
+        },
+        {
+          "title": "Streaming Chat (POST-based SSE)",
+          "code": {
+            "language": "javascript",
+            "code": "// useLunaAPI.streamPersona - POST with streaming response\nconst res = await fetch(`${API_BASE}/persona/stream`, {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({ message }),\n});\n\nconst reader = res.body.getReader();\nconst decoder = new TextDecoder();\n\nwhile (true) {\n  const { done, value } = await reader.read();\n  if (done) break;\n\n  const text = decoder.decode(value);\n  const lines = text.split('\\n');\n\n  for (const line of lines) {\n    if (line.startsWith('data: ')) {\n      const data = JSON.parse(line.slice(6));\n      switch (data.type) {\n        case 'context': onContext?.(data); break;\n        case 'token': onToken?.(data.text); break;\n        case 'done': onDone?.(data); break;\n        case 'error': onError?.(data.message); break;\n      }\n    }\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "16.9",
+      "title": "UX Patterns",
+      "subsections": [
+        {
+          "title": "Loading States",
+          "table": {
+            "table_headers": ["Component", "State Check", "Visual Pattern"],
+            "rows": [
+              ["ChatPanel", "isLoading", "Animated dots \"...\""],
+              ["EngineStatus", "!status", "StatusDot + \"Loading...\""],
+              ["ConsciousnessMonitor", "!consciousness", "\"Waiting for consciousness data...\""],
+              ["ThoughtStream", "isProcessing", "\"PROCESSING\" + animated dot"],
+              ["ConversationCache", "isLoading", "Cyan dot + \"Loading...\""],
+              ["ContextDebugPanel", "isLoading && !contextData", "\"Loading context...\""],
+              ["TuningPanel", "isLoading", "Button text \"Running...\""],
+              ["VoicePanel", "isThinking", "Spinner SVG"]
+            ]
+          }
+        },
+        {
+          "title": "Skeleton Pattern",
+          "code": {
+            "language": "jsx",
+            "code": "// TuningPanel ParamCard skeleton\nif (!param) {\n  return (\n    <div className=\"p-3 rounded-lg bg-white/5 animate-pulse\">\n      <div className=\"h-4 w-32 bg-white/10 rounded\" />\n    </div>\n  );\n}"
+          }
+        },
+        {
+          "title": "Error Handling",
+          "error_propagation": {
+            "language": "javascript",
+            "code": "// App.jsx combines errors from hooks\nconst error = chatError || apiError;\n\n// Error banner display\n{error && (\n  <div className=\"mb-6 p-4 rounded-xl bg-red-500/10 border border-red-400/30 text-red-300 text-sm\">\n    {error}\n  </div>\n)}"
+          },
+          "component_level_errors": {
+            "table_headers": ["Component", "Display Pattern"],
+            "rows": [
+              ["App.jsx", "Red banner below header"],
+              ["ConversationCache", "Inline red box"],
+              ["ContextDebugPanel", "Modal red box"],
+              ["PersonalityMonitorPanel", "Modal red box"],
+              ["TuningPanel", "Dismissible red banner"],
+              ["VoicePanel", "Red box at bottom"]
+            ]
+          }
+        },
+        {
+          "title": "Real-Time Updates",
+          "polling_pattern": {
+            "language": "javascript",
+            "code": "useEffect(() => {\n  const poll = async () => {\n    const healthy = await checkHealth();\n    if (healthy) {\n      await Promise.all([fetchStatus(), fetchConsciousness()]);\n    }\n  };\n\n  poll();\n  const interval = setInterval(poll, 2000);\n  return () => clearInterval(interval);\n}, [checkHealth, fetchStatus, fetchConsciousness]);"
+          },
+          "sse_pattern": {
+            "language": "javascript",
+            "code": "useEffect(() => {\n  const es = new EventSource(`${apiUrl}/stream`);\n\n  es.onmessage = (e) => {\n    const data = JSON.parse(e.data);\n    updateState(data);\n  };\n\n  es.onerror = () => {\n    es.close();\n    setTimeout(reconnect, 2000);\n  };\n\n  return () => es.close();\n}, [apiUrl]);"
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "16.10",
+      "title": "Development",
+      "subsections": [
+        {
+          "title": "Running Locally",
+          "code": {
+            "language": "bash",
+            "code": "# Navigate to frontend directory\ncd frontend\n\n# Install dependencies\nnpm install\n\n# Start development server\nnpm run dev\n\n# Frontend runs on http://localhost:5173\n# Backend expected on http://localhost:8000"
+          }
+        },
+        {
+          "title": "Environment Setup",
+          "description": "The frontend expects the backend API at `http://localhost:8000`. This is hardcoded in the hooks.",
+          "hardcoded_api": {
+            "language": "javascript",
+            "code": "// All hooks use this constant\nconst API_BASE = 'http://localhost:8000';"
+          },
+          "environment_variable_approach": {
+            "language": "javascript",
+            "code": "const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';"
+          }
+        },
+        {
+          "title": "Build Process",
+          "code": {
+            "language": "bash",
+            "code": "# Production build\nnpm run build\n\n# Preview production build\nnpm run preview\n\n# Output in /frontend/dist/"
+          }
+        },
+        {
+          "title": "Project Structure",
+          "structure": "frontend/\n+-- src/\n|   +-- App.jsx           # Main LunaHub component\n|   +-- main.jsx          # Entry point\n|   +-- index.css         # Global styles\n|   +-- components/\n|   |   +-- index.js      # Component exports\n|   |   +-- ChatPanel.jsx\n|   |   +-- VoicePanel.jsx\n|   |   +-- EngineStatus.jsx\n|   |   +-- ConsciousnessMonitor.jsx\n|   |   +-- PersonalityMonitorPanel.jsx\n|   |   +-- ContextDebugPanel.jsx\n|   |   +-- ConversationCache.jsx\n|   |   +-- ThoughtStream.jsx\n|   |   +-- TuningPanel.jsx\n|   |   +-- GlassCard.jsx\n|   |   +-- GradientOrb.jsx\n|   |   +-- StatusDot.jsx\n|   +-- hooks/\n|       +-- useLunaAPI.js\n|       +-- useChat.js\n|       +-- useVoice.js\n+-- index.html\n+-- package.json\n+-- tailwind.config.js\n+-- vite.config.js"
+        },
+        {
+          "title": "Dependencies",
+          "code": {
+            "language": "json",
+            "code": "{\n  \"dependencies\": {\n    \"react\": \"^18.2.0\",\n    \"react-dom\": \"^18.2.0\",\n    \"recharts\": \"^3.6.0\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-react\": \"^4.0.0\",\n    \"autoprefixer\": \"^10.4.14\",\n    \"postcss\": \"^8.4.24\",\n    \"tailwindcss\": \"^3.3.2\",\n    \"vite\": \"^4.3.9\"\n  }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "Summary Statistics (v3.0 Audit)",
+      "title": "Summary Statistics",
+      "metrics": {
+        "table_headers": ["Metric", "Count"],
+        "rows": [
+          ["Total Components", "20"],
+          ["Custom Hooks", "5"],
+          ["External Dependencies", "3 (react, react-dom, recharts)"],
+          ["API Endpoints Used", "40+"],
+          ["SSE Streams", "2 (/thoughts, /voice/stream)"],
+          ["WebSocket Streams", "1 (/ws/orb)"],
+          ["Total Lines (Components + Hooks)", "~4,500+"]
+        ]
+      },
+      "component_inventory": {
+        "table_headers": ["Category", "Components"],
+        "rows": [
+          ["Core Layout", "GlassCard, GradientOrb, StatusDot"],
+          ["Chat", "ChatPanel, LunaOrb"],
+          ["Voice", "VoicePanel, VoiceTuningPanel"],
+          ["Debug/Monitor", "ContextDebugPanel, ConversationCache, ThoughtStream, ConsciousnessMonitor, PersonalityMonitorPanel"],
+          ["Engine/Tuning", "EngineStatus, TuningPanel, LunaAutoTuner (unused)"],
+          ["Settings", "OrbSettingsPanel, LLMProviderDropdown (unused), MemoryEconomyPanel (unused)"]
+        ]
+      },
+      "custom_hooks": {
+        "table_headers": ["Hook", "Purpose"],
+        "rows": [
+          ["useChat", "Streaming chat with /persona/stream, slash commands"],
+          ["useLunaAPI", "Core API client, status polling (2s interval)"],
+          ["useVoice", "Voice state machine, SSE /voice/stream"],
+          ["useOrbState", "WebSocket /ws/orb for orb animations"],
+          ["useOrbFollow", "Spring physics follow behavior for orb"]
+        ]
+      },
+      "subscription_cleanup_audit": {
+        "description": "All hooks and components properly clean up their subscriptions.",
+        "table_headers": ["Hook/Component", "Subscription Type", "Cleanup Status"],
+        "rows": [
+          ["useLunaAPI", "setInterval (2s polling)", "OK"],
+          ["useVoice", "EventSource (SSE)", "OK - with reconnect"],
+          ["useOrbState", "WebSocket", "OK - with reconnect/idle"],
+          ["useOrbFollow", "requestAnimationFrame", "OK"],
+          ["ThoughtStream", "EventSource (SSE)", "OK"],
+          ["App.jsx", "setInterval (debug context)", "OK"],
+          ["All Panels", "setInterval (polling)", "OK"]
+        ]
+      },
+      "minor_issues": [
+        "TuningPanel/EngineStatus setTimeout - No cleanup on unmount (minor: state update after unmount)",
+        "API base URL hardcoded - Should move to environment variable",
+        "Unused components - LunaAutoTuner, MemoryEconomyPanel, LLMProviderDropdown exported but not rendered"
+      ]
+    },
+    {
+      "section_number": "Changelog",
+      "title": "Changelog",
+      "table": {
+        "table_headers": ["Version", "Date", "Description"],
+        "rows": [
+          ["3.0.0", "Jan 30, 2026", "v3.0 Bible Audit - Updated counts (20 components, 5 hooks), added cleanup audit"],
+          ["2.4.0", "Jan 25, 2026", "Initial release of Part XVI: Luna Hub UI"]
+        ]
+      }
+    }
+  ],
+  "closing_statement": "The Luna Hub is the window into Luna's consciousness. Every panel, every animation, every status indicator is designed to make the invisible visible - to show you not just what Luna says, but how she thinks.",
+  "next_section": "Part XVII (TBD)",
+  "diagrams": [],
+  "notes": [
+    "Pages 301-320 contain the continuation and conclusion of Part XVI: Luna Hub UI",
+    "The section covers frontend components, hooks, design system, SSE integration, and UX patterns",
+    "No diagrams were present in these pages - content is primarily component documentation with code blocks and tables"
+  ]
+}

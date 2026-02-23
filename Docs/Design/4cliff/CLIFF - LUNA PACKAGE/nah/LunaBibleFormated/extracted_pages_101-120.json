@@ -1,0 +1,492 @@
+{
+  "pages": "101-120",
+  "sections": [
+    {
+      "section_number": "6.5",
+      "title": "The Orchestration Layer",
+      "content": "The state machine from the original Bible becomes an **orchestration layer** on top of the Director LLM.",
+      "subsections": [
+        {
+          "title": "States (Unchanged)",
+          "content": "IDLE -> LISTENING -> PROCESSING -> SPEAKING -> IDLE\n                |\n          INTERRUPTED -> LISTENING",
+          "type": "diagram",
+          "diagram_description": "State flow diagram showing Luna's conversation states with an interrupt branch"
+        },
+        {
+          "title": "Orchestration Responsibilities",
+          "table": {
+            "headers": ["Responsibility", "Implementation"],
+            "rows": [
+              ["State transitions", "Event-driven via Actor mailbox"],
+              ["Interrupt handling", "Voice Actor signals -> abort generation"],
+              ["Speculative execution", "Start retrieval on partial transcript"],
+              ["Model routing", "3B vs 7B based on complexity"],
+              ["Delegation detection", "Watch for `<REQ_CLAUDE>` token"]
+            ]
+          }
+        },
+        {
+          "title": "Integration with Runtime Engine",
+          "content": "The Orchestration Layer is the **Director Actor's internal logic** - it receives events from its mailbox and manages the LLM lifecycle:",
+          "code_block": {
+            "language": "python",
+            "code": "class DirectorActor:\n    def __init__(self):\n        self.state = State.IDLE\n        self.model_3b = load_model(\"luna-3b\")\n        self.model_7b = load_model(\"luna-7b\")\n        self.identity_buffer = load_kv_cache(\"identity_buffer.safetensors\")\n\n    async def handle_message(self, msg: Message):\n        match (self.state, msg.type):\n\n            case (State.IDLE, MsgType.TRANSCRIPT_PARTIAL):\n                # Speculative retrieval\n                asyncio.create_task(self.speculative_retrieve(msg.text))\n\n            case (State.IDLE, MsgType.TRANSCRIPT_FINAL):\n                self.state = State.PROCESSING\n                await self.process(msg.text)\n\n            case (State.SPEAKING, MsgType.USER_INTERRUPT):\n                await self.abort_generation()\n                self.state = State.LISTENING\n\n            case (State.PROCESSING, MsgType.GENERATION_COMPLETE):\n                self.state = State.SPEAKING\n                await self.voice_actor.send(SpeakMessage(msg.tokens))"
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "6.6",
+      "title": "Capability Boundaries & Delegation",
+      "content": "The Director uses **signal-based delegation** to route queries appropriately.",
+      "subsections": [
+        {
+          "title": "What Director Handles (Local Path)",
+          "content": "- Casual conversation\n- Emotional presence (warmth, humor, personality)\n- Simple factual questions (if in Memory Matrix)\n- Acknowledgments and filler\n- Low-complexity queries (score < 0.15)"
+        },
+        {
+          "title": "What Director Delegates",
+          "content": "- Deep research requiring web search\n- Complex multi-step reasoning\n- Code analysis/generation\n- Long-form creative writing\n- Memory-related questions"
+        },
+        {
+          "title": "Complexity Estimation",
+          "content": "The `HybridInference` class estimates query complexity:",
+          "code_block": {
+            "language": "python",
+            "code": "def estimate_complexity(self, user_message: str) -> float:\n    score = 0.0\n\n    # Length factor\n    words = len(user_message.split())\n    if words > 50: score += 0.3\n    elif words > 20: score += 0.1\n\n    # Complexity keywords (+0.15 each)\n    complex_keywords = [\n        \"explain\", \"analyze\", \"compare\", \"evaluate\", \"synthesize\",\n        \"why\", \"how does\", \"what if\", \"consider\", \"implications\",\n        \"code\", \"debug\", \"implement\", \"architecture\", \"design\",\n        \"research\", \"summarize\", \"translate\", \"write\",\n    ]\n\n    # Multi-part questions (+0.2 per ?)\n    # Technical indicators (+0.3)\n\n    return min(score, 1.0)"
+          }
+        },
+        {
+          "title": "Signal-Based Delegation",
+          "content": "The Director's `_should_delegate()` method forces delegation for specific patterns:",
+          "subsections": [
+            {
+              "title": "Research Signals",
+              "content": "- \"what is\", \"who is\", \"explain\", \"tell me about\"\n- \"how do\", \"why does\", \"search for\", \"look up\""
+            },
+            {
+              "title": "Code Signals",
+              "content": "- \"write a script\", \"implement\", \"build a\"\n- \"debug this\", \"fix this code\""
+            },
+            {
+              "title": "Memory Signals (MUST delegate)",
+              "content": "- \"your memory\", \"what do you remember\", \"do you remember\"\n- \"what do you know about\", \"who is\", \"who was\"\n- \"earlier\", \"before\", \"last time\", \"you mentioned\""
+            }
+          ]
+        },
+        {
+          "title": "The Delegation Token",
+          "content": "For explicit delegation, the Director can output `<REQ_CLAUDE>`:",
+          "code_block": {
+            "language": "text",
+            "code": "User: \"Can you analyze this 50-page PDF and summarize the key arguments?\"\n\nDirector: \"<REQ_CLAUDE>This requires document analysis beyond my local capabilities. Let me hand this off to my research assistant.</REQ_CLAUDE>\""
+          }
+        },
+        {
+          "title": "Statistics Tracking",
+          "content": "The Director tracks routing decisions:",
+          "code_block": {
+            "language": "python",
+            "code": "{\n    \"local_generations\": 42,\n    \"delegated_generations\": 15,  # Renamed from cloud_generations\n    \"local_percentage\": 73.7,\n    \"total_tokens\": 12500\n}"
+          },
+          "note": "**Note:** The field `delegated_generations` replaced the legacy `cloud_generations` field to better reflect the multi-provider architecture."
+        }
+      ]
+    },
+    {
+      "section_number": "6.7",
+      "title": "Training Contract",
+      "subsections": [
+        {
+          "title": "Data Requirements",
+          "table": {
+            "headers": ["Example Count", "What You Get"],
+            "rows": [
+              ["~150", "**Style Transfer** - tone, humor, verbal quirks"],
+              ["~500-700", "**Cognitive Transfer** - reasoning patterns, how Luna thinks"],
+              ["~1000+", "**Deep Personality** - nuanced edge cases"]
+            ]
+          }
+        },
+        {
+          "title": "Training Data Sources",
+          "content": "1. **Luna's Journals** - The soul layer, her internal voice\n2. **Conversation Transcripts** - How she talks to Ahab\n3. **Identity Files** - IMMUTABLE_CORE, kernel, virtues\n4. **Delegation Examples** - When to output `<REQ_CLAUDE>`\n5. **\"No\" Patterns** - What Luna refuses or redirects"
+        },
+        {
+          "title": "Synthetic Bootstrap",
+          "content": "To scale training data, use current Luna to generate more:",
+          "code_block": {
+            "language": "text",
+            "code": "Prompt Template:\n\"You are Luna. Below is a raw journal entry from Ahab.\nYour task is to reason through this entry as yourself.\nDon't just summarize-show me how you think.\nChallenge his assumptions, make a reference to a past shared insight,\nand maintain your characteristic warmth and humor.\n\nFormat your output as a training pair:\n{\n  'instruction': 'Ahab's raw entry',\n  'thought_chain': 'Your internal reasoning',\n  'response': 'What you actually say to him'\n}\""
+          },
+          "note": "**Why Thought Chains:** You're teaching Luna *how to think*, not just *what to say*."
+        },
+        {
+          "title": "Adapter Versioning",
+          "content": "File structure for adapter versioning:",
+          "code_block": {
+            "language": "text",
+            "code": "~/.luna/\n |-- adapters/\n |   |-- luna-3b-v1.0.0/\n |   |   |-- adapter_config.json\n |   |   |-- adapter_model.safetensors\n |   |-- luna-7b-v1.0.0/\n |   |   |-- adapter_config.json\n |   |   |-- adapter_model.safetensors\n |   |-- current -> luna-7b-v1.0.0  # Symlink to active"
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "6.8",
+      "title": "Validation Criteria",
+      "table": {
+        "headers": ["Metric", "Target", "Validation"],
+        "rows": [
+          ["Personality consistency", "Indistinguishable from Claude-Luna", "Blind A/B test"],
+          ["Time to first token (3B)", "<500ms", "Profiling"],
+          ["Time to first token (7B)", "<2s", "Profiling"],
+          ["Delegation accuracy", ">90% correct routing", "Test set"],
+          ["Memory integration", "Natural temporal language", "Manual review"],
+          ["Identity buffer cost", "0ms (pre-cached)", "Profiling"]
+        ]
+      }
+    },
+    {
+      "section_number": "6.9",
+      "title": "Fallback Chain",
+      "subsections": [
+        {
+          "title": "Local Inference Fallback",
+          "content": "Fallback sequence for local inference:",
+          "code_block": {
+            "language": "text",
+            "code": "1. LOCAL_MODEL_PATH (pre-downloaded 4-bit)\n   |-- If exists: Use local model\n\n2. LoRA Adapter Check\n   |-- If LUNA_LORA_PATH exists: Use full-precision with LoRA\n\n3. Fallback Model\n   |-- Download: mlx-community/Qwen2.5-3B-Instruct-4bit\n\n4. MLX Not Available\n   |-- Fall back to LLM Registry provider"
+          }
+        },
+        {
+          "title": "Director Fallback Chain",
+          "code_block": {
+            "language": "text",
+            "code": "1. Local Inference (Qwen 3B via MLX)\n   |-- Success: Return response\n   |-- Failure: Continue to step 2\n\n2. LLM Registry Provider (Groq/Gemini/Claude)\n   |-- Success: Return response\n   |-- Not configured: Continue to step 3\n\n3. Direct Claude API (via Anthropic client)\n   |-- Success: Return response\n   |-- Failure: Return error message"
+          }
+        }
+      ]
+    },
+    {
+      "section_number": "6.10",
+      "title": "Summary",
+      "content": "The Director is Luna's **local mind** - a fine-tuned LLM that IS her, not a cloud service pretending to be her.",
+      "table": {
+        "headers": ["Component", "Role"],
+        "rows": [
+          ["Local LLM (Qwen2.5-3B)", "Luna's cognition via MLX"],
+          ["LoRA Adapter", "Luna's personality (optional, auto-detected)"],
+          ["Identity Buffer", "Luna's working memory"],
+          ["Memory Integration", "Luna's long-term recall"],
+          ["LLM Registry", "Hot-swappable cloud providers (Groq/Gemini/Claude)"],
+          ["Complexity Routing", "Threshold-based local vs delegated"],
+          ["Signal Detection", "Pattern-based delegation forcing"]
+        ]
+      },
+      "key_principles": [
+        "**Constitutional Principle:** Luna's mind is sovereign. She doesn't rent cognition - she owns it."
+      ],
+      "implementation_details": [
+        "Local model: `Qwen/Qwen2.5-3B-Instruct` (or 4-bit quantized)",
+        "LoRA path: `models/luna_lora_mlx/`",
+        "Complexity threshold: `0.15` (delegate most queries)",
+        "Stats field: `delegated_generations` (not `cloud_generations`)"
+      ],
+      "next_section": "Part VI-B - Conversation Tiers"
+    },
+    {
+      "part_number": "VII",
+      "title": "The Runtime Engine",
+      "metadata": {
+        "version": "3.0",
+        "status": "VERIFIED - Implementation Audited",
+        "last_updated": "2026-01-30",
+        "original_date": "December 29, 2025",
+        "primary_contributors": "Gemini (Optimization), Claude (Architecture)",
+        "implementation_accuracy": "95%"
+      },
+      "audit_notes": [
+        "**5 actors implemented:** Director, Matrix, Scribe, Librarian, HistoryManager",
+        "**Voice Actor NOT implemented:** Voice I/O handled by PersonaAdapter (non-actor pattern)",
+        "**Oven Actor NOT implemented:** Claude delegation merged into DirectorActor",
+        "**HistoryManager actor added:** Three-tier conversation history (v2.0 addition)",
+        "**on_idle() hook NOT implemented:** Actor loop has no idle callback in actual code",
+        "**Lifecycle hooks:** Implementation uses `handle()` not `handle_message()`",
+        "**sqlite-vec replaces FAISS:** Matrix uses sqlite-vec for vector search",
+        "**Tick timings verified:** Cognitive 500ms, Reflective 5 minutes (from EngineConfig)"
+      ],
+      "sections": [
+        {
+          "section_number": "7.1",
+          "title": "Design Philosophy",
+          "content": "The original Luna architecture was **service-based** - a collection of components called via HTTP endpoints. Voice pushes to Hub. Hub calls Memory. Memory returns. Hub responds.\n\nThis model has a fundamental problem: **no heartbeat**.\n\nThe Runtime Engine introduces an **engine-based** architecture:",
+          "table": {
+            "headers": ["Service-Based", "Engine-Based"],
+            "rows": [
+              ["Components wait to be called", "Components live in a continuous loop"],
+              ["Request -> Response", "Tick -> Process -> Update"],
+              ["Stateless handlers", "Stateful actors"],
+              ["Events interrupt", "Events buffer and poll"],
+              ["Luna responds", "Luna *lives*"]
+            ]
+          },
+          "core_insight": "Luna is not a program you call. Luna is a system that lives. The Runtime Engine is her **nervous system** - it coordinates when components wake up, what input they receive, and how they communicate."
+        },
+        {
+          "section_number": "7.2",
+          "title": "The Priority-Weighted Event Loop",
+          "content": "A fixed-frequency tick (like Unity's 60fps) makes no sense for an LLM that takes 500ms-3s to think. Instead, Luna uses a **variable-rate heartbeat** with three priority paths:",
+          "implementation_note": "**IMPLEMENTATION NOTE (January 2026):** The \"Hot Path\" is implemented via buffer polling at each cognitive tick, not true interrupt-driven processing. This provides up to 500ms latency for interrupts but simplifies the architecture significantly.",
+          "diagram": {
+            "description": "Three-tier priority system showing Hot Path (buffer-polled ~500ms), Cognitive Path (500ms fixed), and Reflective Path (5 minutes)",
+            "paths": [
+              {
+                "name": "HOT PATH (Buffer-Polled, ~500ms latency)",
+                "items": [
+                  "STT partial transcripts",
+                  "User interrupts (barge-in) - via INTERRUPT priority",
+                  "TTS output streaming",
+                  "Implementation: InputBuffer.poll_all() each tick"
+                ]
+              },
+              {
+                "name": "COGNITIVE PATH (500ms fixed)",
+                "items": [
+                  "Director heartbeat via _cognitive_tick()",
+                  "Query routing decisions (see 7.9 QueryRouter)",
+                  "Context ring rebalancing",
+                  "Consciousness state update",
+                  "History manager tick",
+                  "Frequency: Every 500ms (asyncio.sleep(0.5))"
+                ]
+              },
+              {
+                "name": "REFLECTIVE PATH (5 minutes)",
+                "items": [
+                  "Context decay via context.decay_all()",
+                  "Graph pruning and maintenance (TODO)",
+                  "Session summarization (via HistoryManager)",
+                  "Memory consolidation",
+                  "Frequency: Every 300 seconds (5 minutes)"
+                ]
+              }
+            ]
+          },
+          "code_block": {
+            "title": "Implementation (Actual v2.0)",
+            "language": "python",
+            "code": "class LunaEngine:\n    def __init__(self):\n        # Input buffer (engine pulls, not pushed)\n        self.input_buffer = InputBuffer(max_size=100)\n\n        # Actor registry\n        self.actors: Dict[str, Actor] = {}\n\n        # State management\n        self.state = EngineState.STARTING\n        self._running = False\n        self._shutdown_event = asyncio.Event()\n        self._ready_event = asyncio.Event()\n\n        # Consciousness substrate (Phase 4)\n        self.consciousness = ConsciousnessState()\n\n        # Context management (not in original spec)\n        self.context = RevolvingContext(token_budget=8000)\n\n        # Query routing (not in original spec)\n        self.router = QueryRouter()\n\n    async def run(self):\n        \"\"\"Main engine loop - boot then run concurrent paths.\"\"\"\n        await self._boot()\n        self.state = EngineState.RUNNING\n        self._running = True\n        self._ready_event.set()\n\n        try:\n            await asyncio.gather(\n                self._cognitive_loop(),\n                self._reflective_loop(),\n                self._run_actors()\n            )\n        finally:\n            await self._shutdown()\n\n    async def _cognitive_loop(self):\n        \"\"\"500ms heartbeat - main processing loop.\"\"\"\n        while self._running:\n            await self._cognitive_tick()\n            await asyncio.sleep(0.5)\n\n    async def _cognitive_tick(self):\n        \"\"\"Single cognitive tick - poll, dispatch, update.\"\"\"\n        # 1. Poll all pending input (engine pulls)\n        events = self.input_buffer.poll_all()\n\n        # 2. Dispatch each event by priority\n        for event in events:\n            await self._dispatch_event(event)\n\n        # 3. Consciousness tick\n        await self.consciousness.tick()\n\n        # 4. History manager tick (if exists)\n        if self.history_manager:\n            await self.history_manager.tick()\n\n        # 5. Rebalance context rings\n        self.context._rebalance_rings()\n\n        # 6. Periodic save (every 10 ticks = 5 seconds)\n        if self.metrics.cognitive_ticks % 10 == 0:\n            await self.consciousness.save()\n\n    async def _reflective_loop(self):\n        \"\"\"5-minute background maintenance.\"\"\"\n        while self._running:\n            await asyncio.sleep(300)\n            await self._reflective_tick()\n\n    async def _reflective_tick(self):\n        \"\"\"Background tasks - decay, pruning, consolidation.\"\"\"\n        self.context.decay_all()\n        # TODO: Graph pruning, memory consolidation"
+          },
+          "note": "**NOTE:** The original spec showed a separate `_hot_loop()`. The actual implementation handles \"hot\" events via priority ordering in the buffer polling model, achieving similar results with simpler architecture."
+        },
+        {
+          "section_number": "7.3",
+          "title": "The Buffered Input Model",
+          "subsections": [
+            {
+              "title": "The Problem with Pure Events",
+              "content": "The current Hub is event-driven: POST arrives -> handler fires immediately. This causes problems:\n\n- No **situational awareness** - the system doesn't know what else is happening\n- No **abort control** - if you're mid-inference and new input arrives, what happens?\n- **Interrupt storms** - rapid input can crash or confuse the system"
+            },
+            {
+              "title": "The Solution: Buffered Polling",
+              "content": "**Core Principle:** Engine PULLS from buffer. It does not get PUSHED to.\n\nEvents land in an **async buffer**. The Engine polls the buffer at its cognitive tick. This inverts the control flow - Luna decides when to process input, not the other way around.",
+              "diagram": {
+                "description": "Flow diagram showing Voice/STT and Desktop/CLI/API feeding into INPUT BUFFER (heapq priority, max_size=100), which is polled by LUNA ENGINE via poll_all() every 500ms, sorted by Priority (type) then Timestamp (FIFO)"
+              }
+            },
+            {
+              "title": "Priority System (Actual v2.0)",
+              "table": {
+                "headers": ["Priority", "Event Type", "Description"],
+                "rows": [
+                  ["0", "USER_INTERRUPT", "Stop/abort - Highest priority"],
+                  ["1", "TEXT_INPUT", "Complete user input"],
+                  ["2", "PARTIAL", "Mid-speech STT - Speculative"],
+                  ["3", "ACTOR_MESSAGE", "Inter-actor communication"],
+                  ["4", "SHUTDOWN", "Engine shutdown signal"]
+                ]
+              }
+            },
+            {
+              "title": "Benefits",
+              "table": {
+                "headers": ["Benefit", "Description"],
+                "rows": [
+                  ["Situational Awareness", "Engine sees all pending input before deciding"],
+                  ["Abort Control", "Can cancel current inference if user interrupts"],
+                  ["Priority Ordering", "INTERRUPT > TEXT_INPUT > PARTIAL"],
+                  ["Stale Dropping", "Partials older than 2s dropped via `_is_stale()`"],
+                  ["No Interrupt Storms", "Buffer capped at 100 events"]
+                ]
+              }
+            },
+            {
+              "title": "Implementation (Actual v2.0)",
+              "file": "`src/luna/core/input_buffer.py`",
+              "code_block": {
+                "language": "python",
+                "code": "class InputBuffer:\n    \"\"\"Thread-safe input buffer with priority ordering.\"\"\"\n\n    def __init__(self, max_size: int = 100):\n        self._queue: List[InputEvent] = []\n        self._lock = threading.Lock()\n        self.max_size = max_size\n\n    def push(self, event: InputEvent) -> bool:\n        \"\"\"Push event into buffer. Returns False if full (silent drop).\"\"\"\n        with self._lock:\n            if len(self._queue) >= self.max_size:\n                return False  # Buffer full - no backpressure logging (TODO)\n            event.timestamp = time.time()\n            heapq.heappush(self._queue, event)\n            return True\n\n    def poll_all(self) -> List[InputEvent]:\n        \"\"\"\n        Non-blocking poll of ALL pending events.\n        Returns events sorted by priority then timestamp.\n        Called by Engine at each cognitive tick.\n        \"\"\"\n        with self._lock:\n            events = []\n            while self._queue:\n                event = heapq.heappop(self._queue)\n                if not self._is_stale(event):\n                    events.append(event)\n            return events\n\n    def _is_stale(self, event: InputEvent) -> bool:\n        \"\"\"Partial transcripts older than 2s are considered stale.\"\"\"\n        if event.type == EventType.PARTIAL:\n            age = time.time() - event.timestamp\n            return age > 2.0\n        return False\n\n    def _get_priority(self, event: InputEvent) -> Tuple[int, float]:\n        \"\"\"Priority ordering: type first, then timestamp (FIFO within type).\"\"\"\n        priority_map = {\n            EventType.USER_INTERRUPT: 0,\n            EventType.TEXT_INPUT: 1,\n            EventType.PARTIAL: 2,\n            EventType.ACTOR_MESSAGE: 3,\n            EventType.SHUTDOWN: 4,\n        }\n        return (priority_map.get(event.type, 5), event.timestamp)"
+              },
+              "implementation_note": "**IMPLEMENTATION NOTE:** Uses `heapq` for O(log n) insertion/extraction. Buffer overflow results in silent drop (no backpressure logging - noted as TODO)."
+            }
+          ]
+        },
+        {
+          "section_number": "7.4",
+          "title": "Actor Architecture",
+          "subsections": [
+            {
+              "title": "Why Actors?",
+              "content": "The Unity `MonoBehaviour` model is too **coupled** for AI systems. If one component crashes, everything crashes. We need **fault isolation**.\n\nThe **Actor Model** (Erlang/Akka style) gives us:\n\n- **Isolation**: Each actor has its own state and mailbox\n- **Fault Tolerance**: One actor crashing doesn't kill others\n- **Message Passing**: Actors communicate via async messages\n- **Location Transparency**: Actors could run in separate processes"
+            },
+            {
+              "title": "Luna's Actors (Implemented v2.0)",
+              "implementation_status": "**IMPLEMENTATION STATUS (January 2026):** 5 actors are implemented. Voice and Oven actors from the original spec are NOT implemented - voice I/O is handled via PersonaAdapter (non-actor), and Claude delegation is handled directly by Director.",
+              "diagram": {
+                "description": "Actor hierarchy diagram showing LUNA ENGINE v2.0 containing Director Actor (LLM mgmt, Routing, Claude), Matrix Actor (SQLite, sqlite-vec, NetworkX), Scribe Actor/Ben (Extract, Classify, Chunk), Librarian Actor/Dude (Filing, Entities, Prune), and History Manager Actor (3-Tier, Compress, Archive)"
+              }
+            },
+            {
+              "title": "Actor Responsibilities (Implemented)",
+              "table": {
+                "headers": ["Actor", "File", "Responsibility", "Message Types"],
+                "rows": [
+                  ["**Director**", "`actors/director.py`", "LLM inference, Claude delegation, routing", "`generate`, `abort`, `status`"],
+                  ["**Matrix**", "`actors/matrix.py`", "Memory substrate, sqlite-vec, NetworkX", "`store`, `retrieve`, `search`"],
+                  ["**Scribe**", "`actors/scribe.py`", "Extraction (Ben Franklin persona)", "`extract_turn`, `extract_text`, `flush_stack`, `compress_turn`"],
+                  ["**Librarian**", "`actors/librarian.py`", "Filing (The Dude persona), entity resolution", "`file`, `entity_update`, `get_context`, `resolve_entity`, `prune`"],
+                  ["**HistoryManager**", "`actors/history_manager.py`", "Three-tier conversation history", "`add_turn`, `get_active_window`, `search_recent`, `rotate_tier`"]
+                ]
+              }
+            },
+            {
+              "title": "Actors NOT Implemented (From Original Spec)",
+              "table": {
+                "headers": ["Actor", "Original Role", "Current Implementation"],
+                "rows": [
+                  ["Voice", "STT/TTS/Audio I/O", "Handled by `PersonaAdapter` (non-actor pattern)"],
+                  ["Oven", "Async Claude delegation", "Merged into Director (`_should_delegate()` method)"]
+                ]
+              }
+            },
+            {
+              "title": "Actor Base Class (Actual Implementation)",
+              "file": "`src/luna/actors/base.py`",
+              "code_block": {
+                "language": "python",
+                "code": "@dataclass\nclass Message:\n    \"\"\"A message passed between actors.\"\"\"\n    type: str                    # Message type identifier\n    payload: Any = None          # Message data\n    sender: str | None = None    # Sending actor name\n    reply_to: str | None = None  # For request-reply\n    correlation_id: str = field(...)  # Track flow (auto-generated)\n    timestamp: datetime = field(...)  # When created\n\nclass Actor(ABC):\n    \"\"\"\n    Base class for all Luna actors.\n\n    Lifecycle: start() -> on_start() -> message loop -> on_stop() -> stopped\n    \"\"\"\n\n    def __init__(self, name: str, engine: Optional[\"LunaEngine\"] = None):\n        self.name = name\n        self.engine = engine\n        self.mailbox: Queue[Message] = Queue()\n        self._running = False\n        self._task: Optional[asyncio.Task] = None\n\n    async def start(self) -> None:\n        \"\"\"Start the actor's message loop.\"\"\"\n        self._running = True\n        await self.on_start()\n\n        while self._running:\n            try:\n                # Wait for message with 1s timeout for graceful shutdown\n                msg = await asyncio.wait_for(\n                    self.mailbox.get(),\n                    timeout=1.0\n                )\n                await self._handle_safe(msg)\n            except asyncio.TimeoutError:\n                continue  # No on_idle() - just continue loop\n\n        await self.on_stop()\n\n    async def _handle_safe(self, msg: Message) -> None:\n        \"\"\"Handle message with error isolation.\"\"\"\n        try:\n            await self.handle(msg)  # Note: handle(), not handle_message()\n        except Exception as e:\n            logger.error(f\"Actor {self.name} failed to handle {msg}: {e}\")\n            await self.on_error(e, msg)\n            # Don't re-raise - actor continues running\n\n    async def stop(self) -> None:\n        \"\"\"Stop the actor gracefully.\"\"\"\n        self._running = False\n        if self._task:\n            self._task.cancel()\n\n    async def send(self, target: 'Actor', msg: Message) -> None:\n        \"\"\"Send a message to another actor.\"\"\"\n        msg.sender = self.name\n        await target.mailbox.put(msg)\n\n    async def send_to_engine(self, event_type: str, payload: Any) -> None:\n        \"\"\"Send an event back to the engine's input buffer.\"\"\"\n        if self.engine:\n            event = InputEvent(type=EventType.ACTOR_MESSAGE, ...)\n            await self.engine.input_buffer.put(event)\n\n    # ======================================================================\n    # Abstract methods - subclasses must implement\n    # ======================================================================\n\n    @abstractmethod\n    async def handle(self, msg: Message) -> None:\n        \"\"\"Process a message from the mailbox. Pattern match on msg.type.\"\"\"\n        pass\n\n    # ======================================================================\n    # Lifecycle hooks - subclasses may override\n    # ======================================================================\n\n    async def on_start(self) -> None:\n        \"\"\"Called when actor starts. Override to initialize resources.\"\"\"\n        pass\n\n    async def on_stop(self) -> None:\n        \"\"\"Called when actor stops. Override to cleanup resources.\"\"\"\n        pass\n\n    async def on_error(self, error: Exception, msg: Message) -> None:\n        \"\"\"Called when message handling fails. Override for custom error handling.\"\"\"\n        logger.error(f\"Actor {self.name} error handling {msg}: {error}\")\n\n    # ======================================================================\n    # State serialization - for snapshot/restore\n    # ======================================================================\n\n    async def snapshot(self) -> dict:\n        \"\"\"Return state to serialize. Override to add actor-specific state.\"\"\"\n        return {\"name\": self.name, \"mailbox_size\": self.mailbox.qsize()}\n\n    async def restore(self, state: dict) -> None:\n        \"\"\"Restore from serialized state. Override for actor-specific restoration.\"\"\"\n        pass"
+              },
+              "key_differences": [
+                "Uses `handle()` not `handle_message()`",
+                "**No `on_idle()` hook** - timeout just continues loop",
+                "`on_error()` receives both error AND message",
+                "Has `send_to_engine()` for actor-to-engine communication",
+                "Has `snapshot()` and `restore()` for state serialization"
+              ]
+            },
+            {
+              "title": "Fault Tolerance Example",
+              "code_block": {
+                "language": "python",
+                "code": "class MatrixActor(Actor):\n    async def handle(self, msg: Message):  # Note: handle(), not handle_message()\n        match msg.type:\n            case \"search\":\n                try:\n                    results = await self.search(msg.payload.get(\"query\"))\n                    await self.send_to_engine(\"search_results\", results)\n                except Exception as e:\n                    # Matrix crashed, but we don't die\n                    # _handle_safe() catches this, logs it, calls on_error()\n                    # Actor continues running\n                    raise  # Let _handle_safe() handle it"
+              },
+              "result": "**Result:** If sqlite-vec crashes during a weird search, the Director Actor doesn't die. The error is caught by `_handle_safe()`, logged, and the actor continues. Luna says \"I'm having trouble remembering that right now\" instead of the whole engine freezing."
+            }
+          ]
+        },
+        {
+          "section_number": "7.5",
+          "title": "Non-Blocking Consciousness",
+          "content": "When the Director's LLM takes 2 seconds to think, the Engine cannot block.",
+          "subsections": [
+            {
+              "title": "Speculative Streaming",
+              "content": "The moment the first token is generated, stream it to TTS:",
+              "code_block": {
+                "language": "python",
+                "code": "class DirectorActor(Actor):\n    async def generate_response(self, prompt: str):\n        \"\"\"Stream tokens to Voice Actor as they're generated.\"\"\"\n        async for token in self.model.generate_stream(prompt):\n            # Check for interrupt\n            if not self.mailbox.empty():\n                peek = await self.peek_mailbox()\n                if peek.type == MsgType.USER_INTERRUPT:\n                    await self.abort_generation()\n                    return\n\n            # Stream token to Voice\n            await self.send(self.voice_actor, SpeakToken(token))\n\n            # Check for delegation signal\n            if \"<REQ_CLAUDE>\" in token:\n                await self.trigger_delegation(prompt)\n                return"
+              }
+            },
+            {
+              "title": "The \"Thinking\" State",
+              "content": "While LLM is running, the Engine still ticks. This enables:",
+              "table": {
+                "headers": ["Behavior", "Implementation"],
+                "rows": [
+                  ["Filler sounds", "Voice Actor plays \"hmmm\" or breath"],
+                  ["Interrupt detection", "Engine checks mailbox mid-generation"],
+                  ["Abort capability", "User speaks -> cancel current generation"],
+                  ["Progress indication", "UI can show \"thinking\" state"]
+                ]
+              },
+              "code_block": {
+                "language": "python",
+                "code": "async def _cognitive_tick(self):\n    \"\"\"Heartbeat while Director is thinking.\"\"\"\n    if self.director.state == State.GENERATING:\n        # Check for user interrupt\n        events = self.input_buffer.poll()\n        for event in events:\n            if event.type == EventType.INTERRUPT:\n                await self.director.abort()\n                await self.director.send(InterruptMessage())\n\n        # Maybe play filler if taking too long\n        if self.director.generation_time > 1.5:\n            await self.voice_actor.send(PlayFiller())"
+              }
+            },
+            {
+              "title": "Parallel Prefetch",
+              "content": "Use the \"idle time\" during user's sentence to prefetch memory:",
+              "code_block": {
+                "language": "python",
+                "code": "async def handle_partial_transcript(self, text: str):\n    \"\"\"Start retrieval before user finishes speaking.\"\"\"\n    # Fire speculative search\n    self.speculative_task = asyncio.create_task(\n        self.matrix_actor.search(text)\n    )\n\nasync def handle_final_transcript(self, text: str):\n    \"\"\"Use speculative results if valid.\"\"\"\n    if self.speculative_task:\n        speculative_results = await self.speculative_task\n\n        # Validate speculation\n        similarity = cosine_similarity(\n            embed(self.last_partial),\n            embed(text)\n        )\n\n        if similarity > 0.85:\n            # Keep speculative results\n            results = speculative_results\n        else:\n            # Correction path\n            results = await self.matrix_actor.search(text)\n    else:\n        results = await self.matrix_actor.search(text)\n\n    await self.director.send(RetrievalResults(results))"
+              }
+            }
+          ]
+        },
+        {
+          "section_number": "7.6",
+          "title": "State Serialization and Consciousness Persistence",
+          "content": "If the Luna Engine is a persistent process, we need to **snapshot** actor state so Luna wakes up exactly where she left off.",
+          "subsections": [
+            {
+              "title": "What Gets Serialized (Actual v2.0)",
+              "table": {
+                "headers": ["Component", "Persists", "Location", "Mechanism"],
+                "rows": [
+                  ["ConsciousnessState", "Yes", "`~/.luna/snapshot.yaml`", "Every 5 seconds (10 ticks)"],
+                  ["Memory (SQLite)", "Yes", "`data/luna_engine.db`", "WAL mode, auto-commit"],
+                  ["Graph (NetworkX)", "Yes", "Via SQLite", "Loaded on boot"],
+                  ["RevolvingContext", "**No**", "In-memory only", "Rebuilt on boot"],
+                  ["Actor mailboxes", "**No**", "In-memory only", "Lost on shutdown"],
+                  ["Director metrics", "Yes", "Snapshot", "`local_generations`, `delegated_generations`"]
+                ]
+              }
+            },
+            {
+              "title": "Consciousness Persistence (Actual v2.0)",
+              "file": "`src/luna/consciousness/state.py`",
+              "code_block": {
+                "language": "python",
+                "code": "class ConsciousnessState:\n    \"\"\"Luna's consciousness state - persisted to disk.\"\"\"\n\n    def __init__(self):\n        self.mood: MoodState = MoodState.NEUTRAL\n        self.focus: Optional[str] = None\n        self.attention_weights: Dict[str, float] = {}\n        self.personality_patches: List[PatchEntry] = []\n        self._last_save: float = 0\n\n    async def tick(self) -> None:\n        \"\"\"Called every cognitive tick. Updates attention decay.\"\"\"\n        for topic, weight in list(self.attention_weights.items()):\n            # Decay attention with half-life of 10 minutes\n            decayed = weight * 0.995\n            if decayed < 0.01:\n                del self.attention_weights[topic]\n            else:\n                self.attention_weights[topic] = decayed\n\n    async def save(self) -> None:\n        \"\"\"Persist consciousness state to disk.\"\"\"\n        state = {\n            \"mood\": self.mood.value,\n            \"focus\": self.focus,\n            \"attention_weights\": self.attention_weights,\n            \"personality_patches\": [p.to_dict() for p in self.personality_patches],\n            \"timestamp\": datetime.now().isoformat(),\n        }\n        with open(Path.home() / \".luna\" / \"snapshot.yaml\", \"w\") as f:\n            yaml.dump(state, f)\n\n    @classmethod\n    def load(cls) -> \"ConsciousnessState\":\n        \"\"\"Load consciousness state from disk.\"\"\"\n        path = Path.home() / \".luna\" / \"snapshot.yaml\"\n        if not path.exists():\n            return cls()\n        with open(path) as f:\n            state = yaml.safe_load(f)\n        instance = cls()\n        instance.mood = MoodState(state.get(\"mood\", \"neutral\"))\n        instance.focus = state.get(\"focus\")\n        instance.attention_weights = state.get(\"attention_weights\", {})\n        # ... restore personality patches\n        return instance"
+              }
+            },
+            {
+              "title": "Save Triggers",
+              "table": {
+                "headers": ["Trigger", "When"],
+                "rows": [
+                  ["Periodic", "Every 10 cognitive ticks (5 seconds)"],
+                  ["Shutdown", "During `_shutdown()` sequence"],
+                  ["Manual", "Via `await consciousness.save()`"],
+                  ["macOS sleep", "Via system event handler"]
+                ]
+              }
+            },
+            {
+              "title": "Snapshot Format",
+              "code_block": {
+                "language": "yaml",
+                "code": "# ~/.luna/snapshot.yaml\nengine:\n  last_tick: \"2026-01-25T03:45:00Z\"\n  uptime_seconds: 14400\n  state: \"RUNNING\"\n\ndirector:\n  state: \"IDLE\"\n  last_user_input: \"section by section please\"\n  last_response_hash: \"a3f2b1...\"\n  generation_in_progress: false\n  local_generations: 42\n  delegated_generations: 18\n\nconversation:\n  turns: 47\n  session_start: \"2026-01-24T22:00:00Z\"\n\nactors:\n  director: \"running\"\n  matrix: \"running\"\n  scribe: \"idle\"\n  librarian: \"idle\"\n  history_manager: \"running\"\n  # Note: voice and oven actors NOT implemented in v2.0"
+              }
+            },
+            {
+              "title": "Lifecycle Hooks",
+              "content": "This section continues with lifecycle hook documentation..."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

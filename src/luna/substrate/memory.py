@@ -382,53 +382,104 @@ class MemoryMatrix:
 
     async def _link_entity_mentions(self, node_id: str, content: str) -> int:
         """
-        Detect entities in content and create mention links.
+        Detect entities in content and create relevance-scored mention links.
 
-        Args:
-            node_id: The memory node ID to link
-            content: The content to scan for entity mentions
+        Scoring based on:
+        - Frequency: how many times the entity name appears
+        - Position: early mentions suggest the node is ABOUT the entity
+        - Density: what fraction of content is the entity name
 
-        Returns:
-            Number of entity mentions created
+        Classification:
+        - "subject": node is primarily about this entity (high density/frequency)
+        - "focus": entity is prominently featured (early + repeated)
+        - "reference": passing mention (low relevance)
+
+        Mentions below confidence 0.3 are dropped entirely.
         """
         resolver = await self._get_entity_resolver()
         if resolver is None:
             return 0
 
         try:
-            # Detect entities mentioned in the content
             entities = await resolver.detect_mentions(content)
-
             if not entities:
                 return 0
 
-            # Create mentions for each detected entity
+            content_lower = content.lower()
+            content_len = len(content)
+            word_count = len(content.split())
+
+            if content_len == 0 or word_count == 0:
+                return 0
+
             mention_count = 0
             for entity in entities:
-                # Create a context snippet (first 100 chars around mention)
                 name_lower = entity.name.lower()
-                content_lower = content.lower()
+                name_word_count = len(entity.name.split())
+
+                # --- Signal 1: Frequency ---
+                occurrences = content_lower.count(name_lower)
+                frequency_score = min(occurrences / 3.0, 1.0)
+
+                # --- Signal 2: Position ---
+                first_pos = content_lower.find(name_lower)
+                if first_pos >= 0:
+                    position_score = 1.0 - (first_pos / content_len)
+                else:
+                    position_score = 0.0
+
+                # --- Signal 3: Density ---
+                density = (occurrences * name_word_count) / word_count
+                density_score = min(density * 10, 1.0)
+
+                # --- Composite Confidence ---
+                confidence = min(1.0, (
+                    0.3 * frequency_score +
+                    0.3 * position_score +
+                    0.4 * density_score
+                ))
+
+                # --- Drop low-relevance mentions ---
+                if confidence < 0.3:
+                    logger.debug(
+                        f"Skipping low-relevance mention: '{entity.name}' "
+                        f"in node {node_id} (conf={confidence:.2f})"
+                    )
+                    continue
+
+                # --- Classify mention type ---
+                if density > 0.1 or occurrences >= 3:
+                    mention_type = "subject"
+                elif position_score > 0.8 and occurrences >= 2:
+                    mention_type = "focus"
+                else:
+                    mention_type = "reference"
+
+                # --- Build context snippet ---
                 pos = content_lower.find(name_lower)
                 if pos >= 0:
                     start = max(0, pos - 30)
-                    end = min(len(content), pos + len(entity.name) + 70)
+                    end = min(content_len, pos + len(entity.name) + 70)
                     snippet = content[start:end]
                     if start > 0:
                         snippet = "..." + snippet
-                    if end < len(content):
+                    if end < content_len:
                         snippet = snippet + "..."
                 else:
-                    snippet = content[:100] + "..." if len(content) > 100 else content
+                    snippet = content[:100] + "..." if content_len > 100 else content
 
                 await resolver.create_mention(
                     entity_id=entity.id,
                     node_id=node_id,
-                    mention_type="reference",
-                    confidence=1.0,
+                    mention_type=mention_type,
+                    confidence=round(confidence, 3),
                     context_snippet=snippet,
                 )
                 mention_count += 1
-                logger.debug(f"Linked entity '{entity.name}' to node {node_id}")
+                logger.debug(
+                    f"Linked entity '{entity.name}' to node {node_id} "
+                    f"(type={mention_type}, conf={confidence:.2f})"
+                )
 
             if mention_count > 0:
                 logger.info(f"Linked {mention_count} entities to node {node_id}")

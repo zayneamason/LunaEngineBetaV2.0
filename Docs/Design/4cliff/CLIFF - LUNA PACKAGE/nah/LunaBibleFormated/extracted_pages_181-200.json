@@ -1,0 +1,865 @@
+{
+  "extraction_info": {
+    "source_file": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_requested": "181-200",
+    "pages_extracted": 20,
+    "extraction_date": "2026-02-06"
+  },
+  "parts": [
+    {
+      "part_number": "X",
+      "part_title": "Sovereignty Infrastructure",
+      "pages": "181-183",
+      "status": "END OF PART X (pages 181-183 contain conclusion)",
+      "sections": [
+        {
+          "section": "config/sovereignty.yaml (Code Block)",
+          "content": {
+            "vault": {
+              "path": "~/LunaVault.sparsebundle",
+              "mount_point": "/Volumes/LunaVault",
+              "encryption": "AES-256"
+            },
+            "dead_mans_switch": {
+              "enabled": true,
+              "heartbeat_file": "~/.luna_heartbeat",
+              "lockdown_hours": 24,
+              "check_interval_hours": 1
+            },
+            "backup": {
+              "enabled": true,
+              "backup_dir": "~/LunaBackups",
+              "daily_backup": true,
+              "weekly_offsite": false,
+              "retention_weeks": 4
+            },
+            "network": {
+              "allowed_hosts": ["api.anthropic.com"],
+              "default_deny": true,
+              "audit_connections": true
+            },
+            "telemetry": {
+              "enabled": false
+            },
+            "temp_files": {
+              "allowed": false
+            },
+            "process_isolation": {
+              "enabled": true,
+              "sandbox": true
+            }
+          }
+        },
+        {
+          "section": "Summary",
+          "subsection": "Implementation Status (v3.0)",
+          "table": {
+            "headers": ["Component", "Purpose", "Implementation Status"],
+            "rows": [
+              ["Encrypted Vault", "All Luna data in one encrypted container", "NOT IMPLEMENTED"],
+              ["Dead Man's Switch", "Automatic lockdown on stale heartbeat", "NOT IMPLEMENTED"],
+              ["Portability", "Copy vault = copy Luna", "PARTIAL (SQLite is portable)"],
+              ["Data Sovereignty", "No telemetry, no extraction, no phoning home", "IMPLEMENTED (no telemetry)"],
+              ["Backup & Recovery", "Multiple tiers, verified restoration", "NOT IMPLEMENTED"],
+              ["Escape Hatch", "Full export to portable formats", "PARTIAL (raw SQLite accessible)"],
+              ["API Key Security", "Secrets never committed", "VIOLATED (BUG-001)"]
+            ]
+          }
+        },
+        {
+          "section": "Critical Action Items",
+          "items": [
+            "Rotate API keys - Current keys are compromised",
+            "Fix .gitignore - Add .env pattern",
+            "Scrub git history - Remove committed secrets",
+            "Implement encryption at rest - Either vault or LUKS/FileVault"
+          ]
+        },
+        {
+          "section": "What's Working",
+          "items": [
+            "Single-file database - Luna's soul is in one SQLite file",
+            "No telemetry - No data sent to analytics services",
+            "Environment variable pattern - Config references env vars, not keys",
+            "Local-first design - Cloud is optional (though currently needed for speed)"
+          ],
+          "constitutional_principle": "Luna is a file. Your file. Copy it, move it, delete it - it's yours."
+        },
+        {
+          "section": "Appendix: Quick Reference",
+          "commands": [
+            {
+              "name": "Mount Vault",
+              "command": "hdiutil attach ~/LunaVault.sparsebundle -mountpoint /Volumes/LunaVault"
+            },
+            {
+              "name": "Unmount Vault",
+              "command": "hdiutil detach /Volumes/LunaVault"
+            },
+            {
+              "name": "Emergency Lockdown",
+              "command": "pkill -9 -f luna && hdiutil detach /Volumes/LunaVault -force"
+            },
+            {
+              "name": "Check Heartbeat",
+              "command": "stat -f \"%Sm\" ~/.luna_heartbeat"
+            },
+            {
+              "name": "Full Backup",
+              "command": "cp -R ~/LunaVault.sparsebundle ~/LunaBackups/$(date +%Y%m%d).sparsebundle"
+            }
+          ]
+        },
+        {
+          "section": "End of Bible Update Sections",
+          "what_next": {
+            "description": "The Bible is now updated with five new/rewritten sections:",
+            "table": {
+              "headers": ["Part", "Title", "Lines"],
+              "rows": [
+                ["VI", "The Director LLM", "442"],
+                ["VII", "The Runtime Engine", "689"],
+                ["VIII", "Delegation Protocol", "645"],
+                ["IX", "Performance Optimizations", "921"],
+                ["X", "Sovereignty Infrastructure", "760"]
+              ]
+            },
+            "total_new_content": "~3,457 lines",
+            "usage_options": [
+              "Merged into the existing Bible as a v2.0.0 release",
+              "Kept as separate appendices",
+              "Used as handoff documentation for implementation"
+            ],
+            "conclusion": "The architecture is now fully specified. Time to build."
+          }
+        }
+      ]
+    },
+    {
+      "part_number": "XI",
+      "part_title": "Training Data Strategy",
+      "pages": "184-199",
+      "metadata": {
+        "version": "3.0",
+        "date": "2026-01-30",
+        "status": "CURRENT - Honest assessment of LoRA implementation state",
+        "dependencies": ["Parts VI (Director LLM)", "VII (Runtime Engine)", "VIII (Delegation Protocol)"]
+      },
+      "sections": [
+        {
+          "section": "Reality Check (v3.0 Update)",
+          "subsection": "LoRA Fine-Tuning Status",
+          "table": {
+            "headers": ["Component", "Status", "Notes"],
+            "rows": [
+              ["LoRA training pipeline", "NOT IMPLEMENTED", "No training scripts exist"],
+              ["Synthetic data generation", "NOT IMPLEMENTED", "Pipelines described are aspirational"],
+              ["<REQ_CLAUDE> delegation token", "NOT IMPLEMENTED", "Current system uses cloud fallback, not learned delegation"],
+              ["Base model (Qwen 3B)", "AVAILABLE", "Model files exist, but no LoRA adapters trained"],
+              ["Identity training data", "PARTIAL", "Persona YAML files exist in entities/"]
+            ]
+          }
+        },
+        {
+          "section": "Current Reality",
+          "description": "The local inference system (when it works) uses an untuned base model. Luna's personality comes from:",
+          "sources": [
+            "System prompts - Loaded from entities/personas/luna.yaml",
+            "Memory context - Injected from Memory Matrix retrieval",
+            "Cloud delegation - Most responses come from Groq/Claude due to BUG-016 (slow local inference)"
+          ]
+        },
+        {
+          "section": "Why LoRA Training Hasn't Happened",
+          "reasons": [
+            "Local inference is too slow (2-3 tok/s) - Training iteration would be painful",
+            "No synthetic data pipeline - The generators described below don't exist",
+            "Cloud delegation works - System defaults to fast cloud APIs",
+            "Priority mismatch - Critical bugs (memory, conversation history) take precedence"
+          ]
+        },
+        {
+          "section": "Path Forward",
+          "steps": [
+            "Fix local inference performance (BUG-016)",
+            "Build synthetic data generation pipeline",
+            "Start with small dataset (~500 examples) to validate approach",
+            "Graduate to full training once infrastructure works"
+          ]
+        },
+        {
+          "section": "11.1 The Training Challenge",
+          "description": "Luna's Director LLM must learn three things:",
+          "table": {
+            "headers": ["Capability", "What It Means", "Training Signal"],
+            "rows": [
+              ["Luna's Voice", "Respond as Luna, not generic assistant", "Identity-rich conversations"],
+              ["Context Integration", "Use retrieved memories naturally", "Conversations with memory context"],
+              ["Delegation Judgment", "Know when to emit <REQ_CLAUDE>", "Examples of both handle-locally and delegate cases"]
+            ]
+          },
+          "challenge": "We need thousands of high-quality examples, but Luna doesn't exist yet.",
+          "solution": "Synthetic data generation with quality filtering."
+        },
+        {
+          "section": "11.2 The Three Training Datasets (PROPOSED)",
+          "status": "These datasets do not exist. The pipelines described are aspirational architecture.",
+          "datasets": [
+            {
+              "name": "Dataset 1: Identity Conversations",
+              "purpose": "Teach Luna's personality, voice, values.",
+              "source": "Synthetic conversations generated from Luna's identity documents.",
+              "current_assets": [
+                "luna.yaml - Luna's personality and voice config",
+                "ben-franklin.yaml - Ben Franklin (Scribe) persona",
+                "the-dude.yaml - The Dude (Librarian) persona"
+              ],
+              "diagram": {
+                "description": "Flow diagram showing IDENTITY DOCUMENT transforming to SYNTHETIC CONVERSATION",
+                "example_input": "Luna values sovereignty, privacy, and honest feedback. She's warm but direct. She doesn't use corporate speak.",
+                "example_output": {
+                  "user": "Can you help me write a cover letter?",
+                  "luna": "Sure. But fair warning-I'm going to be honest about what works and what doesn't. Corporate fluff gets cut. Sound good?"
+                }
+              },
+              "code_block": {
+                "class": "IdentityDataGenerator",
+                "methods": [
+                  "generate_conversation(scenario) -> Conversation",
+                  "generate_scenarios(count=1000) -> list[str]"
+                ],
+                "categories": [
+                  "personal advice",
+                  "technical help",
+                  "creative projects",
+                  "emotional support",
+                  "decision making",
+                  "memory/recall requests",
+                  "learning new information",
+                  "casual conversation"
+                ]
+              },
+              "quality_filter": {
+                "class": "IdentityQualityFilter",
+                "banned_phrases": [
+                  "I'm an AI assistant",
+                  "I don't have personal",
+                  "As a language model",
+                  "I cannot"
+                ],
+                "scoring": {
+                  "phrase_penalty": "Penalize generic AI phrases",
+                  "identity_similarity": "Reward identity alignment via embedding cosine similarity",
+                  "length_score": "Reward appropriate length (20-150 words)"
+                },
+                "threshold": 0.7
+              }
+            },
+            {
+              "name": "Dataset 2: Memory-Augmented Conversations (PROPOSED)",
+              "status": "NOT IMPLEMENTED. The memory context injection pattern exists in Director, but no training data has been generated.",
+              "purpose": "Teach Director to use retrieved context naturally.",
+              "source": "Synthetic conversations with injected memory context.",
+              "diagram": {
+                "description": "Flow showing MEMORY CONTEXT feeding into TRAINING EXAMPLE",
+                "example_context": [
+                  "User mentioned Alex lives in Berlin (2 weeks ago)",
+                  "User is working on \"Project Luna\" (ongoing)",
+                  "User prefers direct feedback"
+                ],
+                "example_conversation": {
+                  "user": "Should I ask Alex to help with the project?",
+                  "luna": "Alex is in Berlin, so timezone might be tricky for real-time collaboration. But for async work on Luna? Could be great. What would you need from them?"
+                }
+              },
+              "key_training_signals": {
+                "headers": ["Signal", "Example", "What Director Learns"],
+                "rows": [
+                  ["Memory reference", "\"Alex is in Berlin\"", "Use context naturally"],
+                  ["No hallucination", "Don't invent facts not in context", "Stay grounded"],
+                  ["Graceful gaps", "\"I don't remember-when did that happen?\"", "Acknowledge missing info"],
+                  ["Context weaving", "Combine multiple memories", "Synthesize, don't list"]
+                ]
+              },
+              "code_block": {
+                "class": "MemoryAugmentedGenerator",
+                "method": "generate_example() -> TrainingExample",
+                "steps": [
+                  "Sample 2-5 relevant memories",
+                  "Generate a query that would retrieve these",
+                  "Generate Luna's response using the context",
+                  "Format as training example"
+                ]
+              }
+            },
+            {
+              "name": "Dataset 3: Delegation Examples (PROPOSED)",
+              "status": "NOT IMPLEMENTED. The current system uses heuristic-based cloud fallback, not learned delegation.",
+              "purpose": "Teach when to emit <REQ_CLAUDE> vs handle locally.",
+              "source": "Curated examples of both paths with clear reasoning.",
+              "diagrams": [
+                {
+                  "title": "HANDLE LOCALLY (no delegation)",
+                  "user": "What did I decide about the database?",
+                  "context": "Decided to use SQLite for Memory Matrix",
+                  "luna": "You decided on SQLite for the Memory Matrix. Simple, portable, fits the sovereignty model.",
+                  "note": "NO <REQ_CLAUDE> - Director has enough context"
+                },
+                {
+                  "title": "DELEGATE (emit <REQ_CLAUDE>)",
+                  "user": "Can you research the latest FAISS optimizations and write a summary?",
+                  "context": "[none relevant]",
+                  "luna": "I'll dig into that for you. <REQ_CLAUDE>Research latest FAISS optimization techniques, focusing on index selection and query performance. Summarize findings in 2-3 paragraphs.</REQ_CLAUDE>",
+                  "note": "DELEGATES - requires external knowledge + synthesis"
+                }
+              ],
+              "delegation_taxonomy": {
+                "headers": ["Category", "Delegate?", "Reason"],
+                "rows": [
+                  ["Memory recall", "No", "Director + retrieval handles"],
+                  ["Simple conversation", "No", "Director handles"],
+                  ["Emotional support", "No", "Director handles (sensitive)"],
+                  ["External research", "Yes", "Needs internet/current info"],
+                  ["Complex analysis", "Yes", "Benefits from larger model"],
+                  ["Code generation", "Yes", "Benefits from larger context"],
+                  ["Multi-step reasoning", "Yes", "Benefits from CoT"],
+                  ["Creative writing (long)", "Yes", "Benefits from larger model"]
+                ]
+              },
+              "code_block": {
+                "class": "DelegationDataGenerator",
+                "delegate_scenarios": [
+                  "research current events",
+                  "analyze complex codebase",
+                  "write detailed technical document",
+                  "solve multi-step math problem",
+                  "compare multiple technical approaches"
+                ],
+                "no_delegate_scenarios": [
+                  "recall previous conversation",
+                  "simple factual question (in context)",
+                  "casual chat",
+                  "emotional check-in",
+                  "preferences and opinions"
+                ],
+                "methods": [
+                  "generate_delegation_example() -> TrainingExample",
+                  "generate_local_example() -> TrainingExample"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "section": "11.3 The <REQ_CLAUDE> Token (PROPOSED)",
+          "status": "NOT IMPLEMENTED. The current delegation system is code-based (Director checks confidence thresholds), not token-based.",
+          "token_design": {
+            "format": "<REQ_CLAUDE>\n[task description for Claude]\n[any constraints or format requirements]\n</REQ_CLAUDE>",
+            "workflow": [
+              "Director generates response",
+              "If response contains <REQ_CLAUDE>, Oven Actor intercepts",
+              "Oven sends task to Claude API",
+              "Result is integrated (Shadow Reasoner pattern)"
+            ]
+          },
+          "training_the_token": {
+            "class": "DelegationTokenTrainer",
+            "special_tokens": {
+              "<REQ_CLAUDE>": 32000,
+              "</REQ_CLAUDE>": 32001
+            },
+            "input_format": "<|context|>\n{context}\n<|user|>\n{user_input}\n<|luna|>"
+          },
+          "calibration": {
+            "description": "The model needs to learn the threshold for delegation. Too eager = slow, expensive. Too conservative = bad responses.",
+            "examples": [
+              {
+                "context": "User decided to use Actor model for fault isolation",
+                "input": "Why did I choose the Actor model again?",
+                "should_delegate": false,
+                "note": "Should NOT delegate (has context)"
+              },
+              {
+                "context": "User is building Luna, an AI companion",
+                "input": "Compare Actor model vs Entity Component System for my use case",
+                "should_delegate": true,
+                "note": "SHOULD delegate (needs synthesis)"
+              },
+              {
+                "context": "Using SQLite for storage",
+                "input": "What are the scaling limits I should worry about?",
+                "should_delegate": true,
+                "note": "Edge case: Has partial context, might benefit from delegation"
+              }
+            ]
+          }
+        },
+        {
+          "section": "11.4 Data Quality Pipeline (PROPOSED)",
+          "status": "NOT IMPLEMENTED. No data generation or filtering infrastructure exists.",
+          "stages": [
+            {
+              "stage": "Stage 1: Generation",
+              "flow": "Scenarios -> LLM Generation -> Raw Conversations",
+              "volume": "~10,000 examples"
+            },
+            {
+              "stage": "Stage 2: Filtering",
+              "code_block": {
+                "class": "QualityPipeline",
+                "filters": [
+                  "IdentityAlignmentFilter(threshold=0.7)",
+                  "HallucinationFilter()",
+                  "LengthFilter(min_words=10, max_words=200)",
+                  "DiversityFilter()",
+                  "ToxicityFilter()"
+                ]
+              },
+              "expected_yield": {
+                "headers": ["Stage", "Count", "Notes"],
+                "rows": [
+                  ["Generated", "10,000", "Raw synthetic"],
+                  ["After identity filter", "7,500", "75% pass"],
+                  ["After hallucination filter", "6,500", "87% pass"],
+                  ["After length filter", "6,000", "92% pass"],
+                  ["After diversity filter", "4,500", "Remove duplicates"],
+                  ["After toxicity filter", "4,400", "98% pass"],
+                  ["Final dataset", "~4,500", "High quality"]
+                ]
+              }
+            },
+            {
+              "stage": "Stage 3: Human Review (Optional)",
+              "description": "For critical examples (especially delegation edge cases), human review adds signal:",
+              "review_fields": [
+                "example_id: str",
+                "reviewer: str",
+                "identity_score: int (1-5: Does this sound like Luna?)",
+                "grounding_score: int (1-5: Is response grounded in context?)",
+                "delegation_correct: bool (Did model make right delegation choice?)",
+                "notes: str"
+              ]
+            }
+          ]
+        },
+        {
+          "section": "11.5 Training Configuration",
+          "status": "Configuration is documented but no training has occurred.",
+          "base_model_selection": {
+            "headers": ["Model", "Size", "Why Consider"],
+            "rows": [
+              ["Qwen 2.5-3B", "3B", "Fast, fits Mac, good baseline"],
+              ["Qwen 2.5-7B", "7B", "Better quality, still local"],
+              ["Llama 3.2-3B", "3B", "Alternative architecture"],
+              ["Phi-3-mini", "3.8B", "Microsoft's efficient model"]
+            ],
+            "recommendation": "Start with Qwen 2.5-3B for iteration speed, graduate to 7B for production.",
+            "current_state": "Qwen 3B model is available locally, but running at 2-3 tok/s (BUG-016). LoRA training would need to wait until inference performance is resolved."
+          },
+          "lora_configuration": {
+            "rank": 64,
+            "lora_alpha": 128,
+            "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            "lora_dropout": 0.05,
+            "bias": "none",
+            "task_type": "CAUSAL_LM"
+          },
+          "training_arguments": {
+            "output_dir": "./luna-director-lora",
+            "num_train_epochs": 3,
+            "per_device_train_batch_size": 4,
+            "gradient_accumulation_steps": 4,
+            "learning_rate": "2e-4",
+            "warmup_steps": 100,
+            "logging_steps": 10,
+            "save_steps": 500,
+            "fp16": true
+          },
+          "dataset_mixing": {
+            "identity_conversations": "0.40 (40% - Luna's voice)",
+            "memory_augmented": "0.35 (35% - Context usage)",
+            "delegation_examples": "0.25 (25% - When to delegate)"
+          }
+        },
+        {
+          "section": "11.6 Evaluation (PROPOSED)",
+          "status": "NOT IMPLEMENTED. No evaluation harness exists.",
+          "evaluations": [
+            {
+              "name": "Identity Eval",
+              "class": "IdentityEval",
+              "question": "Does the model sound like Luna?",
+              "metrics": [
+                "banned_phrase_count",
+                "identity_similarity"
+              ]
+            },
+            {
+              "name": "Grounding Eval",
+              "class": "GroundingEval",
+              "question": "Does the model use context correctly without hallucinating?",
+              "metrics": [
+                "context_usage",
+                "hallucination_count"
+              ]
+            },
+            {
+              "name": "Delegation Eval",
+              "class": "DelegationEval",
+              "question": "Does the model delegate appropriately?",
+              "metrics": [
+                "accuracy",
+                "false_positive_rate",
+                "false_negative_rate"
+              ]
+            }
+          ],
+          "target_metrics": {
+            "headers": ["Metric", "Target", "Rationale"],
+            "rows": [
+              ["Identity similarity", ">0.85", "Should sound like Luna"],
+              ["Banned phrase rate", "<0.05", "Minimal generic AI speak"],
+              ["Context usage", ">0.70", "Uses retrieved memories"],
+              ["Hallucination rate", "<0.10", "Stays grounded"],
+              ["Delegation accuracy", ">0.90", "Makes right call"],
+              ["Delegation FP rate", "<0.15", "Don't over-delegate"],
+              ["Delegation FN rate", "<0.10", "Don't under-delegate"]
+            ]
+          }
+        },
+        {
+          "section": "11.7 Iteration Cycle (PROPOSED)",
+          "diagram": {
+            "description": "6-step cyclic flow diagram",
+            "steps": [
+              "1. GENERATE - Synthetic conversations from scenarios",
+              "2. FILTER - Quality pipeline removes bad examples",
+              "3. TRAIN - LoRA fine-tuning on filtered dataset",
+              "4. EVALUATE - Identity + Grounding + Delegation metrics",
+              "5. ANALYZE FAILURES - What categories are underperforming?",
+              "6. AUGMENT - Generate more examples for weak categories",
+              "-> Back to Step 1"
+            ]
+          }
+        },
+        {
+          "section": "11.8 Data Sovereignty",
+          "principle": "All training data stays local:",
+          "table": {
+            "headers": ["Data", "Location", "Access", "v3.0 Status"],
+            "rows": [
+              ["Identity documents", "Encrypted Vault", "User only", "NO VAULT - in entities/"],
+              ["Generated conversations", "Local disk", "User only", "NOT GENERATED"],
+              ["Training checkpoints", "Local disk", "User only", "NO TRAINING YET"],
+              ["Evaluation results", "Local disk", "User only", "NO EVALS YET"]
+            ]
+          },
+          "note": "No training data leaves the machine. No user conversations are used without explicit consent. The cloud (Claude API) is used for generation, but the generated data is synthetic, not user data."
+        },
+        {
+          "section": "Summary (v3.0)",
+          "implementation_status": {
+            "headers": ["Component", "Status"],
+            "rows": [
+              ["Synthetic data generation", "NOT IMPLEMENTED"],
+              ["Identity conversation dataset", "NOT GENERATED"],
+              ["Memory-augmented dataset", "NOT GENERATED"],
+              ["Delegation examples dataset", "NOT GENERATED"],
+              ["<REQ_CLAUDE> token training", "NOT IMPLEMENTED"],
+              ["LoRA fine-tuning pipeline", "NOT IMPLEMENTED"],
+              ["Evaluation harness", "NOT IMPLEMENTED"],
+              ["Quality filtering", "NOT IMPLEMENTED"]
+            ]
+          },
+          "prerequisites_before_training": [
+            "Fix local inference (BUG-016) - Must achieve 30+ tok/s for practical training",
+            "Build data generation scripts - Implement the pipelines described above",
+            "Create evaluation harness - Need to measure before optimizing",
+            "Allocate training compute - LoRA on 3B model requires ~8GB VRAM"
+          ],
+          "current_workaround": {
+            "description": "Luna's personality is currently expressed through:",
+            "methods": [
+              "System prompts from persona YAML files",
+              "Memory context injection",
+              "Cloud model capabilities (Groq, Claude)"
+            ],
+            "limitation": "This works, but doesn't achieve the local-first sovereignty goal."
+          }
+        }
+      ],
+      "end_marker": "*End of Part XI*"
+    },
+    {
+      "part_number": "XII",
+      "part_title": "Future Roadmap",
+      "pages": "199-200",
+      "metadata": {
+        "version": "3.0",
+        "date": "January 30, 2026",
+        "status": "CURRENT",
+        "note": "This document tracks implemented features and planned capabilities."
+      },
+      "sections": [
+        {
+          "section": "12.1 Roadmap Overview",
+          "description": "Luna's development follows a phased approach, with each phase building on the previous:",
+          "diagram": {
+            "description": "4-phase vertical flow diagram",
+            "phases": [
+              {
+                "phase": 1,
+                "name": "FOUNDATION",
+                "components": "Memory Matrix, Director LLM, Voice Interface",
+                "status": "COMPLETE"
+              },
+              {
+                "phase": 2,
+                "name": "INTELLIGENCE (Current)",
+                "components": "Agentic Architecture, Advanced Retrieval, MCP Integration",
+                "status": "In Progress (70% Complete)"
+              },
+              {
+                "phase": 3,
+                "name": "AGENCY",
+                "components": "Kinetic Layer, Autonomous Actions, Integrations",
+                "status": "Design Phase"
+              },
+              {
+                "phase": 4,
+                "name": "EXPANSION",
+                "components": "Multi-Modal, AR Interface, Federation",
+                "status": "Vision"
+              }
+            ]
+          }
+        },
+        {
+          "section": "12.2 Phase 1: Foundation (COMPLETE)",
+          "what_was_built": {
+            "headers": ["Component", "Status", "Description"],
+            "rows": [
+              ["Memory Matrix", "DONE", "SQLite + sqlite-vec + NetworkX graph substrate"],
+              ["Director LLM", "DONE", "Local Qwen 3B + Claude delegation"],
+              ["Voice Interface", "DONE", "Whisper STT + Piper TTS"],
+              ["Scribe (Ben)", "DONE", "Extraction system with lock-in memory"],
+              ["Librarian (Dude)", "DONE", "Filing and retrieval with clustering"],
+              ["Actor System", "DONE", "Message-based actor isolation"],
+              ["Ring Buffer", "DONE", "Configurable conversation memory (2-20 turns)"]
+            ]
+          },
+          "exit_criteria": [
+            "[x] Sub-500ms voice response latency (achieved with local inference)",
+            "[x] Memory retrieval accuracy >85% (hybrid search with FTS5 + semantic)",
+            "[x] Director handles 80%+ of queries locally (QueryRouter implemented)",
+            "[x] Delegation works seamlessly (Claude API integration)",
+            "[x] Actor-based fault isolation (Director, Matrix, Scribe, Librarian)"
+          ]
+        },
+        {
+          "section": "12.3 Phase 2: Intelligence (CURRENT)",
+          "implemented": {
+            "headers": ["Component", "Status", "Description"],
+            "rows": [
+              ["Agentic Architecture", "DONE", "AgentLoop, Planner, QueryRouter"],
+              ["Revolving Context", "DONE", "4-ring model (CORE, INNER, MIDDLE, OUTER)"],
+              ["Queue Manager", "DONE", "Per-source queues with weighted priorities"],
+              ["Tool Registry", "DONE", "MCP-compatible tool definitions"],
+              ["File Tools", "DONE", "read_file, write_file, list_directory, file_exists"],
+              ["Memory Tools", "DONE", "memory_query, memory_store, memory_context"],
+              ["MCP Integration", "DONE", "41 MCP tools, FastMCP server"],
+              ["API Server", "DONE", "74 endpoints, SSE streaming, WebSocket"],
+              ["Luna Hub UI", "DONE", "20 React components, 5 custom hooks"],
+              ["Performance Layer", "DONE", "Orb state, gesture detection, emotion presets"],
+              ["Hybrid Search", "DONE", "FTS5 + semantic + graph traversal"],
+              ["Clustering Engine", "DONE", "Memory clustering with constellation assembly"]
+            ]
+          },
+          "in_progress": {
+            "headers": ["Component", "Status", "Description"],
+            "rows": [
+              ["Lock-in Memory", "80%", "Access-based consolidation with pruning"],
+              ["Continuous Learning", "PLANNED", "Online learning from interactions"],
+              ["SwarmCoordinator", "PLANNED", "Parallel execution management"]
+            ]
+          },
+          "section_2a": {
+            "title": "First-Class Objects",
+            "current": "Nodes are typed with lock-in states (drifting, fluid, settled)."
+          }
+        }
+      ]
+    }
+  ],
+  "diagrams_summary": [
+    {
+      "page": 186,
+      "description": "Identity Document to Synthetic Conversation flow - Shows transformation of identity text into training conversation"
+    },
+    {
+      "page": 188,
+      "description": "Memory Context to Training Example flow - Shows how retrieved memories become training data"
+    },
+    {
+      "page": 189,
+      "description": "Handle Locally vs Delegate decision examples - Two box diagrams showing delegation decision points"
+    },
+    {
+      "page": 197,
+      "description": "6-step Iteration Cycle - Circular flow: Generate -> Filter -> Train -> Evaluate -> Analyze Failures -> Augment -> repeat"
+    },
+    {
+      "page": 199,
+      "description": "4-Phase Roadmap - Vertical flow showing Foundation -> Intelligence -> Agency -> Expansion phases"
+    }
+  ],
+  "tables_summary": [
+    {
+      "page": 181,
+      "title": "Implementation Status (v3.0)",
+      "columns": ["Component", "Purpose", "Implementation Status"]
+    },
+    {
+      "page": 183,
+      "title": "Bible Update Sections",
+      "columns": ["Part", "Title", "Lines"]
+    },
+    {
+      "page": 184,
+      "title": "LoRA Fine-Tuning Status",
+      "columns": ["Component", "Status", "Notes"]
+    },
+    {
+      "page": 185,
+      "title": "Training Challenge Capabilities",
+      "columns": ["Capability", "What It Means", "Training Signal"]
+    },
+    {
+      "page": 188,
+      "title": "Key Training Signals",
+      "columns": ["Signal", "Example", "What Director Learns"]
+    },
+    {
+      "page": 189,
+      "title": "Delegation Taxonomy",
+      "columns": ["Category", "Delegate?", "Reason"]
+    },
+    {
+      "page": 193,
+      "title": "Expected Yield",
+      "columns": ["Stage", "Count", "Notes"]
+    },
+    {
+      "page": 193,
+      "title": "Base Model Selection",
+      "columns": ["Model", "Size", "Why Consider"]
+    },
+    {
+      "page": 196,
+      "title": "Target Metrics",
+      "columns": ["Metric", "Target", "Rationale"]
+    },
+    {
+      "page": 198,
+      "title": "Data Sovereignty",
+      "columns": ["Data", "Location", "Access", "v3.0 Status"]
+    },
+    {
+      "page": 198,
+      "title": "Implementation Status Summary",
+      "columns": ["Component", "Status"]
+    },
+    {
+      "page": 200,
+      "title": "Phase 1 Components",
+      "columns": ["Component", "Status", "Description"]
+    },
+    {
+      "page": 200,
+      "title": "Phase 2 Implemented",
+      "columns": ["Component", "Status", "Description"]
+    },
+    {
+      "page": 200,
+      "title": "Phase 2 In Progress",
+      "columns": ["Component", "Status", "Description"]
+    }
+  ],
+  "code_blocks_summary": [
+    {
+      "page": 181,
+      "language": "yaml",
+      "description": "config/sovereignty.yaml - Vault, backup, network, and security configuration"
+    },
+    {
+      "page": 182,
+      "language": "bash",
+      "description": "Quick reference commands for vault operations (mount, unmount, backup, lockdown)"
+    },
+    {
+      "page": "186-187",
+      "language": "python",
+      "description": "IdentityDataGenerator class - Generates synthetic identity conversations"
+    },
+    {
+      "page": 187,
+      "language": "python",
+      "description": "IdentityQualityFilter class - Filters and scores generated conversations"
+    },
+    {
+      "page": 188,
+      "language": "python",
+      "description": "MemoryAugmentedGenerator class - Generates memory-context training examples"
+    },
+    {
+      "page": "190-191",
+      "language": "python",
+      "description": "DelegationDataGenerator class - Generates delegation decision training examples"
+    },
+    {
+      "page": 191,
+      "language": "python",
+      "description": "DelegationTokenTrainer class - Prepares training examples with special tokens"
+    },
+    {
+      "page": 192,
+      "language": "python",
+      "description": "Calibration examples array - Edge cases for delegation judgment"
+    },
+    {
+      "page": 193,
+      "language": "python",
+      "description": "QualityPipeline class - Multi-stage filtering pipeline"
+    },
+    {
+      "page": 193,
+      "language": "python",
+      "description": "HumanReview dataclass - Optional human review fields"
+    },
+    {
+      "page": 194,
+      "language": "python",
+      "description": "LoraConfig and TrainingArguments - LoRA fine-tuning configuration"
+    },
+    {
+      "page": 194,
+      "language": "python",
+      "description": "DATASET_MIX dictionary - Training data mixing ratios"
+    },
+    {
+      "page": 195,
+      "language": "python",
+      "description": "IdentityEval class - Evaluates if model sounds like Luna"
+    },
+    {
+      "page": 195,
+      "language": "python",
+      "description": "GroundingEval class - Evaluates context usage and hallucination"
+    },
+    {
+      "page": 196,
+      "language": "python",
+      "description": "DelegationEval class - Evaluates delegation decision accuracy"
+    }
+  ]
+}

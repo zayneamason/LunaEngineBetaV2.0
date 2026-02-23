@@ -132,6 +132,7 @@ export default function AnnotatedText({ text, entities, onEntityClick }) {
 
     const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
+    console.debug(`[AnnotatedText] ${terms.length} entity terms from ${entities.length} entities`)
     return { regex: pattern, lookup: map }
   }, [entities])
 

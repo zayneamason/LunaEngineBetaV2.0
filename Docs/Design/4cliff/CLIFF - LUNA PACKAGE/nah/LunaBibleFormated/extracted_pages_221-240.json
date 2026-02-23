@@ -1,0 +1,684 @@
+{
+  "extraction_info": {
+    "source_file": "LUNA-ENGINE-BIBLE_V3.0.pdf",
+    "pages_extracted": "221-240",
+    "total_pages": 20,
+    "extraction_date": "2026-02-06"
+  },
+  "parts": [
+    {
+      "part_number": "XIII",
+      "part_title": "Memory Loops & Data Flow (Continued from previous pages)",
+      "pages": "221-229",
+      "sections": [
+        {
+          "section": "4.2 Extraction/Filing Loop (continued)",
+          "content": {
+            "scribe_steps": [
+              "3. Extract: Facts, Decisions, Problems, etc.",
+              "4. Tag confidence scores",
+              "5. \"Make it rain\" -> send to Librarian"
+            ],
+            "librarian_the_dude": {
+              "immediate_tasks": [
+                "1. Resolve entities (deduplicate)",
+                "2. Create nodes in SQLite",
+                "3. Create explicit edges",
+                "4. Generate embeddings -> sqlite-vec"
+              ],
+              "deferred_batched_tasks": [
+                "5. Spreading activation (find hidden links)",
+                "6. Create inferred edges (low confidence)"
+              ],
+              "periodic_every_15_min": [
+                "7. Synaptic pruning (remove stale edges)",
+                "8. Vector index optimization if needed"
+              ]
+            },
+            "note": "User already has response. This runs in background."
+          }
+        },
+        {
+          "section": "4.3 Retrieval Loop",
+          "content": {
+            "query_router": {
+              "description": "Analyze query -> Choose optimal path",
+              "routing_rules": [
+                "Keyword-heavy -> FTS5 only",
+                "Conceptual -> FAISS only",
+                "Multiple entities -> Graph traversal",
+                "Unknown -> Hybrid (all three)"
+              ]
+            },
+            "search_methods": [
+              "FTS5 Search",
+              "sqlite-vec Search",
+              "Graph Traverse"
+            ],
+            "fusion": "RRF Fusion (Rank-based merging)",
+            "output": "Trim to Token Budget -> Context Packet"
+          },
+          "tables": [
+            {
+              "title": "Token Budgets",
+              "headers": ["Preset", "Tokens", "Use Case"],
+              "rows": [
+                ["minimal", "~1800", "Voice, fast response"],
+                ["balanced", "~3800", "Normal conversation"],
+                ["rich", "~7200", "Deep research"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "4.4 Delegation Loop",
+          "content": {
+            "flow": [
+              {
+                "step": "Director generates response",
+                "example": "\"Let me look into that. <REQ_CLAUDE>[task description]</REQ_CLAUDE>\""
+              },
+              {
+                "step": "Token Detection",
+                "actions": [
+                  "Parse response for <REQ_CLAUDE>",
+                  "Extract task description"
+                ]
+              },
+              {
+                "step": "Director Actor (delegation logic)",
+                "actions": [
+                  "Detects delegation task",
+                  "Formats for Claude API",
+                  "Sends request (async)",
+                  "Streams response back"
+                ]
+              },
+              {
+                "step": "Integration",
+                "actions": [
+                  "Director receives Claude's work",
+                  "Integrates into Luna's voice",
+                  "Streams to user via TTS"
+                ]
+              }
+            ],
+            "user_experience": "Luna answered (seamlessly)"
+          },
+          "tables": [
+            {
+              "title": "Delegation Criteria",
+              "headers": ["Delegate?", "Signal"],
+              "rows": [
+                ["No", "Memory recall, simple chat, emotional support"],
+                ["Yes", "External research, complex analysis, long generation"]
+              ]
+            }
+          ]
+        },
+        {
+          "section": "4.5 Learning Loop (Future)",
+          "content": {
+            "phase": "Phase 2",
+            "flow": [
+              "Interaction Completed",
+              {
+                "quality_scoring": [
+                  "User feedback (explicit)",
+                  "Conversation flow (implicit)",
+                  "Delegation success"
+                ]
+              },
+              {
+                "high_quality": "Add to experience buffer",
+                "low_quality": "Discard"
+              },
+              {
+                "buffer_full_1000_examples": [
+                  "-> Incremental LoRA fine-tuning",
+                  "-> Director improves over time"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "section": "5. Key Mechanics",
+          "subsections": [
+            {
+              "section": "5.1 RRF (Reciprocal Rank Fusion)",
+              "description": "Merges search results by rank position, not raw scores.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "def reciprocal_rank_fusion(results_list, k=60):\n    \"\"\"\n    FTS5 returns BM25 scores (~14.5)\n    FAISS returns distances (~0.12)\n    Can't add them. Use rank instead.\n    \"\"\"\n    fused = {}\n    for ranked_list in results_list:\n        for rank, doc_id in enumerate(ranked_list, start=1):\n            if doc_id not in fused:\n                fused[doc_id] = 0.0\n            fused[doc_id] += 1.0 / (k + rank)\n\n    return sorted(fused.keys(), key=lambda d: fused[d], reverse=True)"
+                }
+              ]
+            },
+            {
+              "section": "5.2 Entity Resolution",
+              "description": "\"Mark,\" \"Zuck,\" and \"The Landlord\" -> same node.",
+              "example_flow": {
+                "query": "\"Mark\"",
+                "steps": [
+                  "Bloom filter: might exist? -> Yes",
+                  "Alias cache: known? -> No",
+                  "Exact match: \"Mark\" in DB? -> No",
+                  "Alias search: \"Mark\" is alias? -> No",
+                  "Semantic search: similar name? -> \"Mark Zuckerberg\" (0.96)",
+                  "Result: Merge as alias, return existing ID"
+                ]
+              }
+            },
+            {
+              "section": "5.3 Spreading Activation",
+              "description": "New fact -> find hidden connections.",
+              "example": {
+                "input": "\"Alex is joining Pi Project\"",
+                "steps": [
+                  {
+                    "step": "1. File explicit",
+                    "result": "Alex --works_on--> Pi Project"
+                  },
+                  {
+                    "step": "2. Find neighbors",
+                    "result": "Pi Project --has_member--> Sarah (existing)"
+                  },
+                  {
+                    "step": "3. Infer connection",
+                    "result": "Alex --likely_teammate--> Sarah (confidence: 0.35)"
+                  }
+                ],
+                "future_query": "\"Who might Alex work with?\"",
+                "luna_can_suggest": "Sarah"
+              }
+            },
+            {
+              "section": "5.4 Confidence Scoring",
+              "description": "Every memory carries uncertainty signal.",
+              "table": {
+                "headers": ["Level", "Score", "Example"],
+                "rows": [
+                  ["Explicit", "0.9-1.0", "\"Alex lives in Berlin\""],
+                  ["Strong implication", "0.7-0.9", "\"Alex's Berlin apartment\""],
+                  ["Weak inference", "0.5-0.7", "\"Alex seems European\""],
+                  ["Speculation", "0.3-0.5", "\"Alex might be abroad\""],
+                  ["Inferred edge", "0.2-0.5", "Spreading activation result"]
+                ]
+              }
+            },
+            {
+              "section": "5.5 Synaptic Pruning",
+              "description": "Remove low-value connections periodically.",
+              "code_blocks": [
+                {
+                  "language": "sql",
+                  "code": "-- Find prune candidates\nSELECT id FROM edges\nWHERE confidence < 0.3\n  AND created_at < datetime('now', '-30 days')\n  AND id NOT IN (SELECT edge_id FROM access_log)"
+                }
+              ],
+              "rules": {
+                "preserve": "Edges connected to identity nodes.",
+                "prune": "Low-confidence, old, never-accessed edges."
+              }
+            }
+          ]
+        },
+        {
+          "section": "6. Data Flow Summary",
+          "diagrams": [
+            {
+              "title": "LUNA DATA FLOW",
+              "description": "Shows complete flow: USER speaks -> Whisper (STT) -> text -> Director LLM <-> Librarian (retrieval/Dude) -> response/context -> TTS (stream) -> USER HEARS. Async path: Scribe (Ben) -> extractions -> Memory Matrix (SQLite). Optional delegation path: Director --<REQ_CLAUDE>--> Claude API --> back to Director (delegation handled internally in Director, no separate Oven actor)"
+            }
+          ]
+        },
+        {
+          "section": "7. Performance Targets",
+          "table": {
+            "headers": ["Metric", "Target", "Actual Path"],
+            "rows": [
+              ["Voice to first word", "<500ms", "STT->Director->TTS"],
+              ["Memory retrieval", "<100ms", "Query->RRF->Trim"],
+              ["Director inference", "<200ms", "3B model"],
+              ["Extraction (async)", "<2s", "Scribe pipeline"],
+              ["Filing (immediate)", "<50ms", "Librarian explicit"],
+              ["Delegation overhead", "<50ms", "Token detection"]
+            ]
+          }
+        },
+        {
+          "section": "8. Future Systems (Phase 2-4)",
+          "table": {
+            "headers": ["System", "Phase", "Description"],
+            "rows": [
+              ["First-Class Objects", "2", "Typed objects with methods"],
+              ["Multi-hop Retrieval", "2", "Query parsing, causal queries"],
+              ["Continuous Learning", "2", "Online LoRA updates"],
+              ["Kinetic Layer", "3", "Actions in the world"],
+              ["Integration Adapters", "3", "Calendar, Todoist, Obsidian"],
+              ["Proactive Luna", "3", "Initiate when appropriate"],
+              ["Multi-Modal", "4", "Images, documents, screen"],
+              ["AR Interface", "4", "Ambient presence"],
+              ["Federation", "4", "Luna-to-Luna sharing"]
+            ]
+          }
+        },
+        {
+          "section": "9. Implementation Status (v3.0)",
+          "table": {
+            "headers": ["Component", "Status", "Notes"],
+            "rows": [
+              ["5 Actors", "Implemented", "Director, Matrix, Scribe, Librarian, HistoryManager"],
+              ["Oven Actor", "NOT IMPL", "Delegation handled in Director"],
+              ["Voice Actor", "NOT IMPL", "Voice I/O via PersonaAdapter"],
+              ["FAISS Vectors", "REPLACED", "Using sqlite-vec extension"],
+              ["FTS5 Search", "Partial", "Defined in schema, primary path uses LIKE"],
+              ["KV Cache", "NOT IMPL", "Future optimization"],
+              ["7B Warm Path", "NOT IMPL", "Only 3B + Claude delegation"],
+              ["Speculative Retrieval", "NOT IMPL", "Future optimization"]
+            ]
+          },
+          "codebase_metrics": {
+            "python_files": 85,
+            "classes": 167,
+            "lines_of_code": "~32,000",
+            "sub_packages": 18
+          },
+          "note": "This overview distills the full Bible into a single reference document. Updated for v3.0 Bible audit."
+        }
+      ]
+    },
+    {
+      "part_number": "XIV",
+      "part_title": "Agentic Architecture",
+      "pages": "230-240",
+      "metadata": {
+        "version": "3.0",
+        "date": "January 30, 2026",
+        "last_updated": "January 30, 2026",
+        "status": "Implemented (v3.0 Audit Complete)"
+      },
+      "sections": [
+        {
+          "section": "The Paradigm Shift",
+          "content": "Luna is an **ENGINE**, not a file. The \"Luna is a file\" principle describes **ownership** (you own the data, you can move it, delete it) -- not architectural simplicity.\n\nThe Engine is complex. The soul is portable. Both are true.\n\nThis part specifies the agentic architecture that transforms Luna from a chatbot-with-memory into a **Personal Palantir** -- a sophisticated system with:\n- Revolving context window\n- Multiple queues\n- Complex orchestration\n- Real capability"
+        },
+        {
+          "section": "Reframe: Luna IS an Engine",
+          "diagrams": [
+            {
+              "title": "LUNA ENGINE (Personal Palantir Architecture)",
+              "layers": [
+                {
+                  "layer": "PLANNING LAYER",
+                  "description": "ReACT / CoT / Multi-step reasoning"
+                },
+                {
+                  "layer": "Capabilities",
+                  "components": ["Memory Matrix", "Tools", "Delegation (Claude)", "Voice", "Queues (Priority)"]
+                },
+                {
+                  "layer": "REVOLVING CONTEXT WINDOW",
+                  "description": "What Luna is aware of right now"
+                },
+                {
+                  "layer": "CONSCIOUSNESS",
+                  "description": "Attention, personality, state persistence"
+                },
+                {
+                  "layer": "SOVEREIGN DATA",
+                  "description": "memory_matrix.db - This is what you OWN. The engine RUNS it"
+                }
+              ]
+            }
+          ],
+          "key_insight": "The data is yours. The engine is sophisticated. Both are true."
+        },
+        {
+          "section": "What Luna Needs",
+          "description": "An agentic architecture that includes:",
+          "table": {
+            "headers": ["Component", "Purpose"],
+            "rows": [
+              ["Planning Layer", "Decompose complex requests into steps"],
+              ["Tool Protocol", "Standardized way to define/call capabilities"],
+              ["Reasoning Traces", "Luna explains her thinking (debuggable)"],
+              ["Multi-queue Orchestration", "Hot/cognitive/reflective paths with priorities"],
+              ["Context Management", "Revolving window -- what's in, what's out, why"],
+              ["Agent Routing", "Which subsystem handles which task"]
+            ]
+          }
+        },
+        {
+          "section": "Part 1: Revolving Context Engine (IMPLEMENTED)",
+          "description": "The RevolvingContext system is fully implemented in `core/context.py`. This is Luna's working memory.",
+          "subsections": [
+            {
+              "title": "The Ring Model",
+              "description": "Context is organized in concentric rings with items migrating based on relevance and access patterns.",
+              "diagram": {
+                "title": "REVOLVING CONTEXT",
+                "structure": "OUTER -> MIDDLE -> INNER -> CORE (LUNA) -> INNER -> MIDDLE -> OUTER",
+                "migration_rules": [
+                  "Relevance decay (0.95 per turn)",
+                  "Access patterns (boost on access)",
+                  "TTL expiration (turn-based)"
+                ],
+                "token_budget": "8000 (default)"
+              },
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "title": "The Four Rings (IMPLEMENTED)",
+                  "code": "class ContextRing(IntEnum):\n    CORE = 0    # Identity - NEVER evicted\n    INNER = 1   # Active conversation, current task\n    MIDDLE = 2  # Recently accessed memories, tool results\n    OUTER = 3   # Background context, candidate for eviction"
+                }
+              ],
+              "table": {
+                "title": "Ring Behavior",
+                "headers": ["Ring", "Contents", "TTL (Turns)", "Behavior"],
+                "rows": [
+                  ["CORE (0)", "Luna's identity", "Never expires (-1)", "ALWAYS present, never evicted"],
+                  ["INNER (1)", "Conversation, tasks", "20-30 turns", "High priority, recent"],
+                  ["MIDDLE (2)", "Memories, tool results, librarian", "5-25 turns", "Moderate priority"],
+                  ["OUTER (3)", "Scribe extractions, background", "10 turns", "First to evict"]
+                ]
+              }
+            },
+            {
+              "title": "Context Sources and Weights",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "class ContextSource(IntEnum):\n    IDENTITY = 0      # Core identity (weight: 1.0)\n    CONVERSATION = 1  # Current turns (weight: 0.9)\n    MEMORY = 2        # Retrieved memories (weight: 0.7)\n    TOOL = 3          # Tool call results (weight: 0.8)\n    TASK = 4          # Task context (weight: 0.75)\n    SCRIBE = 5        # Extraction results (weight: 0.6)\n    LIBRARIAN = 6     # Retrieved knowledge (weight: 0.65)"
+                }
+              ]
+            },
+            {
+              "title": "Token Budget",
+              "description": "Default budget: **8000 tokens**. Managed by the RevolvingContext class.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "class RevolvingContext:\n    def __init__(\n        self,\n        token_budget: int = 8000,\n        decay_factor: float = 0.95,\n        rebalance_threshold: float = 0.3\n    ):\n        self.token_budget = token_budget\n        self._decay_factor = decay_factor\n        self._rebalance_threshold = rebalance_threshold"
+                }
+              ],
+              "key_methods": [
+                "`advance_turn()` -- Increments turn counter, applies decay, rebalances rings",
+                "`set_core_identity(text)` -- Set Luna's identity (never evicted)",
+                "`add(content, source, ring, relevance)` -- Add context item",
+                "`get_context_window(max_tokens)` -- Assemble context for LLM",
+                "`query(keywords)` -- Search context items"
+              ]
+            },
+            {
+              "title": "Eviction Priority",
+              "description": "When over budget, items are evicted in this order:",
+              "order": [
+                "1. **Expired items** (TTL exceeded) from any ring except CORE",
+                "2. **OUTER ring** -- lowest relevance first",
+                "3. **MIDDLE ring** -- lowest relevance first",
+                "4. **INNER ring** -- lowest relevance first",
+                "5. **CORE ring** -- NEVER evicted"
+              ]
+            },
+            {
+              "title": "Ring Migration",
+              "description": "Items can be promoted or demoted based on relevance:",
+              "rules": [
+                "**Demotion** (relevance < 0.3): INNER -> MIDDLE -> OUTER",
+                "**Promotion** (relevance >= 0.8): OUTER -> MIDDLE -> INNER"
+              ]
+            }
+          ]
+        },
+        {
+          "section": "Part 2: Queue Manager (IMPLEMENTED)",
+          "description": "The QueueManager is implemented in `core/context.py` as part of the RevolvingContext system.",
+          "subsections": [
+            {
+              "title": "Multiple Queues, One Manager",
+              "description": "Not a single input buffer. Multiple specialized queues per ContextSource.",
+              "diagram": {
+                "title": "QUEUE MANAGER",
+                "queues": [
+                  "IDENTITY Queue: [core]",
+                  "CONVERSATION Queue: O O O",
+                  "MEMORY Queue: O O",
+                  "TOOL Queue: O O O O",
+                  "TASK Queue: O",
+                  "SCRIBE Queue: O",
+                  "LIBRARIAN Queue: O O"
+                ],
+                "output": "[Priority Merge] -> [Revolving Context Rings]"
+              }
+            },
+            {
+              "title": "Implementation",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "class QueueManager:\n    \"\"\"Manages multiple input queues for different context sources.\"\"\"\n\n    def __init__(\n        self,\n        max_queue_size: int = 50,\n        weights: Optional[Dict[ContextSource, float]] = None\n    ):\n        # Create a deque for each source type\n        self._queues: Dict[ContextSource, Deque[ContextItem]] = {\n            source: deque(maxlen=max_queue_size)\n            for source in ContextSource\n        }\n\n    def push(self, item: ContextItem) -> bool:\n        \"\"\"Push item onto its source queue.\"\"\"\n\n    def poll_all(self) -> List[ContextItem]:\n        \"\"\"Poll all queues, return sorted by weighted priority.\"\"\"\n\n    def poll_source(self, source: ContextSource, max_items: int) -> List[ContextItem]:\n        \"\"\"Poll items from a specific source queue.\"\"\""
+                }
+              ]
+            },
+            {
+              "title": "Source Weights",
+              "table": {
+                "headers": ["Queue", "Source", "Weight", "TTL (Turns)"],
+                "rows": [
+                  ["Identity", "IDENTITY", "1.0", "Never (-1)"],
+                  ["Conversation", "CONVERSATION", "0.9", "20 turns"],
+                  ["Memory", "MEMORY", "0.7", "25 turns"],
+                  ["Tool", "TOOL", "0.8", "5 turns"],
+                  ["Task", "TASK", "0.75", "30 turns"],
+                  ["Scribe", "SCRIBE", "0.6", "10 turns"],
+                  ["Librarian", "LIBRARIAN", "0.65", "20 turns"]
+                ]
+              },
+              "note": "Queue Manager merges with priority (higher weight first, FIFO within weight) and feeds the RevolvingContext rings via `add_from_queues()`."
+            }
+          ]
+        },
+        {
+          "section": "Part 3: Context Borrowing",
+          "description": "Luna, Scribe, and Librarian can **share context**.",
+          "diagram": {
+            "title": "Context Borrowing",
+            "components": [
+              "SCRIBE System/LLM - Extracts from stream",
+              "Context Borrowing (shared context) <-->",
+              "LIBRARIAN System/LLM - Retrieves from Matrix"
+            ],
+            "output": "MEMORY MATRIX"
+          },
+          "key_points": [
+            "Scribe processing conversation? Luna can see what Scribe sees.",
+            "Librarian retrieving memory? That context is available to Luna.",
+            "**Not isolated silos -- coordinated awareness.**"
+          ]
+        },
+        {
+          "section": "Part 4: Context Timeout / TTL",
+          "description": "Items age out.",
+          "diagram": {
+            "title": "CONTEXT TIMEOUT",
+            "flow": "Each item has TTL: [?] -> [?] -> [checkmark] -> [evicted]",
+            "states": [
+              "Fresh items: high relevance",
+              "Aging items: decay toward eviction",
+              "Timed out: removed from context pool"
+            ]
+          },
+          "table": {
+            "headers": ["State", "Behavior"],
+            "rows": [
+              ["Fresh", "High relevance, stays close to core"],
+              ["Aging", "Relevance decays based on time since last access"],
+              ["Timed out", "Evicted from context"]
+            ]
+          },
+          "note": "This is attention decay implemented as architecture. Integrates with the existing `AttentionManager` in `consciousness/attention.py`."
+        },
+        {
+          "section": "Part 5: Task Manager / Planner (IMPLEMENTED)",
+          "description": "The Planner (`agentic/planner.py`) decomposes goals into executable PlanSteps.",
+          "subsections": [
+            {
+              "title": "Planner Diagram",
+              "diagram": {
+                "title": "PLANNER",
+                "flow": "Goal --> [Pattern Match] --> [Plan with Steps]",
+                "output": "Plan: Step1 -> Step2 -> Step3 -> ... -> RESPOND"
+              }
+            },
+            {
+              "title": "PlanStepType Enum",
+              "description": "Each step has a type that determines its execution handler.",
+              "table": {
+                "headers": ["Type", "Description", "Handler"],
+                "rows": [
+                  ["`THINK`", "Internal reasoning, no external action", "Local LLM inference"],
+                  ["`OBSERVE`", "Gather information from environment", "State observation"],
+                  ["`RETRIEVE`", "Memory retrieval from Matrix", "Matrix.get_context()"],
+                  ["`TOOL`", "Execute external tool", "ToolRegistry.execute()"],
+                  ["`DELEGATE`", "Delegate to Claude for complex reasoning", "Director.generate()"],
+                  ["`RESPOND`", "Generate response to user", "Director.generate()"],
+                  ["`PARALLEL`", "Execute multiple sub-steps concurrently", "(Future)"],
+                  ["`WAIT`", "Wait for external event or condition", "(Future)"]
+                ]
+              }
+            },
+            {
+              "title": "PlanStep Structure",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass PlanStep:\n    \"\"\"A single step in an execution plan.\"\"\"\n    type: PlanStepType           # What kind of operation\n    description: str             # Human-readable explanation\n    tool: Optional[str] = None   # Tool name (for TOOL steps)\n    params: Dict[str, Any] = {}  # Tool/operation parameters\n    dependencies: List[int] = [] # Step indices that must complete first\n    expected_output: Optional[str]  # What this step should produce\n    timeout_seconds: float = 30.0   # Maximum wait time\n    retries: int = 0             # Retry attempts on failure"
+                }
+              ]
+            },
+            {
+              "title": "Plan Structure",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass Plan:\n    \"\"\"A sequence of steps to achieve a goal.\"\"\"\n    goal: str                    # Original goal\n    steps: List[PlanStep]        # Ordered list of steps\n    reasoning: str               # Explanation of planning decisions\n    estimated_duration_seconds: float\n    complexity: float            # 0.0-1.0 from router\n\n    @property\n    def required_tools(self) -> List[str]:\n        \"\"\"Get list of tools required by this plan.\"\"\""
+                }
+              ]
+            },
+            {
+              "title": "Planner Pattern Matching",
+              "description": "The Planner uses pattern matching to detect task types.",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "TASK_PATTERNS = {\n    \"research\": {\n        \"patterns\": [r\"\\bresearch\\b\", r\"\\bfind out\\b\", r\"\\blook up\\b\"],\n        \"steps\": [\n            (PlanStepType.DELEGATE, \"Research the topic using Claude\"),\n            (PlanStepType.THINK, \"Analyze and extract key points\"),\n            (PlanStepType.RESPOND, \"Present findings to user\"),\n        ],\n    },\n    \"memory_recall\": {\n        \"patterns\": [r\"\\bremember\\b\", r\"\\brecall\\b\", r\"\\bwhat did\\b\"],\n        \"steps\": [\n            (PlanStepType.RETRIEVE, \"Search memory for relevant info\"),\n            (PlanStepType.RESPOND, \"Share what was found\"),\n        ],\n    },\n    \"file_read\": {\n        \"patterns\": [r\"\\bread\\b.*\\bfile\\b\", r\"\\bshow me\\b.*\\bfile\\b\"],\n        \"steps\": [\n            (PlanStepType.TOOL, \"Read the file\", \"read_file\"),\n            (PlanStepType.RESPOND, \"Present file contents\"),\n        ],\n    },\n    # ... more patterns for file_write, summarize, analyze, schedule\n}"
+                }
+              ]
+            },
+            {
+              "title": "Step Duration Estimates",
+              "table": {
+                "headers": ["Step Type", "Estimated Duration"],
+                "rows": [
+                  ["THINK", "0.5s"],
+                  ["OBSERVE", "1.0s"],
+                  ["RETRIEVE", "0.5s"],
+                  ["TOOL", "2.0s"],
+                  ["DELEGATE", "5.0s"],
+                  ["RESPOND", "0.5s"],
+                  ["PARALLEL", "3.0s"],
+                  ["WAIT", "5.0s"]
+                ]
+              },
+              "note": "This enables the **agent loop** -- tasks aren't conversation, they're work."
+            }
+          ]
+        },
+        {
+          "section": "Part 6: The Agent Loop (IMPLEMENTED)",
+          "description": "What makes Luna agentic is the **observe -> think -> act -> repeat** loop. This is fully implemented in `agentic/loop.py`.",
+          "subsections": [
+            {
+              "title": "Agent Loop Diagram",
+              "diagram": {
+                "title": "AGENT LOOP",
+                "steps": [
+                  {
+                    "phase": "OBSERVE",
+                    "actions": [
+                      "Gather information relevant to current step",
+                      "Memory retrieval (via Matrix actor)",
+                      "Environment state observation"
+                    ]
+                  },
+                  {
+                    "phase": "THINK",
+                    "actions": [
+                      "Determine action from current PlanStep",
+                      "Build Action with type, description, params",
+                      "Local inference for reasoning steps"
+                    ]
+                  },
+                  {
+                    "phase": "ACT",
+                    "actions": [
+                      "Execute via PlanStepType handler",
+                      "THINK, OBSERVE, RETRIEVE, TOOL, DELEGATE",
+                      "Results stored in WorkingContext.variables"
+                    ]
+                  },
+                  {
+                    "phase": "REPEAT",
+                    "condition": "(until goal achieved or max_iterations)"
+                  }
+                ]
+              }
+            },
+            {
+              "title": "AgentLoop Implementation",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "class AgentLoop:\n    \"\"\"The autonomous agent loop.\"\"\"\n\n    def __init__(\n        self,\n        orchestrator: Optional[\"LunaEngine\"] = None,\n        max_iterations: int = 50,  # Safety limit\n    ):\n        self.orchestrator = orchestrator\n        self.max_iterations = max_iterations\n        self.planner = Planner()\n        self.router = QueryRouter()\n        self.tool_registry = ToolRegistry()\n        self._register_default_tools()  # File + Memory tools\n\n    async def run(self, goal: str) -> AgentResult:\n        \"\"\"Run the agent loop to achieve a goal.\"\"\"\n        # 1. Route the query\n        routing = self.router.analyze(goal)\n\n        # 2. Handle based on execution path\n        match routing.path:\n            case ExecutionPath.DIRECT:\n                return await self._execute_direct(goal, start_time)\n            case ExecutionPath.SIMPLE_PLAN:\n                return await self._execute_simple(goal, routing, start_time)\n            case ExecutionPath.FULL_PLAN:\n                return await self._execute_full(goal, routing, start_time)\n            case ExecutionPath.BACKGROUND:\n                return await self._execute_background(goal, routing, start_time)"
+                }
+              ]
+            },
+            {
+              "title": "AgentStatus States",
+              "table": {
+                "headers": ["Status", "Description"],
+                "rows": [
+                  ["`IDLE`", "Not currently executing a goal"],
+                  ["`PLANNING`", "Decomposing goal into steps"],
+                  ["`EXECUTING`", "Running the observe/think/act loop"],
+                  ["`WAITING`", "Waiting for external event"],
+                  ["`COMPLETE`", "Goal achieved successfully"],
+                  ["`FAILED`", "Goal could not be achieved"],
+                  ["`ABORTED`", "Execution was cancelled"]
+                ]
+              }
+            },
+            {
+              "title": "WorkingContext (In-Memory State)",
+              "code_blocks": [
+                {
+                  "language": "python",
+                  "code": "@dataclass\nclass WorkingContext:\n    \"\"\"Agent's working memory during execution.\"\"\"\n    goal: str                    # Current goal\n    plan: Optional[Plan] = None  # Plan being executed\n    current_step_index: int = 0  # Current step position\n    observations: List[Observation]    # Recent observations\n    action_history: List[ActionResult] # Actions taken\n    variables: Dict[str, Any]    # Accumulated results\n    max_observations: int = 10   # Observation limit\n\n    def add_observation(self, obs: Observation) -> None:\n        \"\"\"Add observation, evict lowest relevance if over limit.\"\"\"\n\n    def add_action_result(self, result: ActionResult) -> None:\n        \"\"\"Add action result to history.\"\"\"\n\n    @property\n    def is_plan_complete(self) -> bool:\n        \"\"\"Check if all steps executed.\"\"\""
+                }
+              ],
+              "key_properties": [
+                "**Autonomous loop** (doesn't need user input per step)",
+                "**Tool execution** (real effects in the world via ToolRegistry)",
+                "**State awareness** (WorkingContext tracks observations and actions)",
+                "**Goal-directed** (keeps going until done, stuck, or max_iterations)",
+                "**Progress callbacks** (register_progress_callback for streaming updates)",
+                "**Abortable** (abort() method sets _abort_requested flag)"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
