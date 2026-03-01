@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grid Layer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #fff; height: 100vh; width: 100vw; overflow: hidden; cursor: crosshair; }
+  canvas { position: fixed; inset: 0; }
+
+  #log {
+    position: fixed; bottom: 0; left: 0; width: 340px; max-height: 240px;
+    background: rgba(255,255,255,0.96);
+    border-top: 1px solid #e0dce8; border-right: 1px solid #e0dce8;
+    border-top-right-radius: 4px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    overflow-y: auto; z-index: 10;
+  }
+  .log-header {
+    padding: 6px 10px; border-bottom: 1px solid #e0dce8;
+    color: #6d45c8; font-size: 9px; font-weight: 500; letter-spacing: 0.1em;
+    display: flex; justify-content: space-between;
+  }
+  .log-header span { color: #a098b8; font-weight: 300; }
+  .log-body { padding: 4px 0; }
+  .log-entry { padding: 2px 10px; line-height: 1.6; color: #7a7490; border-left: 2px solid transparent; }
+  .log-entry:first-child { border-left-color: #6d45c8; color: #4a2d8a; }
+  .log-entry .id { color: #6d45c8; }
+  .log-entry .coord { color: #0891b2; }
+  .log-entry .zone { color: #059669; }
+  .log-entry .child { color: #d97706; }
+  .log-entry .dim { color: #b8b2c8; }
+
+  #info { position: fixed; top: 10px; left: 10px; font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #a098b8; letter-spacing: 0.08em; z-index: 10; }
+  #keys { position: fixed; bottom: 10px; right: 10px; font-family: 'JetBrains Mono', monospace; font-size: 9px; color: #c0bcd0; text-align: right; line-height: 1.8; z-index: 10; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="log">
+  <div class="log-header">GRID LOG <span id="meta">—</span></div>
+  <div class="log-body" id="logBody"></div>
+</div>
+<div id="info">—</div>
+<div id="keys">] subdivide · [ coarsen · esc reset<br>s ring subdiv · S all · r reset orb · +/- scale</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, dpr;
+
+// ═══════════════════════════════════════
+// GRID
+// ═══════════════════════════════════════
+let level = 0;
+const BASE_C = 10, BASE_R = 6, MAX_LEVEL = 3;
+let grid = [], cols, rows, cellW, cellH;
+let mx = -1, my = -1, nearest = null, lastId = null, lastZone = null;
+let logs = [];
+const MAX_LOGS = 30;
+
+function zone(nx, ny) {
+  if (nx < 0.33) return 'knowledge';
+  if (nx > 0.66) return 'meta';
+  if (ny > 0.92) return 'input';
+  if (ny < 0.05) return 'nav';
+  return 'conversation';
+}
+
+function children(nx, ny) {
+  if (nx > 0.44 && nx < 0.56 && ny > 0.38 && ny < 0.62) return ['LunaOrb'];
+  if (nx < 0.31 && ny > 0.12 && ny < 0.88) return ['KnowledgeSpine'];
+  if (nx > 0.68 && ny > 0.08 && ny < 0.92) return ['MetaPanel'];
+  if (ny > 0.92) return ['InputBar'];
+  if (ny < 0.05) return ['NavBar'];
+  return [];
+}
+
+function build() {
+  const m = Math.pow(2, level);
+  cols = BASE_C * m; rows = BASE_R * m;
+  cellW = W / cols; cellH = H / rows;
+  grid = [];
+  for (let r = 0; r <= rows; r++) {
+    for (let c = 0; c <= cols; c++) {
+      const x = c * cellW, y = r * cellH, nx = c / cols, ny = r / rows;
+      grid.push({ id: `${c}.${r}`, c, r, x, y, nx, ny, zone: zone(nx, ny), children: children(nx, ny) });
+    }
+  }
+  document.getElementById('info').textContent = `L${level}  ${cols}×${rows}  ${grid.length} pts  cell ${Math.round(cellW)}×${Math.round(cellH)}`;
+  // re-snap orb
+  if (orbAnchor) {
+    const snap = find(orbX, orbY);
+    if (snap) { orbAnchor = snap; }
+  }
+}
+
+function find(px, py) {
+  let best = null, bd = Infinity;
+  for (const p of grid) { const d = (p.x-px)**2 + (p.y-py)**2; if (d < bd) { bd = d; best = p; } }
+  return best ? { ...best, dist: Math.sqrt(bd) } : null;
+}
+
+function addLog(msg) {
+  logs.unshift(msg); if (logs.length > MAX_LOGS) logs.pop();
+  document.getElementById('logBody').innerHTML = logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+}
+
+function resize() {
+  dpr = window.devicePixelRatio; W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  build();
+}
+
+function drawGrid() {
+  ctx.strokeStyle = 'rgba(180, 170, 210, 0.12)'; ctx.lineWidth = 0.5;
+  for (let c = 0; c <= cols; c++) { ctx.beginPath(); ctx.moveTo(c*cellW, 0); ctx.lineTo(c*cellW, H); ctx.stroke(); }
+  for (let r = 0; r <= rows; r++) { ctx.beginPath(); ctx.moveTo(0, r*cellH); ctx.lineTo(W, r*cellH); ctx.stroke(); }
+  for (const p of grid) {
+    const hit = nearest && nearest.id === p.id;
+    const kids = p.children.length > 0;
+    if (hit) {
+      ctx.strokeStyle = 'rgba(109,69,200,0.15)'; ctx.lineWidth = 0.5; ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(p.x,0); ctx.lineTo(p.x,H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,p.y); ctx.lineTo(W,p.y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(p.x,p.y,4,0,Math.PI*2); ctx.fillStyle='#6d45c8'; ctx.fill();
+      ctx.beginPath(); ctx.arc(p.x,p.y,9,0,Math.PI*2); ctx.strokeStyle='#6d45c8'; ctx.lineWidth=1; ctx.stroke();
+      ctx.font = '9px "JetBrains Mono"'; ctx.textAlign = 'left';
+      ctx.fillStyle = '#6d45c8'; ctx.fillText(p.id, p.x+14, p.y-6);
+      ctx.fillStyle = '#059669'; ctx.fillText(p.zone, p.x+14, p.y+6);
+      if (kids) { ctx.fillStyle = '#d97706'; ctx.fillText(p.children.join(', '), p.x+14, p.y+17); }
+    } else if (kids) {
+      ctx.beginPath(); ctx.arc(p.x,p.y,2,0,Math.PI*2); ctx.fillStyle='rgba(109,69,200,0.25)'; ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(p.x,p.y,1,0,Math.PI*2); ctx.fillStyle='rgba(160,152,184,0.18)'; ctx.fill();
+    }
+  }
+}
+
+// ═══════════════════════════════════════
+// ORB — canvas-rendered fairy
+// ═══════════════════════════════════════
+
+// Position & physics
+let orbX = 0, orbY = 0;       // current render position (smooth)
+let orbHomeX = 0, orbHomeY = 0; // anchor grid point position
+let orbAnchor = null;          // grid point reference
+let orbDragging = false;
+
+// Drift — slow figure-8 / lissajous float
+let driftT = Math.random() * 1000;
+const DRIFT_RADIUS_X = 12;
+const DRIFT_RADIUS_Y = 8;
+const DRIFT_SPEED = 0.0006;   // very slow
+
+// Rings
+let rings = [];
+let ringIdCounter = 0;
+const ORB_BASE_RADIUS = 44;
+const INITIAL_RINGS = 5;
+let breatheT = 0;
+
+function buildRings(count) {
+  rings = [];
+  ringIdCounter = 0;
+  const spacing = ORB_BASE_RADIUS / (count + 0.5);
+  for (let i = 0; i < count; i++) {
+    const t = i / (count - 1 || 1);
+    rings.push({
+      id: ringIdCounter++,
+      baseRadius: ORB_BASE_RADIUS - i * spacing,
+      radius: ORB_BASE_RADIUS - i * spacing,
+      baseOpacity: 0.08 + t * 0.35,
+      opacity: 0.08 + t * 0.35,
+      hue: 262,           // purple base
+      sat: 60 + t * 15,
+      light: 45 + t * 10,
+      strokeWidth: 1.2 - t * 0.4,
+      fill: i === count - 1, // innermost ring has fill
+    });
+  }
+  updateOrbLabel();
+  addLog(`<span class="child">orb</span> <span class="dim">build</span> ${rings.length} rings`);
+}
+
+function drawOrb(t) {
+  if (!orbAnchor) return;
+
+  // ── Drift (fairy float) ──
+  if (!orbDragging) {
+    driftT += DRIFT_SPEED;
+    // Lissajous: slightly different frequencies = organic looping
+    const dx = Math.sin(driftT * 1.0) * DRIFT_RADIUS_X + Math.sin(driftT * 2.3) * 4;
+    const dy = Math.cos(driftT * 0.7) * DRIFT_RADIUS_Y + Math.cos(driftT * 1.9) * 3;
+    // Also a very slow vertical bob
+    const bob = Math.sin(driftT * 0.4) * 5;
+
+    orbX += (orbHomeX + dx - orbX) * 0.04;
+    orbY += (orbHomeY + dy + bob - orbY) * 0.04;
+  }
+
+  const x = orbX;
+  const y = orbY;
+
+  // ── Breathe ──
+  breatheT += 0.015;
+
+  // ── Outer glow (layered radial) ──
+  const glowPulse = 0.7 + Math.sin(breatheT * 0.8) * 0.3;
+
+  // Big soft glow
+  const g1 = ctx.createRadialGradient(x, y, 0, x, y, ORB_BASE_RADIUS * 2.2);
+  g1.addColorStop(0, `rgba(167, 139, 250, ${0.06 * glowPulse})`);
+  g1.addColorStop(0.4, `rgba(167, 139, 250, ${0.03 * glowPulse})`);
+  g1.addColorStop(1, 'rgba(167, 139, 250, 0)');
+  ctx.fillStyle = g1;
+  ctx.beginPath(); ctx.arc(x, y, ORB_BASE_RADIUS * 2.2, 0, Math.PI * 2); ctx.fill();
+
+  // Medium glow
+  const g2 = ctx.createRadialGradient(x, y, 0, x, y, ORB_BASE_RADIUS * 1.4);
+  g2.addColorStop(0, `rgba(167, 139, 250, ${0.1 * glowPulse})`);
+  g2.addColorStop(0.5, `rgba(140, 110, 220, ${0.05 * glowPulse})`);
+  g2.addColorStop(1, 'rgba(140, 110, 220, 0)');
+  ctx.fillStyle = g2;
+  ctx.beginPath(); ctx.arc(x, y, ORB_BASE_RADIUS * 1.4, 0, Math.PI * 2); ctx.fill();
+
+  // ── Rings ──
+  rings.forEach((ring, i) => {
+    const offset = i * 0.7;
+    const wave = Math.sin(breatheT + offset);
+    const wave2 = Math.sin(breatheT * 0.6 + offset * 1.3);
+
+    // Radius breathes
+    ring.radius = ring.baseRadius + wave * 2.5 + wave2 * 1.2;
+
+    // Opacity pulses — each ring on its own phase
+    const opPulse = 0.5 + Math.sin(breatheT * 0.9 + offset) * 0.5; // 0-1
+    ring.opacity = ring.baseOpacity * (0.6 + opPulse * 0.5);
+
+    const r = Math.max(2, ring.radius);
+    const alpha = ring.opacity;
+
+    // Ring stroke
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = `hsla(${ring.hue}, ${ring.sat}%, ${ring.light}%, ${alpha})`;
+    ctx.lineWidth = ring.strokeWidth;
+    ctx.stroke();
+
+    // Innermost ring gets a glowing fill
+    if (ring.fill) {
+      const fg = ctx.createRadialGradient(x, y, 0, x, y, r);
+      fg.addColorStop(0, `hsla(${ring.hue}, ${ring.sat + 10}%, ${ring.light + 15}%, ${alpha * 0.6})`);
+      fg.addColorStop(0.6, `hsla(${ring.hue}, ${ring.sat}%, ${ring.light}%, ${alpha * 0.2})`);
+      fg.addColorStop(1, `hsla(${ring.hue}, ${ring.sat}%, ${ring.light}%, 0)`);
+      ctx.fillStyle = fg;
+      ctx.fill();
+    }
+  });
+
+  // ── Core ──
+  const corePulse = 0.6 + Math.sin(breatheT * 1.2) * 0.4;
+  const coreR = 3 + corePulse * 2;
+
+  // Core glow
+  const cg = ctx.createRadialGradient(x, y, 0, x, y, coreR * 4);
+  cg.addColorStop(0, `rgba(199, 181, 253, ${0.5 * corePulse})`);
+  cg.addColorStop(0.3, `rgba(167, 139, 250, ${0.2 * corePulse})`);
+  cg.addColorStop(1, 'rgba(167, 139, 250, 0)');
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(x, y, coreR * 4, 0, Math.PI * 2); ctx.fill();
+
+  // Core solid
+  ctx.beginPath();
+  ctx.arc(x, y, coreR, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(220, 210, 255, ${0.6 + corePulse * 0.3})`;
+  ctx.fill();
+
+  // ── Anchor tether (faint dashed line to grid point) ──
+  if (!orbDragging) {
+    const dist = Math.sqrt((x - orbHomeX)**2 + (y - orbHomeY)**2);
+    if (dist > 3) {
+      ctx.beginPath();
+      ctx.moveTo(orbHomeX, orbHomeY);
+      ctx.lineTo(x, y);
+      ctx.strokeStyle = `rgba(167, 139, 250, ${Math.min(0.08, dist * 0.003)})`;
+      ctx.lineWidth = 0.5;
+      ctx.setLineDash([2, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // ── Label ──
+  if (orbAnchor) {
+    ctx.font = '8px "JetBrains Mono"';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(109, 69, 200, ${0.35 + corePulse * 0.15})`;
+    ctx.fillText(`${orbAnchor.id} · ${orbAnchor.zone} · ${rings.length}r`, x, y + ORB_BASE_RADIUS + 16);
+  }
+}
+
+// ── Ring operations ──
+function subdivideRing(idx) {
+  if (idx < 0 || idx >= rings.length) return;
+  const ring = rings[idx];
+  if (ring.baseRadius < 8) return;
+  const gap = ring.baseRadius * 0.15;
+  const outer = { ...ring, id: ringIdCounter++, baseRadius: ring.baseRadius, radius: ring.baseRadius, baseOpacity: ring.baseOpacity * 0.85, opacity: ring.baseOpacity * 0.85, fill: false };
+  const inner = { ...ring, id: ringIdCounter++, baseRadius: ring.baseRadius - gap, radius: ring.baseRadius - gap, fill: ring.fill };
+  rings.splice(idx, 1, outer, inner);
+  addLog(`<span class="child">orb</span> <span class="dim">subdiv</span> r${ring.id} → r${outer.id} + r${inner.id}`);
+  updateOrbLabel();
+}
+function subdivideAll() { for (let i = rings.length - 1; i >= 0; i--) { if (rings[i].baseRadius > 8) subdivideRing(i); } }
+function resetRings() { buildRings(INITIAL_RINGS); }
+function scaleRing(idx, f) { if (idx < 0 || idx >= rings.length) return; rings[idx].baseRadius = Math.max(3, Math.min(200, rings[idx].baseRadius * f)); }
+function fadeRing(idx, o) { if (idx < 0 || idx >= rings.length) return; rings[idx].baseOpacity = Math.max(0, Math.min(1, o)); }
+function setRingColor(idx, h, s, l) { if (idx < 0 || idx >= rings.length) return; rings[idx].hue = h; rings[idx].sat = s; rings[idx].light = l; }
+function setRingStroke(idx, w) { if (idx < 0 || idx >= rings.length) return; rings[idx].strokeWidth = Math.max(0.3, Math.min(4, w)); }
+function updateOrbLabel() {} // drawn on canvas now
+
+// ── Snap ──
+function snapOrbTo(point) {
+  orbAnchor = point;
+  orbHomeX = point.x;
+  orbHomeY = point.y;
+  if (!orbX && !orbY) { orbX = point.x; orbY = point.y; }
+}
+
+function placeOrbInitial() {
+  const center = find(W / 2, H / 2);
+  if (center) { snapOrbTo(center); orbX = center.x; orbY = center.y; }
+}
+
+// ═══════════════════════════════════════
+// INPUT
+// ═══════════════════════════════════════
+
+// Mouse tracking for grid
+let throttle = 0;
+document.addEventListener('mousemove', e => {
+  mx = e.clientX; my = e.clientY;
+
+  // Drag orb
+  if (orbDragging) {
+    orbX = mx; orbY = my;
+    const snap = find(mx, my);
+    return;
+  }
+
+  const now = Date.now();
+  if (now - throttle < 40) return;
+  throttle = now;
+  nearest = find(mx, my);
+  if (!nearest) return;
+  document.getElementById('meta').textContent = `${nearest.id} · ${nearest.dist.toFixed(0)}px`;
+  if (nearest.zone !== lastZone) {
+    if (lastZone) addLog(`<span class="dim">leave</span> <span class="zone">${lastZone}</span>`);
+    addLog(`<span class="dim">enter</span> <span class="zone">${nearest.zone}</span>`);
+    lastZone = nearest.zone;
+  }
+  if (nearest.id !== lastId) {
+    let msg = `<span class="id">${nearest.id}</span> <span class="coord">(${nearest.c},${nearest.r})</span> <span class="zone">${nearest.zone}</span>`;
+    if (nearest.children.length) msg += ` <span class="child">→ ${nearest.children.join(', ')}</span>`;
+    addLog(msg);
+    lastId = nearest.id;
+  }
+});
+
+// Click to grab orb (if within radius)
+document.addEventListener('mousedown', e => {
+  const dx = e.clientX - orbX, dy = e.clientY - orbY;
+  if (Math.sqrt(dx*dx + dy*dy) < ORB_BASE_RADIUS + 10) {
+    orbDragging = true;
+    canvas.style.cursor = 'grabbing';
+    addLog(`<span class="child">orb</span> <span class="dim">grab</span> <span class="id">${orbAnchor ? orbAnchor.id : '?'}</span>`);
+  }
+});
+
+document.addEventListener('mouseup', e => {
+  if (!orbDragging) return;
+  orbDragging = false;
+  canvas.style.cursor = 'crosshair';
+  const snap = find(e.clientX, e.clientY);
+  if (snap) {
+    snapOrbTo(snap);
+    addLog(`<span class="child">orb</span> <span class="dim">snap</span> <span class="id">${snap.id}</span> <span class="coord">(${snap.c},${snap.r})</span> <span class="zone">${snap.zone}</span>`);
+  }
+});
+
+// Keys
+document.addEventListener('keydown', e => {
+  if (e.key === ']' && level < MAX_LEVEL) { level++; build(); addLog(`<span class="dim">subdiv</span> <span class="id">L${level}</span> ${cols}×${rows} · ${grid.length} pts`); }
+  if (e.key === '[' && level > 0) { level--; build(); addLog(`<span class="dim">subdiv</span> <span class="id">L${level}</span> ${cols}×${rows} · ${grid.length} pts`); }
+  if (e.key === 'Escape') { level = 0; build(); addLog(`<span class="dim">reset</span> <span class="id">L0</span>`); }
+  if (e.key === 's' && !e.shiftKey) subdivideRing(0);
+  if (e.key === 'S' || (e.key === 's' && e.shiftKey)) subdivideAll();
+  if (e.key === 'r' && !e.ctrlKey) resetRings();
+  if (e.key === '=' || e.key === '+') { rings.forEach((_,i) => scaleRing(i, 1.15)); addLog(`<span class="child">orb</span> <span class="dim">scale</span> ×1.15`); }
+  if (e.key === '-') { rings.forEach((_,i) => scaleRing(i, 0.87)); addLog(`<span class="child">orb</span> <span class="dim">scale</span> ×0.87`); }
+});
+
+// ═══════════════════════════════════════
+// LOOP
+// ═══════════════════════════════════════
+
+function loop(t) {
+  ctx.clearRect(0, 0, W, H);
+  drawGrid();
+  drawOrb(t);
+  requestAnimationFrame(loop);
+}
+
+window.addEventListener('resize', resize);
+resize();
+buildRings(INITIAL_RINGS);
+placeOrbInitial();
+addLog(`<span class="child">orb</span> <span class="dim">mount</span> <span class="id">${orbAnchor ? orbAnchor.id : '?'}</span> · ${rings.length} rings`);
+requestAnimationFrame(loop);
+
+window.GridLayer = { find, grid: () => grid, level: () => level, nearest: () => nearest };
+window.Orb = { rings: () => rings, subdivideRing, subdivideAll, scaleRing, fadeRing, setRingColor, setRingStroke, resetRings, snap: snapOrbTo, gridPoint: () => orbAnchor };
+</script>
+</body>
+</html>

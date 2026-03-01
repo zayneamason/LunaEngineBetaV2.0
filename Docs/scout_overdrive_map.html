@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scout Agent & Overdrive — System Map</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Libre+Franklin:wght@200;300;400;500;600;700&display=swap');
+  :root {
+    --bg: #06060b; --surface: #0e0e18; --surface-2: #151522; --surface-3: #1c1c2e;
+    --border: #252538; --border-light: #35354a; --text: #d4d4e8; --text-dim: #7878a0; --text-muted: #4a4a68;
+    --luna: #7b68ee; --luna-dim: rgba(123,104,238,0.1); --scout: #f59e0b; --scout-dim: rgba(245,158,11,0.08);
+    --overdrive: #ef4444; --overdrive-dim: rgba(239,68,68,0.08); --overdrive-glow: rgba(239,68,68,0.25);
+    --green: #4ade80; --green-dim: rgba(74,222,128,0.08); --cyan: #22d3ee; --cyan-dim: rgba(34,211,238,0.08); --pink: #f472b6;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:'Libre Franklin',sans-serif; padding:48px 40px; min-height:100vh; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  .header { text-align:center; margin-bottom:72px; }
+  .header h1 { font-size:36px; font-weight:200; letter-spacing:8px; text-transform:uppercase; }
+  .header h1 .scout-word { color:var(--scout); }
+  .header h1 .overdrive-word { color:var(--overdrive); }
+  .header .sub { font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-muted); letter-spacing:4px; margin-top:10px; }
+  .section-title { font-size:14px; font-weight:300; letter-spacing:5px; text-transform:uppercase; text-align:center; margin:64px 0 32px; }
+  .section-title::after { content:''; display:block; width:32px; height:1px; margin:10px auto 0; }
+  .section-title.scout { color:var(--scout); } .section-title.scout::after { background:var(--scout); }
+  .section-title.overdrive { color:var(--overdrive); } .section-title.overdrive::after { background:var(--overdrive); }
+  .section-title.luna { color:var(--luna); } .section-title.luna::after { background:var(--luna); }
+  .section-title.green { color:var(--green); } .section-title.green::after { background:var(--green); }
+  .main-flow { max-width:960px; margin:0 auto; }
+  .flow-step { display:grid; grid-template-columns:64px 1fr; gap:20px; }
+  .flow-num-col { display:flex; flex-direction:column; align-items:center; }
+  .flow-num { width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:16px; font-weight:300; flex-shrink:0; }
+  .flow-line { width:1px; flex-grow:1; min-height:24px; }
+  .flow-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:24px 28px; margin-bottom:16px; }
+  .flow-card-title { font-family:'JetBrains Mono',monospace; font-size:12px; letter-spacing:2px; font-weight:600; margin-bottom:8px; }
+  .flow-card-body { font-size:13px; line-height:1.7; color:var(--text-dim); }
+  .flow-card-body strong { color:var(--text); font-weight:500; }
+  .flow-step.director .flow-num { border:1px solid var(--luna); color:var(--luna); background:var(--luna-dim); }
+  .flow-step.director .flow-line { background:var(--luna); opacity:0.2; }
+  .flow-step.director .flow-card { border-color:var(--luna); } .flow-step.director .flow-card-title { color:var(--luna); }
+  .flow-step.scout .flow-num { border:1px solid var(--scout); color:var(--scout); background:var(--scout-dim); }
+  .flow-step.scout .flow-line { background:var(--scout); opacity:0.2; }
+  .flow-step.scout .flow-card { border-color:var(--scout); } .flow-step.scout .flow-card-title { color:var(--scout); }
+  .flow-step.overdrive .flow-num { border:1px solid var(--overdrive); color:var(--overdrive); background:var(--overdrive-dim); }
+  .flow-step.overdrive .flow-line { background:var(--overdrive); opacity:0.2; }
+  .flow-step.overdrive .flow-card { border-color:var(--overdrive); border-width:2px; box-shadow:0 0 24px var(--overdrive-dim); }
+  .flow-step.overdrive .flow-card-title { color:var(--overdrive); }
+  .flow-step.output .flow-num { border:1px solid var(--green); color:var(--green); background:var(--green-dim); }
+  .flow-step.output .flow-line { background:var(--green); opacity:0.2; }
+  .flow-step.output .flow-card { border-color:var(--green); } .flow-step.output .flow-card-title { color:var(--green); }
+  .detect-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-width:800px; margin:0 auto; }
+  .detect-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:20px 24px; border-left:3px solid; }
+  .detect-label { font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:2px; text-transform:uppercase; margin-bottom:8px; }
+  .detect-pattern { font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-dim); background:var(--surface-2); padding:6px 10px; border-radius:6px; margin-bottom:8px; line-height:1.6; }
+  .detect-response { font-size:12px; color:var(--text-dim); line-height:1.5; }
+  .detect-card.surrender { border-left-color:var(--scout); } .detect-card.surrender .detect-label { color:var(--scout); }
+  .detect-card.shallow { border-left-color:var(--overdrive); } .detect-card.shallow .detect-label { color:var(--overdrive); }
+  .tier-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; max-width:960px; margin:0 auto; }
+  .tier-card { background:var(--surface); border-radius:12px; padding:24px; text-align:center; position:relative; overflow:hidden; }
+  .tier-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; }
+  .tier-name { font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:600; letter-spacing:2px; margin-bottom:4px; }
+  .tier-depth { font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; margin-bottom:16px; }
+  .tier-params { text-align:left; font-size:11px; line-height:2; color:var(--text-dim); }
+  .tier-param-label { font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--text-muted); letter-spacing:1px; text-transform:uppercase; }
+  .tier-param-value { font-family:'JetBrains Mono',monospace; font-size:12px; }
+  .tier-card.t1 { border:1px solid var(--scout); } .tier-card.t1::before { background:var(--scout); }
+  .tier-card.t1 .tier-name { color:var(--scout); } .tier-card.t1 .tier-depth { color:var(--scout); opacity:0.6; } .tier-card.t1 .tier-param-value { color:var(--scout); }
+  .tier-card.t2 { border:1px solid var(--overdrive); } .tier-card.t2::before { background:var(--overdrive); }
+  .tier-card.t2 .tier-name { color:var(--overdrive); } .tier-card.t2 .tier-depth { color:var(--overdrive); opacity:0.6; } .tier-card.t2 .tier-param-value { color:var(--overdrive); }
+  .tier-card.t3 { border:1px solid var(--pink); box-shadow:0 0 20px var(--overdrive-dim); } .tier-card.t3::before { background:linear-gradient(90deg,var(--overdrive),var(--pink)); }
+  .tier-card.t3 .tier-name { color:var(--pink); } .tier-card.t3 .tier-depth { color:var(--pink); opacity:0.6; } .tier-card.t3 .tier-param-value { color:var(--pink); }
+  .cooldown-visual { max-width:700px; margin:0 auto; text-align:center; }
+  .cooldown-bar-container { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:24px 32px; margin-bottom:16px; }
+  .cooldown-label { font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:3px; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px; }
+  .cooldown-bar { height:8px; background:var(--surface-3); border-radius:4px; overflow:hidden; }
+  .cooldown-fill { height:100%; border-radius:4px; animation:cooldown-drain 60s linear forwards; }
+  @keyframes cooldown-drain { 0%{width:100%;background:var(--overdrive);box-shadow:0 0 12px var(--overdrive-glow)} 50%{width:50%;background:var(--scout)} 100%{width:0%;background:var(--green)} }
+  .cooldown-states { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:16px; }
+  .cooldown-state { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; font-size:11px; }
+  .cooldown-state-name { font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1.5px; margin-bottom:4px; }
+  .cooldown-state.hot { border-color:var(--overdrive); } .cooldown-state.hot .cooldown-state-name { color:var(--overdrive); }
+  .cooldown-state.warm { border-color:var(--scout); } .cooldown-state.warm .cooldown-state-name { color:var(--scout); }
+  .cooldown-state.ready { border-color:var(--green); } .cooldown-state.ready .cooldown-state-name { color:var(--green); }
+  .cooldown-state-desc { color:var(--text-dim); font-size:10px; line-height:1.5; }
+  .arch-container { max-width:960px; margin:0 auto; background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:32px; }
+  .arch-row { display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:16px; }
+  .arch-box { padding:10px 18px; border-radius:8px; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; text-align:center; border:1px solid; }
+  .arch-box.director { border-color:var(--luna); color:var(--luna); background:var(--luna-dim); }
+  .arch-box.scout { border-color:var(--scout); color:var(--scout); background:var(--scout-dim); }
+  .arch-box.overdrive { border-color:var(--overdrive); color:var(--overdrive); background:var(--overdrive-dim); }
+  .arch-box.tool { border-color:var(--cyan); color:var(--cyan); background:var(--cyan-dim); }
+  .arch-box.output { border-color:var(--green); color:var(--green); background:var(--green-dim); }
+  .arch-arrow { font-family:'JetBrains Mono',monospace; font-size:14px; color:var(--border-light); }
+  .arch-arrow.down { display:block; text-align:center; margin:8px 0; }
+  .arch-label { font-size:9px; color:var(--text-muted); letter-spacing:1px; text-align:center; }
+  .arch-branch { display:grid; grid-template-columns:1fr auto 1fr; gap:16px; align-items:start; margin-top:8px; }
+  .arch-branch-side { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:14px 18px; text-align:center; }
+  .arch-branch-label { font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:6px; }
+  .arch-branch-desc { font-size:10px; color:var(--text-dim); line-height:1.5; }
+  .arch-branch-or { font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-muted); padding-top:16px; }
+  .deps-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-width:800px; margin:0 auto; }
+  .dep-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:18px 22px; }
+  .dep-label { font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1.5px; margin-bottom:6px; color:var(--green); }
+  .dep-what { font-size:12px; color:var(--text-dim); line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1><span class="scout-word">Scout</span> & <span class="overdrive-word">Overdrive</span></h1>
+  <div class="sub">Blockage Detection · Adaptive Retrieval · Cooldown Cycle</div>
+</div>
+<div class="section-title luna">The Flow</div>
+<div class="main-flow">
+  <div class="flow-step director">
+    <div class="flow-num-col"><div class="flow-num">1</div><div class="flow-line"></div></div>
+    <div class="flow-card">
+      <div class="flow-card-title">DIRECTOR GENERATES DRAFT</div>
+      <div class="flow-card-body">Normal path. Director assembles context, generates response via local or cloud inference. This is the current behavior — fast, personality-rich, but sometimes empty-handed.</div>
+    </div>
+  </div>
+  <div class="flow-step scout">
+    <div class="flow-num-col"><div class="flow-num">2</div><div class="flow-line"></div></div>
+    <div class="flow-card">
+      <div class="flow-card-title">SCOUT INSPECTS DRAFT</div>
+      <div class="flow-card-body"><strong>Before the response is delivered</strong>, the Scout agent reads the draft. Pattern-matches against known blockage signatures. Evaluates depth of supporting evidence. Decides: <strong>pass through</strong> or <strong>trigger Overdrive</strong>.</div>
+    </div>
+  </div>
+  <div class="flow-step overdrive">
+    <div class="flow-num-col"><div class="flow-num">3</div><div class="flow-line"></div></div>
+    <div class="flow-card">
+      <div class="flow-card-title">OVERDRIVE ACTIVATES</div>
+      <div class="flow-card-body">Scout determines blockage depth → selects Overdrive tier → <strong>adjusts retrieval weights</strong>: token budget, source count, timeout duration, search chain breadth. Re-runs retrieval with expanded parameters. Director re-generates with enriched context. <strong>Cooldown timer starts.</strong></div>
+    </div>
+  </div>
+  <div class="flow-step output">
+    <div class="flow-num-col"><div class="flow-num">4</div><div class="flow-line" style="min-height:0;"></div></div>
+    <div class="flow-card">
+      <div class="flow-card-title">DELIVER RESPONSE</div>
+      <div class="flow-card-body">Either the original draft (if Scout passed it) or the re-generated response (if Overdrive fired). Debug metadata includes: route decision, blockage type detected, Overdrive tier used, cooldown state.</div>
+    </div>
+  </div>
+</div>
+<div class="section-title scout">What the Scout Detects</div>
+<div class="detect-grid">
+  <div class="detect-card surrender">
+    <div class="detect-label">SURRENDER</div>
+    <div class="detect-pattern">"i don't have any memories"<br>"i don't know about"<br>"not in my memory"<br>"tell me more"<br>"can you fill me in"</div>
+    <div class="detect-response">Luna admits she has no information. High confidence blockage — retrieval returned empty or was never triggered.</div>
+  </div>
+  <div class="detect-card shallow">
+    <div class="detect-label">SHALLOW RECALL</div>
+    <div class="detect-pattern">"details are a bit fuzzy"<br>"i don't have much more"<br>"beyond that, i'm afraid"<br>"that's about all i can say"<br>"from what i can recall" + short response</div>
+    <div class="detect-response">Luna found something but not enough. Retrieval hit but token budget was too tight or search was too narrow.</div>
+  </div>
+  <div class="detect-card surrender">
+    <div class="detect-label">DEFLECTION</div>
+    <div class="detect-pattern">"what can you tell me about"<br>"i'd love to hear your thoughts"<br>"can you share more"<br>[asking user to teach her about her own project]</div>
+    <div class="detect-response">Luna reverses the question — asks the user to provide context that exists in her own memory. Variant of surrender.</div>
+  </div>
+  <div class="detect-card shallow">
+    <div class="detect-label">HEDGING</div>
+    <div class="detect-pattern">"it seems like" + no specifics<br>"if i recall correctly" + vague claim<br>"i believe" + unanchored statement<br>response &lt; 100 chars on a knowledge query</div>
+    <div class="detect-response">Luna is guessing. Low confidence language without supporting evidence from retrieved context.</div>
+  </div>
+</div>
+<div class="section-title overdrive">Overdrive Tiers — Weights by Depth</div>
+<div class="tier-grid">
+  <div class="tier-card t1">
+    <div class="tier-name">TIER 1</div><div class="tier-depth">Shallow Blockage</div>
+    <div class="tier-params">
+      <div><div class="tier-param-label">Token Budget</div><div class="tier-param-value">5,000 → 8,000</div></div>
+      <div><div class="tier-param-label">Sources</div><div class="tier-param-value">matrix + dataroom</div></div>
+      <div><div class="tier-param-label">Timeout</div><div class="tier-param-value">10s → 15s</div></div>
+      <div><div class="tier-param-label">Dataroom Limit</div><div class="tier-param-value">3 → 5 docs</div></div>
+      <div><div class="tier-param-label">Triggers On</div><div class="tier-param-value">shallow recall, hedging</div></div>
+    </div>
+  </div>
+  <div class="tier-card t2">
+    <div class="tier-name">TIER 2</div><div class="tier-depth">Full Surrender</div>
+    <div class="tier-params">
+      <div><div class="tier-param-label">Token Budget</div><div class="tier-param-value">5,000 → 12,000</div></div>
+      <div><div class="tier-param-label">Sources</div><div class="tier-param-value">matrix + dataroom + local files</div></div>
+      <div><div class="tier-param-label">Timeout</div><div class="tier-param-value">10s → 20s</div></div>
+      <div><div class="tier-param-label">Dataroom Limit</div><div class="tier-param-value">3 → 8 docs</div></div>
+      <div><div class="tier-param-label">Triggers On</div><div class="tier-param-value">surrender, deflection</div></div>
+    </div>
+  </div>
+  <div class="tier-card t3">
+    <div class="tier-name">TIER 3</div><div class="tier-depth">Deep Blockage</div>
+    <div class="tier-params">
+      <div><div class="tier-param-label">Token Budget</div><div class="tier-param-value">5,000 → 16,000</div></div>
+      <div><div class="tier-param-label">Sources</div><div class="tier-param-value">matrix + dataroom + local files + AgentLoop</div></div>
+      <div><div class="tier-param-label">Timeout</div><div class="tier-param-value">10s → 30s</div></div>
+      <div><div class="tier-param-label">Dataroom Limit</div><div class="tier-param-value">3 → 12 docs</div></div>
+      <div><div class="tier-param-label">Triggers On</div><div class="tier-param-value">repeated surrender across turns, entity mention + surrender</div></div>
+    </div>
+  </div>
+</div>
+<div class="section-title overdrive">Cooldown Cycle</div>
+<div class="cooldown-visual">
+  <div class="cooldown-bar-container">
+    <div class="cooldown-label">Overdrive Energy — 60s Default Cooldown</div>
+    <div class="cooldown-bar"><div class="cooldown-fill"></div></div>
+  </div>
+  <div class="cooldown-states">
+    <div class="cooldown-state hot">
+      <div class="cooldown-state-name">COOLING (0-20s)</div>
+      <div class="cooldown-state-desc">Overdrive just fired. No re-triggers. Normal retrieval only. Scout still monitors but can't activate.</div>
+    </div>
+    <div class="cooldown-state warm">
+      <div class="cooldown-state-name">WARMING (20-50s)</div>
+      <div class="cooldown-state-desc">Partial recovery. Scout can trigger Tier 1 only. Higher tiers still locked.</div>
+    </div>
+    <div class="cooldown-state ready">
+      <div class="cooldown-state-name">READY (50s+)</div>
+      <div class="cooldown-state-desc">Full charge. All tiers available. Scout has full authority to trigger any depth of Overdrive.</div>
+    </div>
+  </div>
+</div>
+<div class="section-title luna">Where Scout Lives</div>
+<div class="arch-container">
+  <div class="arch-row">
+    <div class="arch-box director">DIRECTOR</div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-label">generates draft</div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box scout">SCOUT</div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-label">inspects</div>
+  </div>
+  <div class="arch-arrow down">↓</div>
+  <div class="arch-branch">
+    <div class="arch-branch-side">
+      <div class="arch-branch-label" style="color:var(--green);">PASS</div>
+      <div class="arch-branch-desc">Draft is clean.<br>Deliver to user.</div>
+    </div>
+    <div class="arch-branch-or">or</div>
+    <div class="arch-branch-side" style="border-color:var(--overdrive);">
+      <div class="arch-branch-label" style="color:var(--overdrive);">BLOCKAGE</div>
+      <div class="arch-branch-desc">Trigger Overdrive.<br>Select tier by depth.<br>Adjust weights.<br>Re-retrieve. Re-generate.</div>
+    </div>
+  </div>
+  <div class="arch-arrow down">↓</div>
+  <div class="arch-row">
+    <div class="arch-box overdrive">OVERDRIVE</div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box tool">SEARCH CHAIN (expanded)</div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box director">DIRECTOR (re-gen)</div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box output">OUTPUT</div>
+  </div>
+  <div style="text-align:center;margin-top:20px;">
+    <span class="mono" style="font-size:10px;color:var(--text-muted);letter-spacing:2px;">SCOUT IS AN ACTOR · SAME AS DIRECTOR, MATRIX, SCRIBE, LIBRARIAN</span>
+  </div>
+</div>
+<div class="section-title green">Uses What Already Exists</div>
+<div class="deps-grid">
+  <div class="dep-card">
+    <div class="dep-label">DETECTION</div>
+    <div class="dep-what">Pattern matching on draft response. Same approach as existing surrender_intercept in persona_adapter.py. Extended with shallow recall + deflection + hedging patterns.</div>
+  </div>
+  <div class="dep-card">
+    <div class="dep-label">RETRIEVAL</div>
+    <div class="dep-what">SearchChainConfig already supports variable token budgets, source lists, and limits. Overdrive just passes different config parameters to run_search_chain().</div>
+  </div>
+  <div class="dep-card">
+    <div class="dep-label">AGENTIC</div>
+    <div class="dep-what">AgentLoop exists for Tier 3. ToolRegistry has memory_tools, dataroom_tools, file_tools registered. No new tools needed.</div>
+  </div>
+  <div class="dep-card">
+    <div class="dep-label">ACTOR FRAMEWORK</div>
+    <div class="dep-what">Scout extends BaseActor (src/luna/actors/base.py). Same pattern as Director, Matrix, Scribe, Librarian. Registered via engine.register_actor().</div>
+  </div>
+</div>
+</body>
+</html>
