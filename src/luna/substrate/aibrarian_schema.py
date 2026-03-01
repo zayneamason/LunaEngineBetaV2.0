@@ -1,0 +1,152 @@
+"""
+AiBrarian Engine SQL Schemas
+=============================
+
+Schema definitions for document collections managed by the AiBrarian Engine.
+Two schema types: "standard" and "investigation" (standard + entity graph).
+
+Each collection is a standalone SQLite database with these tables.
+"""
+
+# ---------------------------------------------------------------------------
+# Standard Schema — documents + chunks + FTS5 + extractions + entities
+# ---------------------------------------------------------------------------
+
+STANDARD_SCHEMA = """\
+-- Documents: source files ingested into the collection
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    title TEXT,
+    full_text TEXT,
+    word_count INTEGER,
+    source_path TEXT,
+    source_type TEXT DEFAULT 'local',
+    doc_type TEXT,
+    category TEXT,
+    status TEXT DEFAULT 'draft',
+    metadata TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Chunks: overlapping segments for search + embeddings
+CREATE TABLE IF NOT EXISTS chunks (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    chunk_text TEXT NOT NULL,
+    word_count INTEGER,
+    start_char INTEGER,
+    end_char INTEGER,
+    FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+-- Extracted knowledge (populated by Scribe)
+CREATE TABLE IF NOT EXISTS extractions (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL,
+    chunk_index INTEGER,
+    node_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL DEFAULT 1.0,
+    metadata TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+-- Entity mentions
+CREATE TABLE IF NOT EXISTS entities (
+    id TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_value TEXT NOT NULL,
+    confidence REAL DEFAULT 1.0,
+    FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+
+-- FTS5 on chunks for keyword search
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    chunk_text,
+    content='chunks',
+    content_rowid='rowid'
+);
+
+-- FTS5 sync triggers
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, chunk_text) VALUES (new.rowid, new.chunk_text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, chunk_text) VALUES ('delete', old.rowid, old.chunk_text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, chunk_text) VALUES ('delete', old.rowid, old.chunk_text);
+    INSERT INTO chunks_fts(rowid, chunk_text) VALUES (new.rowid, new.chunk_text);
+END;
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
+CREATE INDEX IF NOT EXISTS idx_extractions_doc ON extractions(doc_id);
+CREATE INDEX IF NOT EXISTS idx_extractions_type ON extractions(node_type);
+CREATE INDEX IF NOT EXISTS idx_entities_doc ON entities(doc_id);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
+CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+"""
+
+# ---------------------------------------------------------------------------
+# Investigation Schema Extension — connections, gaps, claims
+# ---------------------------------------------------------------------------
+
+INVESTIGATION_SCHEMA = """\
+-- Connections between entities
+CREATE TABLE IF NOT EXISTS connections (
+    id TEXT PRIMARY KEY,
+    entity_a_id TEXT NOT NULL,
+    entity_b_id TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    direction TEXT DEFAULT 'bidirectional',
+    confidence TEXT DEFAULT 'confirmed',
+    start_date TEXT,
+    end_date TEXT,
+    source_doc_ids TEXT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Investigation gaps / open questions
+CREATE TABLE IF NOT EXISTS gaps (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    priority TEXT DEFAULT 'medium',
+    status TEXT DEFAULT 'open',
+    questions TEXT,
+    related_entity_ids TEXT,
+    resolution TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Claims requiring verification
+CREATE TABLE IF NOT EXISTS claims (
+    id TEXT PRIMARY KEY,
+    claim TEXT NOT NULL,
+    source_doc_id TEXT,
+    verification_status TEXT DEFAULT 'unverified',
+    confidence_score REAL,
+    supporting_evidence TEXT,
+    contradicting_evidence TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# ---------------------------------------------------------------------------
+# sqlite-vec embedding table (created at runtime per collection)
+# ---------------------------------------------------------------------------
+
+EMBEDDING_TABLE_SQL = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
+    chunk_id TEXT PRIMARY KEY,
+    embedding FLOAT[{dim}]
+);
+"""

@@ -1,0 +1,74 @@
+# Luna AiBrarian Registry
+# =======================
+# Each collection is an independent document database that Luna can search.
+# Adding a new collection = adding a new entry here. No code changes needed.
+#
+# Schema types:
+#   "standard"      — documents + chunks + FTS5 + embeddings (default)
+#   "investigation"  — standard + entities + connections + gaps + claims
+#
+# Path resolution:
+#   Relative paths resolve from Luna project root.
+#   Absolute paths used as-is (e.g., external drives).
+#   If db_path doesn't exist and create_if_missing is true,
+#   AiBrarianEngine creates an empty database with the correct schema.
+
+schema_version: 1
+
+defaults:
+  chunk_size: 500
+  chunk_overlap: 50
+  embedding_model: "local-minilm"
+  embedding_dim: 384
+  schema_type: "standard"
+
+collections:
+
+  dataroom:
+    name: "Project Eclipse Data Room"
+    description: "Investor-facing documents organized by category"
+    db_path: "data/aibrarian/dataroom.db"
+    enabled: true
+    create_if_missing: true
+    source_dir: "/Users/zayneamason/_HeyLuna_BETA/LUNA-DATAROOM"
+    extract_on_ingest: true
+    extraction_model: "claude-haiku"
+    read_only: false
+    tags: ["investor", "eclipse", "dataroom"]
+
+  maxwell_case:
+    name: "Maxwell Case Documents"
+    description: "~900 Bates-numbered SDNY legal documents (OCR + text extraction)"
+    db_path: "/Volumes/ZDrive-1/DatabaseProject/data/documents.db"
+    enabled: false
+    read_only: true
+    schema_type: "standard"
+    tags: ["legal", "investigation", "epstein"]
+
+  thiel_investigation:
+    name: "Thiel Investigation"
+    description: "Entity/connection graph for PT investigation"
+    db_path: "/Volumes/ZDrive-1/PT_DatabaseProject/data/thiel.db"
+    enabled: false
+    read_only: true
+    schema_type: "investigation"
+    tags: ["investigation", "thiel", "palantir"]
+
+  # --- FUTURE EXAMPLES ---
+
+  # kinoni_knowledge:
+  #   name: "Kinoni Community Knowledge"
+  #   description: "Cultural knowledge base for ICT Hub deployment"
+  #   db_path: "data/aibrarian/kinoni.db"
+  #   enabled: false
+  #   create_if_missing: true
+  #   tags: ["kinoni", "uganda", "community"]
+  #   chunk_size: 300
+  #   chunk_overlap: 75
+
+  # bombay_beach:
+  #   name: "Bombay Beach Biennale Archive"
+  #   db_path: "data/aibrarian/biennale.db"
+  #   enabled: false
+  #   create_if_missing: true
+  #   tags: ["biennale", "art", "luna-witness"]

@@ -28,77 +28,64 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Each entry: (local_path_relative_to_project_root, target_category_folder_name)
+# Mapping follows Project Eclipse restructuring (Feb 2026).
+# New documents (Phase 3 one-pagers) are created as Google Docs directly in Drive.
 FILE_MAP = [
-    # 1. Company Overview
-    ("Docs/Design/LUNA_Build_Proposal.pdf", "1. Company Overview"),
-    ("Docs/Design/LUNA_Build_Proposal.docx", "1. Company Overview"),
-    ("Docs/Design/_Cognitive Feedback Engine-Presentation_V1.pdf", "1. Company Overview"),
-    ("Docs/Design/Luna_Engine_Overview.pages", "1. Company Overview"),
-    ("Docs/Design/NotebookLM Mind Map.png", "1. Company Overview"),
-    ("Docs/Design/#benjaminFranklin.pdf", "1. Company Overview"),
-    ("Docs/Design/From Tarcila/Proposal_ LUNA.pdf", "1. Company Overview"),
-    ("Docs/Design/From Tarcila/_LUNA — The Sovereign Witness of the Final Judgment.pdf", "1. Company Overview"),
-    ("Docs/Design/From Tarcila/4tarcila/Is Luna a good idea?.pdf", "1. Company Overview"),
+    # 1 — What Is Luna
+    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/luna_manifesto_storyboard.pdf", "1 — What Is Luna"),
+    ("Docs/Design/MediaAssets/LUNA-Teaser-1.mp4", "1 — What Is Luna"),
 
-    # 2. Financials
-    ("Docs/Design/Luna_Eclissi_Cost_Breakdown.xlsx", "2. Financials"),
+    # 2 — Traction & Partnerships
+    ("Docs/Design/EQC_LOI__Jero_Wiku_Hai_Dai.jpg", "2 — Traction & Partnerships"),
+    ("Docs/Design/Hai Dai _ Jero Wiku LOI.pdf", "2 — Traction & Partnerships"),
+    ("Docs/Design/Africa LETTER of Intent LOI.pdf", "2 — Traction & Partnerships"),
+    ("Docs/Design/kinoni_lwengo_analytics_report.pdf", "2 — Traction & Partnerships"),
 
-    # 3. Legal
-    ("Docs/Design/Africa LETTER of Intent LOI.pdf", "3. Legal"),
-    ("Docs/Design/Hai Dai _ Jero Wiku LOI.pdf", "3. Legal"),
+    # 3 — Team
+    ("Docs/Design/From Tarcila/4tarcila/portfolio/zayne_amason_portfolio.pdf", "3 — Team"),
+    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/Package 1/Strategic Leadership and Market Integration_Tarcila_and_Calvin.pdf", "3 — Team"),
 
-    # 4. Product — Architecture & Technical
-    ("Docs/Design/LLM as GPU- Sovereign AI Architecture.png", "4. Product"),
-    ("Docs/Design/LLM as GPU- Sovereign AI Architecture2.png", "4. Product"),
-    ("Docs/Design/Guardian _integrated.pdf", "4. Product"),
-    ("Docs/Design/LunaRobotRaccoonConcept_1.jpg", "4. Product"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/ Luna_architecture_deep_dive-source.pdf", "4. Product"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/Luna_Architecture_Deep_Dive-Outline.pdf", "4. Product"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/Luna_Architecture_Deep_Dive.docx", "4. Product"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/luna_manifesto_storyboard.pdf", "4. Product"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/nah/LUNA-ENGINE-BIBLE_V3.0.pdf", "4. Product"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/Package 1/LUNA_ENGINE_BIBLE_TOC_FOUNDATIONS_PHILOSOPHY.pdf", "4. Product"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/Package 1/Luna_Engine_Overview.pdf", "4. Product"),
-    ("Docs/Design/Development/Media/luna_manifesto_storyboard.docx", "4. Product"),
-    ("Docs/Design/Development/Media/luna_manifesto_storyboard.pdf", "4. Product"),
-    ("Docs/Design/IMG_8721.jpg", "4. Product"),
+    # 4 — Technology
+    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/ Luna_architecture_deep_dive-source.pdf", "4 — Technology"),
+    ("Docs/Design/Guardian _integrated.pdf", "4 — Technology"),
+    ("Docs/Design/From Tarcila/4tarcila/Guardian FLII One-Pager.pdf", "4 — Technology"),
+    ("Docs/Design/LLM as GPU- Sovereign AI Architecture.png", "4 — Technology"),
 
-    # 5. Market & Competition
-    ("Docs/Design/__Project Tapestry_ A Strategic Plan for Global Indigenous Collaboration__.pdf", "5. Market & Competition"),
-    ("Docs/Design/Attentional_Ecology_Global_Meta-Framework.pdf", "5. Market & Competition"),
-    ("Docs/Design/Luganda_AI_Resources.pdf", "5. Market & Competition"),
-    ("Docs/Design/Development/Is Luna a good idea_.pdf", "5. Market & Competition"),
-    ("Docs/Design/Development/CasperLabs Overview _ Nov 2019.pdf", "5. Market & Competition"),
-    ("Docs/Design/MediaAssets/founding_fathers_on_bar_currency.md.pdf", "5. Market & Competition"),
+    # 4 — Technology / Luna Engine Bible (subfolder — uploaded to root, moved manually)
+    ("Docs/bible/PDFs/01-PHILOSOPHY.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/02-SYSTEM-ARCHITECTURE.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/03-MEMORY-MATRIX.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/04-THE-SCRIBE.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/05-THE-LIBRARIAN.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/06-DIRECTOR-LLM.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/07-RUNTIME-ENGINE.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/08-DELEGATION-PROTOCOL.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/09-PERFORMANCE.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/10-SOVEREIGNTY.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/11-TRAINING-DATA-STRATEGY.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/12-FUTURE-ROADMAP.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/13-SYSTEM-OVERVIEW.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/GEMINI-OPTIMIZATION-REPORT.pdf", "4 — Technology"),
+    ("Docs/bible/PDFs/PALANTIR-ARCHITECTURE-ANALYSIS.pdf", "4 — Technology"),
 
-    # 6. Team
-    ("Docs/Design/zayne_amason_portfolio.pages", "6. Team"),
-    ("Docs/Design/Zayne core energetic signature.docx", "6. Team"),
-    ("Docs/Design/Clifford Sarkin - Crunchbase Person Profile.pdf", "6. Team"),
-    ("Docs/Design/TheFoundingFathers_01.pdf", "6. Team"),
-    ("Docs/Design/TheFoundingFathers_01.txt", "6. Team"),
-    ("Docs/Design/From Tarcila/4tarcila/portfolio/zayne_amason_portfolio.pdf", "6. Team"),
-    ("Docs/Design/From Tarcila/4tarcila/portfolio/zayne_amason_portfolio.docx", "6. Team"),
-    ("Docs/Design/From Tarcila/4tarcila/portfolio/LUNA_Build_Proposal-BN.pdf", "6. Team"),
-    ("Docs/Design/Development/Tarcila_Work_Details.pdf", "6. Team"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/Package 1/Strategic Leadership and Market Integration_Tarcila_and_Calvin.pdf", "6. Team"),
+    # 5 — Financials
+    ("Docs/Design/Luna_Eclissi_Cost_Breakdown.xlsx", "5 — Financials"),
+    ("Docs/Design/LUNA_Build_Proposal.pdf", "5 — Financials"),
+    ("Docs/Design/From Tarcila/4tarcila/budget/ca_tribal_cost_model.xlsx", "5 — Financials"),
 
-    # 7. Go-to-Market
-    ("Docs/Design/tapestry-funding-dashboard.html", "7. Go-to-Market"),
-    ("Docs/Design/kinoni_lwengo_analytics_dashboard.html", "7. Go-to-Market"),
+    # 6 — What We Need
+    # (intentionally sparse — one-pager created as Google Doc)
 
-    # 8. Partnerships & Impact
-    ("Docs/Design/Tarcila Quest.pdf", "8. Partnerships & Impact"),
-    ("Docs/Design/kinoni_lwengo_analytics_report.pdf", "8. Partnerships & Impact"),
-    ("Docs/Design/kinoni_lwengo_analytics_report_compressed.pdf", "8. Partnerships & Impact"),
-    ("Docs/Design/EQC_LOI__Jero_Wiku_Hai_Dai.jpg", "8. Partnerships & Impact"),
-
-    # 9. Risk & Mitigation — Reference decks from Cliff's package
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/From Cliff/2017.08.25_main_investor_pitch_deck.pdf", "9. Risk & Mitigation"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/From Cliff/CasperLabs Overview _ Nov 2019.pdf", "9. Risk & Mitigation"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/From Cliff/SEED 11.29.16.pdf", "9. Risk & Mitigation"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/From Cliff/TSG Concept Deck.pdf", "9. Risk & Mitigation"),
-    ("Docs/Design/4cliff/CLIFF - LUNA PACKAGE/From Cliff/TradeLanes - Investor Deck (November 2016).pdf", "9. Risk & Mitigation"),
+    # Reference Library
+    ("Docs/Design/__Project Tapestry_ A Strategic Plan for Global Indigenous Collaboration__.pdf", "Reference Library"),
+    ("Docs/Design/Attentional_Ecology_Global_Meta-Framework.pdf", "Reference Library"),
+    ("Docs/Design/Luganda_AI_Resources.pdf", "Reference Library"),
+    ("Docs/Design/Development/Is Luna a good idea_.pdf", "Reference Library"),
+    ("Docs/Design/From Tarcila/_LUNA — The Sovereign Witness of the Final Judgment.pdf", "Reference Library"),
+    ("Docs/Design/NotebookLM Mind Map.png", "Reference Library"),
+    ("Docs/Design/_Cognitive Feedback Engine-Presentation_V1.pdf", "Reference Library"),
+    ("Docs/Design/TheFoundingFathers_01.pdf", "Reference Library"),
+    ("Docs/Design/tapestry-funding-dashboard.html", "Reference Library"),
 ]
 
 # ---------------------------------------------------------------------------
