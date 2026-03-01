@@ -11,7 +11,7 @@ from dataclasses import replace
 
 from .performance_state import (
     PerformanceState, VoiceKnobs, OrbKnobs,
-    EMOTION_PRESETS, GESTURE_TO_EMOTION, EmotionPreset
+    EMOTION_PRESETS, GESTURE_TO_EMOTION, EMOJI_TO_EMOTION, EmotionPreset
 )
 from .orb_state import OrbStateManager, OrbAnimation
 
@@ -108,11 +108,20 @@ class PerformanceOrchestrator:
         return clean_text, base_state
 
     def _detect_emotion(self, text: str) -> Optional[EmotionPreset]:
-        """Match text against gesture patterns to find emotion."""
+        """Match text against gesture patterns, then emoji, to find emotion."""
+        # 1. Gesture patterns first
         for pattern, emotion in self._compiled_patterns.items():
             if pattern.search(text):
                 logger.debug(f"Detected emotion {emotion} from pattern {pattern.pattern}")
                 return emotion
+
+        # 2. Emoji fallback — scan first 500 chars
+        scan_text = text[:500]
+        for emoji, emotion in EMOJI_TO_EMOTION.items():
+            if emoji in scan_text:
+                logger.debug(f"Detected emotion {emotion} from emoji {emoji}")
+                return emotion
+
         return None
 
     def _find_gesture(self, text: str) -> Optional[str]:

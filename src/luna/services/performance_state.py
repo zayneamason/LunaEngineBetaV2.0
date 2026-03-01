@@ -170,3 +170,26 @@ GESTURE_TO_EMOTION: Dict[str, EmotionPreset] = {
     r"\*spins? playfully\*": EmotionPreset.PLAYFUL,
     r"\*pulses? excitedly\*": EmotionPreset.EXCITED,
 }
+
+
+# === EMOJI → EMOTION MAPPING ===
+# Fallback when no gesture pattern matches — maps emoji to voice modulation
+
+EMOJI_TO_EMOTION: Dict[str, EmotionPreset] = {
+    "✨": EmotionPreset.EXCITED,
+    "💜": EmotionPreset.WARM,
+    "🫶": EmotionPreset.WARM,
+    "😊": EmotionPreset.WARM,
+    "🤔": EmotionPreset.THOUGHTFUL,
+    "💭": EmotionPreset.THOUGHTFUL,
+    "😏": EmotionPreset.PLAYFUL,
+    "😈": EmotionPreset.PLAYFUL,
+    "🎉": EmotionPreset.EXCITED,
+    "😔": EmotionPreset.CONCERNED,
+    "🥺": EmotionPreset.CONCERNED,
+    "🧐": EmotionPreset.CURIOUS,
+    "👀": EmotionPreset.CURIOUS,
+    "💡": EmotionPreset.EXCITED,
+    "⚡": EmotionPreset.EXCITED,
+    "🌙": EmotionPreset.THOUGHTFUL,
+}
