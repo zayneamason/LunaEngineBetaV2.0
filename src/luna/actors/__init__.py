@@ -5,6 +5,8 @@ from .director import DirectorActor
 from .matrix import MatrixActor
 from .scribe import ScribeActor
 from .librarian import LibrarianActor
+from .cache import CacheActor
+from .scout import ScoutActor
 
 __all__ = [
     "Actor",
@@ -13,4 +15,6 @@ __all__ = [
     "MatrixActor",
     "ScribeActor",
     "LibrarianActor",
+    "CacheActor",
+    "ScoutActor",
 ]

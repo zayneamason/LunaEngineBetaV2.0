@@ -37,6 +37,7 @@ from luna.extraction.types import (
     EXTRACTION_BACKENDS,
     ConversationMode,
     FlowSignal,
+    SourceProvenance,
 )
 from luna.extraction.chunker import SemanticChunker, Turn
 from luna.entities.models import (
@@ -177,6 +178,9 @@ class ScribeActor(Actor):
         # Entity hints from LocalSubtaskRunner (gates expensive extraction)
         self._last_entity_hints: Optional[list] = None  # None = no hints received yet
 
+        # Source tracking for cache actor
+        self._current_source: str = "unknown"  # Set per-turn from message payload
+
         logger.info(f"Scribe (Ben) initialized with backend: {self.config.backend}")
 
     @property
@@ -224,6 +228,9 @@ class ScribeActor(Actor):
             case "compress_turn":
                 await self._handle_compress_turn(msg)
 
+            case "extract_correction":
+                await self._handle_extract_correction(msg)
+
             case _:
                 logger.warning(f"Ben: Unknown message type: {msg.type}")
 
@@ -260,6 +267,8 @@ class ScribeActor(Actor):
         turn_id = payload.get("turn_id", 0)
         session_id = payload.get("session_id", "")
         immediate = payload.get("immediate", False)
+        source = payload.get("source", "unknown")
+        self._current_source = source
 
         # CRITICAL: Skip assistant responses entirely
         # The Scribe should only extract from user-provided information
@@ -314,6 +323,12 @@ class ScribeActor(Actor):
                 f"open_threads={len(flow_signal.open_threads)}"
             )
 
+            # Send to CacheActor (writes YAML snapshot + feeds dimensional engine)
+            await self._send_to_cache(
+                extraction, flow_signal,
+                source=source, session_id=session_id,
+            )
+
             # Always send to Librarian when flow signal exists — even on
             # empty extractions — so thread management receives the signal.
             if not extraction.is_empty() or extraction.flow_signal is not None:
@@ -327,6 +342,14 @@ class ScribeActor(Actor):
         for chunk in chunks:
             self.stack.append(chunk)
             logger.debug(f"Ben: Stacked chunk {chunk.id} ({chunk.tokens} tokens)")
+
+        # ── INCREMENTAL EXTRACTION (every 3 turns) ──
+        # Makes knowledge available mid-conversation instead of waiting for batch/session end
+        self._turn_count_in_flow += 1
+        if self._turn_count_in_flow % 3 == 0 and len(self.stack) >= 2:
+            logger.info(f"Ben: Incremental extraction at turn {self._turn_count_in_flow}")
+            await self._process_stack()
+            return
 
         # Check if we should extract (batch threshold)
         if len(self.stack) >= self.config.batch_size:
@@ -467,6 +490,13 @@ class ScribeActor(Actor):
             f"continuity={flow_signal.continuity_score:.2f} "
             f"topic='{flow_signal.current_topic[:30]}' "
             f"open_threads={len(flow_signal.open_threads)}"
+        )
+
+        # Send to CacheActor (batch path)
+        session_id = chunks[0].source_id if chunks else ""
+        await self._send_to_cache(
+            extraction, flow_signal,
+            source=self._current_source, session_id=session_id,
         )
 
         # Always send to Librarian when a flow signal exists — even on empty
@@ -932,6 +962,106 @@ class ScribeActor(Actor):
             logger.error(f"Ben: Failed to parse extraction JSON: {e}")
             logger.debug(f"Ben: Response was: {response_text[:200]}...")
             return (ExtractionOutput(), [])
+
+    # =========================================================================
+    # CORRECTION EXTRACTION (Confabulation Guard integration)
+    # =========================================================================
+
+    # User correction detection patterns
+    _USER_CORRECTION_PATTERNS = [
+        _re.compile(r"(?i)^(no|nope|not quite|not exactly|close but)"),
+        _re.compile(r"(?i)(it.s actually|it actually|the (real|correct|right) (answer|thing))"),
+        _re.compile(r"(?i)(you.re (wrong|off|close|not quite)|that.s not (right|correct|it))"),
+        _re.compile(r"(?i)(it puts you in|it.s called|the (name|term) is)"),
+    ]
+
+    async def _handle_extract_correction(self, msg: Message) -> None:
+        """
+        Handle correction event from Reconcile system.
+
+        Creates a CORRECTION node with high confidence that supersedes
+        the original confabulated claim.
+        """
+        payload = msg.payload or {}
+        original_query = payload.get("original_query", "")
+        flagged_claims = payload.get("flagged_claims", [])
+        correction_response = payload.get("correction_response", "")
+        session_id = payload.get("session_id", "")
+
+        objects = []
+
+        for claim_data in flagged_claims:
+            claim = claim_data.get("claim", "")
+            correction_obj = ExtractedObject(
+                type=ExtractionType.CORRECTION,
+                content=(
+                    f"CORRECTED: Previously claimed '{claim[:100]}' but this was not "
+                    f"supported by retrieved memory. Luna self-corrected. "
+                    f"Original query: '{original_query}'"
+                ),
+                confidence=1.0,
+                entities=self._extract_entity_names(claim),
+                source_id=session_id,
+                provenance=SourceProvenance.CORRECTED.value,
+            )
+            objects.append(correction_obj)
+
+        if objects:
+            extraction = ExtractionOutput(
+                objects=objects,
+                edges=[],
+                source_id=session_id,
+            )
+            await self._send_to_librarian(extraction)
+            logger.info(
+                f"Ben: Filed {len(objects)} CORRECTION nodes — "
+                f"Luna won't repeat these confabulations"
+            )
+
+    def _extract_entity_names(self, text: str) -> list:
+        """Quick extraction of proper nouns from a claim."""
+        words = text.split()
+        entities = []
+        for i, word in enumerate(words):
+            cleaned = _re.sub(r'[^\w]', '', word)
+            if cleaned and cleaned[0].isupper() and i > 0 and len(cleaned) > 2:
+                entities.append(cleaned)
+        return list(set(entities))
+
+    def _detect_user_correction(self, user_turn: str) -> bool:
+        """Detect when user is correcting something Luna said."""
+        for pattern in self._USER_CORRECTION_PATTERNS:
+            if pattern.search(user_turn):
+                return True
+        return False
+
+    # =========================================================================
+    # CACHE ACTOR INTEGRATION
+    # =========================================================================
+
+    async def _send_to_cache(
+        self,
+        extraction: ExtractionOutput,
+        flow_signal: FlowSignal,
+        source: str = "unknown",
+        session_id: str = "",
+    ) -> None:
+        """Send extraction + flow data to CacheActor for cache write + dimensional feed."""
+        if self.engine:
+            cache_actor = self.engine.get_actor("cache")
+            if cache_actor:
+                await self.send(cache_actor, Message(
+                    type="cache_update",
+                    payload={
+                        "extraction": extraction.to_dict(),
+                        "flow_signal": flow_signal.to_dict(),
+                        "source": source,
+                        "session_id": session_id,
+                    },
+                ))
+                logger.debug("Ben: Sent extraction to CacheActor")
+            else:
+                logger.warning("Ben: CacheActor not available, cache not updated")
 
     # =========================================================================
     # LIBRARIAN INTEGRATION

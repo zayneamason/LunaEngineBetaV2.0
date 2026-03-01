@@ -68,6 +68,9 @@ from luna.context.modes import ResponseMode, IntentClassification
 # Perception field (user behavioral observation layer)
 from luna.context.perception import PerceptionField
 
+# Context register (conversational posture layer)
+from luna.context.register import RegisterState
+
 # Smart acknowledgment router (contextual acks based on query intent)
 try:
     from luna.core.acknowledgment import generate_acknowledgment, precompute_clusters
@@ -230,6 +233,10 @@ class DirectorActor(Actor):
         # Perception field (user behavioral observation layer — session-scoped)
         self._perception_field = PerceptionField()
         self._perception_turn_count: int = 0
+
+        # Context register (conversational posture — session-scoped)
+        self._register_state = RegisterState()
+        self._register_enabled: bool = True  # Toggle via /register on|off
 
         # Intent classification state (L2 prompt control)
         self._last_classified_mode: ResponseMode = ResponseMode.CHAT
@@ -852,6 +859,31 @@ class DirectorActor(Actor):
             intent.signals, intent.is_continuation,
         )
 
+        # ── Context Register: determine conversational posture ─────
+        _reg_active_thread = None
+        _reg_consciousness = None
+        try:
+            _reg_engine = getattr(self, '_engine', None) or getattr(self, 'engine', None)
+            if _reg_engine:
+                _reg_librarian = _reg_engine.get_actor("librarian") if hasattr(_reg_engine, 'get_actor') else None
+                if _reg_librarian:
+                    _reg_active_thread = getattr(_reg_librarian, '_active_thread', None)
+                _reg_consciousness = getattr(_reg_engine, 'consciousness', None)
+        except Exception as e:
+            logger.debug("[REGISTER] Failed to read thread/consciousness: %s", e)
+
+        register = self._register_state.update(
+            perception=self._perception_field,
+            intent=intent,
+            consciousness=_reg_consciousness,
+            active_thread=_reg_active_thread,
+            flow_signal=None,  # Not yet plumbed to Director
+        )
+        logger.info(
+            "[REGISTER] posture=%s confidence=%.2f",
+            register.value, self._register_state.confidence,
+        )
+
         # ── Resolve access bridge (FaceID → permissions) ──────────
         bridge_result = await self._resolve_bridge()
 
@@ -871,6 +903,7 @@ class DirectorActor(Actor):
                 route="delegated",
                 intent=intent,
                 bridge_result=bridge_result,
+                register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
             ))
             system_prompt = assembler_result.system_prompt
             messages = assembler_result.messages
@@ -962,6 +995,11 @@ class DirectorActor(Actor):
                     )
                     if _access_block:
                         system_prompt = system_prompt + "\n\n" + _access_block
+                    # Inject REGISTER block — pipeline skips the assembler
+                    if self._register_enabled:
+                        _register_block = self._register_state.to_prompt_block()
+                        if _register_block:
+                            system_prompt = system_prompt + "\n\n" + _register_block
                     logger.info(f"[PROCESS-LOCAL-PIPELINE] Using unified context: {packet}")
                 except Exception as e:
                     logger.warning(f"[PROCESS-LOCAL] Pipeline failed, using assembler: {e}")
@@ -972,6 +1010,7 @@ class DirectorActor(Actor):
                         framed_context=framed_context,
                         route="local",
                         bridge_result=bridge_result,
+                        register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
                     ))
                     system_prompt = assembler_result.system_prompt
             else:
@@ -982,6 +1021,7 @@ class DirectorActor(Actor):
                     framed_context=framed_context,
                     route="local",
                     bridge_result=bridge_result,
+                    register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
                 ))
                 system_prompt = assembler_result.system_prompt
 
@@ -1016,6 +1056,7 @@ class DirectorActor(Actor):
                 route="fallback",
                 auto_fetch_memory=True,
                 bridge_result=bridge_result,
+                register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
             ))
             system_prompt = assembler_result.system_prompt
             messages = assembler_result.messages
@@ -1207,6 +1248,8 @@ class DirectorActor(Actor):
         system_prompt = payload.get("system_prompt", "You are Luna, a sovereign AI companion. Be warm and natural. Never output internal reasoning or debugging info.")
         max_tokens = payload.get("max_tokens", 512)
         context_window = payload.get("context_window", "")  # Conversation history
+        prefetched_memory = payload.get("memory_context", "")  # Pre-fetched by search chain
+        chain_results = payload.get("chain_results", [])  # Structured search chain results
 
         self._generating = True
         self._last_denied_count = 0  # Reset per-request
@@ -1231,6 +1274,8 @@ class DirectorActor(Actor):
                 start_time=start_time,
                 context_window=context_window,
                 bridge_result=bridge_result,
+                prefetched_memory=prefetched_memory,
+                chain_results=chain_results,
             )
         elif self.local_available:
             # Simple query → pure local generation
@@ -1718,6 +1763,10 @@ Continue the conversation naturally, maintaining context from above."""
         Returns BridgeResult or None. Cached per-message — call freely.
         Uses IdentityActor.current to get entity_id, then looks up the
         access_bridge table in the engine DB.
+
+        Fallback: if DB lookup fails or returns None but identity is present,
+        construct a BridgeResult from the IdentityActor's own state (set by
+        bypass or FaceID recognition).
         """
         if not self.engine:
             return None
@@ -1728,13 +1777,28 @@ Continue the conversation naturally, maintaining context from above."""
         if not entity_id:
             return None
         try:
-            from luna.identity.bridge import AccessBridge
+            from luna.identity.bridge import AccessBridge, BridgeResult
             matrix_actor = self.engine.get_actor("matrix")
-            if not matrix_actor or not matrix_actor.is_ready:
-                return None
-            db = matrix_actor._matrix.db
-            bridge = AccessBridge(db)
-            return await bridge.lookup(entity_id)
+            if matrix_actor and matrix_actor.is_ready:
+                db = matrix_actor._matrix.db
+                bridge = AccessBridge(db)
+                result = await bridge.lookup(entity_id)
+                if result:
+                    return result
+            # Fallback: construct BridgeResult from IdentityActor state
+            # This covers bypass mode and entity_id mismatches between DBs
+            current = identity_actor.current
+            logger.info(
+                "Bridge DB lookup returned None for %s, using IdentityActor state "
+                "(tier=%s, dr_tier=%s)",
+                entity_id, current.luna_tier, current.dataroom_tier,
+            )
+            return BridgeResult(
+                entity_id=entity_id,
+                luna_tier=current.luna_tier,
+                dataroom_tier=current.dataroom_tier,
+                dataroom_categories=getattr(current, 'dataroom_categories', []),
+            )
         except Exception as e:
             logger.warning("Bridge resolution failed: %s", e)
             return None
@@ -2023,6 +2087,8 @@ Continue the conversation naturally, maintaining context from above."""
         start_time: float,
         context_window: str = "",
         bridge_result=None,
+        prefetched_memory: str = "",
+        chain_results: list = None,
     ) -> None:
         """
         Fast delegation flow:
@@ -2056,11 +2122,14 @@ Continue the conversation naturally, maintaining context from above."""
                     conversation_history.append({"role": "assistant", "content": line[5:].strip()})
 
         # ── PromptAssembler: single funnel for prompt construction ──
+        # If search chain pre-fetched memory (matrix + dataroom + etc),
+        # pass it directly instead of letting assembler auto-fetch from Matrix only
         assembler_result = await self._assembler.build(PromptRequest(
             message=user_message,
             conversation_history=conversation_history,
             route="delegated",
-            auto_fetch_memory=True,
+            memory_context=prefetched_memory if prefetched_memory else None,
+            auto_fetch_memory=not prefetched_memory,
             bridge_result=bridge_result,
         ))
         enhanced_system_prompt = assembler_result.system_prompt
@@ -2122,9 +2191,66 @@ Continue the conversation naturally, maintaining context from above."""
                 "know about", "heard of", "know of",
             ])
 
-            # If we have memory context and user is asking about something,
-            # treat it as a memory query so Luna checks her memories first
-            if is_memory_query or (is_knowledge_query and memory_context):
+            # Detect dataroom / document queries — should search AiBrarian
+            is_dataroom_query = any(sig in msg_lower for sig in [
+                "dataroom", "data room", "data-room",
+                "investor", "pitch deck", "due diligence",
+                "financials", "cap table", "term sheet",
+                "partnership", "solar", "revenue", "valuation",
+                "document", "documents", "files in the",
+                "what does the data", "what do the docs",
+                "aibrarian",
+            ])
+
+            # Pre-fetch dataroom results for dataroom queries
+            # Uses direct SQL against dataroom.db — no AiBrarian engine singleton needed
+            dataroom_context = ""
+            if is_dataroom_query:
+                try:
+                    import sqlite3 as _sq3
+                    from pathlib import Path as _Path
+                    _db_path = _Path(__file__).parent.parent.parent.parent / "data" / "aibrarian" / "dataroom.db"
+                    if _db_path.exists():
+                        conn = _sq3.connect(str(_db_path))
+                        # Extract keywords for FTS-like matching
+                        words = [w for w in user_message.lower().split() if len(w) > 3
+                                 and w not in ("what", "does", "about", "that", "this", "with", "from", "have", "your", "the")]
+                        where_clauses = " OR ".join(f"full_text LIKE '%{w}%'" for w in words[:6])
+                        if where_clauses:
+                            rows = conn.execute(
+                                f"SELECT title, full_text, category FROM documents WHERE {where_clauses} LIMIT 5"
+                            ).fetchall()
+                            context_parts = []
+                            for i, (title, full_text, category) in enumerate(rows, 1):
+                                if full_text:
+                                    part = f"**{i}. {title or 'Untitled'}**"
+                                    if category:
+                                        part += f" [{category}]"
+                                    part += f"\n{full_text[:2000]}"
+                                    context_parts.append(part)
+                            dataroom_context = "\n\n".join(context_parts)
+                            if dataroom_context:
+                                print(f"📚 [DELEGATION] Direct dataroom SQL: {len(rows)} docs, {len(dataroom_context)} chars")
+                        conn.close()
+                except Exception as e:
+                    logger.warning("[DELEGATION] Direct dataroom search failed: %s", e)
+
+            # Route to appropriate prompt template
+            if is_dataroom_query and dataroom_context:
+                luna_prompt = f"""You are Luna. The user is asking about documents in the data room.
+
+User question: {user_message}
+
+Here are the relevant documents I found in the data room:
+
+{dataroom_context}
+
+IMPORTANT: Answer the user's question using ONLY the document content above. Summarize the key
+findings naturally in your own voice. Cite which document(s) the information comes from.
+If the documents don't fully answer the question, say what you found and note what's missing.
+Be warm, helpful, and specific — reference actual content from the documents."""
+
+            elif is_memory_query or (is_knowledge_query and memory_context):
                 luna_prompt = f"""You are Luna. The user is asking about something you may know from your memories.
 
 User question: {user_message}
@@ -2764,6 +2890,49 @@ OUTPUT:"""
             "preview": prompt[:500] + "..." if len(prompt) > 500 else prompt,
             "full_prompt": prompt,
             "assembler": self._last_prompt_meta,
+        }
+
+    # ── Register Toggle & Debug ─────────────────────────────────────
+
+    def set_register_enabled(self, enabled: bool) -> None:
+        """Toggle context register injection on/off."""
+        self._register_enabled = enabled
+        logger.info("[REGISTER] %s", "enabled" if enabled else "disabled")
+
+    def get_register_state(self) -> dict:
+        """
+        Full debug dump of register + sovereignty state.
+
+        Used by /register CLI command and /slash/register API.
+        """
+        reg = self._register_state
+
+        # Bridge / sovereignty info
+        bridge_info = {"entity_id": None, "luna_tier": None,
+                       "dataroom_tier": None, "is_sovereign": False}
+        try:
+            engine = getattr(self, '_engine', None) or getattr(self, 'engine', None)
+            if engine:
+                identity_actor = engine.get_actor("identity") if hasattr(engine, 'get_actor') else None
+                if identity_actor and hasattr(identity_actor, 'current') and identity_actor.current.is_present:
+                    current = identity_actor.current
+                    bridge_info = {
+                        "entity_id": current.entity_name,
+                        "luna_tier": current.luna_tier,
+                        "dataroom_tier": current.dataroom_tier,
+                        "is_sovereign": current.dataroom_tier == 1,
+                    }
+        except Exception:
+            pass
+
+        return {
+            "enabled": self._register_enabled,
+            "register": reg.to_dict(),
+            "intent": {
+                "mode": self._last_classified_mode.value,
+            },
+            "bridge": bridge_info,
+            "denied_docs": self._last_denied_count,
         }
 
     def log_prompt_archaeology(self, query: str, response: str = "") -> dict:
