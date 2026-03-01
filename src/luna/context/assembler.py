@@ -12,6 +12,7 @@ Assembly order is invariant:
     2.0  EXPRESSION     — Gesture frequency / emotional markers
     3.0  TEMPORAL       — Clock + session gap + thread inheritance
     3.5  PERCEPTION     — User behavioral observations (paired signals)
+    3.75 REGISTER       — Conversational posture (register determination)
     4.0  MEMORY         — Retrieved memories, framed temporally
     5.0  CONSCIOUSNESS  — Internal state hints
     6.0  VOICE          — Voice system block (kill list, openers, tone)
@@ -23,6 +24,7 @@ from datetime import datetime
 import logging
 
 if TYPE_CHECKING:
+    from luna.context.aperture import ApertureState
     from luna.context.modes import IntentClassification
     from luna.identity.bridge import BridgeResult
 
@@ -116,6 +118,12 @@ class PromptRequest:
     # Identity-gated access (from FaceID → AccessBridge)
     bridge_result: Optional[Any] = None    # BridgeResult or None
 
+    # Context register (conversational posture — from RegisterState)
+    register_block: Optional[str] = None   # Pre-formatted register prompt block
+
+    # Aperture (cognitive focus control — from ApertureManager)
+    aperture: Optional["ApertureState"] = None
+
 
 @dataclass
 class PromptResult:
@@ -141,12 +149,21 @@ class PromptResult:
     constraints_injected: bool = False
     memory_confidence_level: Optional[str] = None
 
+    # Context register metadata
+    register_injected: bool = False
+    register_active: Optional[str] = None
+
     # Identity-gated access metadata
     access_injected: bool = False
     access_entity_id: Optional[str] = None
     access_luna_tier: Optional[str] = None
     access_dataroom_tier: Optional[int] = None
     access_denied_count: int = 0
+
+    # Aperture metadata
+    aperture_preset: Optional[str] = None
+    aperture_angle: Optional[int] = None
+    aperture_inner_collections: int = 0
 
     def to_dict(self) -> dict:
         """Serialize metadata fields (excludes system_prompt/messages for brevity)."""
@@ -165,11 +182,16 @@ class PromptResult:
             "response_mode": self.response_mode,
             "constraints_injected": self.constraints_injected,
             "memory_confidence_level": self.memory_confidence_level,
+            "register_injected": self.register_injected,
+            "register_active": self.register_active,
             "access_injected": self.access_injected,
             "access_entity_id": self.access_entity_id,
             "access_luna_tier": self.access_luna_tier,
             "access_dataroom_tier": self.access_dataroom_tier,
             "access_denied_count": self.access_denied_count,
+            "aperture_preset": self.aperture_preset,
+            "aperture_angle": self.aperture_angle,
+            "aperture_inner_collections": self.aperture_inner_collections,
         }
 
 
@@ -231,6 +253,7 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             2.0  EXPRESSION
             3.0  TEMPORAL
             3.5  PERCEPTION
+            3.75 REGISTER (conversational posture)
             4.0  MEMORY
             5.0  CONSCIOUSNESS
             6.0  VOICE
@@ -264,7 +287,11 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             result.response_mode = request.intent.mode.value
 
         # ── Resolve memory EARLY (need confidence for L1.75) ──────────
-        memory_block, mem_source, mem_confidence = await self._resolve_memory_with_confidence(request)
+        # Use aperture pipeline when aperture is active (non-OPEN), else standard
+        if request.aperture is not None:
+            memory_block, mem_source, mem_confidence = await self._resolve_memory_with_aperture(request)
+        else:
+            memory_block, mem_source, mem_confidence = await self._resolve_memory_with_confidence(request)
 
         # ── Layer 1.75: CONSTRAINTS (L1 — confidence signals) ─────────
         if mem_confidence is not None:
@@ -300,11 +327,35 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             except (TypeError, AttributeError):
                 result.observation_count = 0
 
+        # ── Layer 3.75: REGISTER (conversational posture) ──────────
+        if request.register_block:
+            sections.append(request.register_block)
+            result.register_injected = True
+            # Extract register name from the block (e.g. "[REGISTER: project_partner ...")
+            try:
+                import re
+                m = re.search(r'\[REGISTER:\s*(\w+)', request.register_block)
+                result.register_active = m.group(1) if m else None
+            except Exception:
+                pass
+
         # ── Layer 4.0: MEMORY ─────────────────────────────────────────
         # (already resolved above for confidence — just inject the block)
         if memory_block:
             sections.append(memory_block)
             result.memory_source = mem_source
+
+        # ── Layer 4.5: APERTURE HINT ─────────────────────────────────
+        # If aperture is active, add a focus awareness hint
+        if request.aperture is not None:
+            aperture_hint = self._build_aperture_hint(request.aperture)
+            if aperture_hint:
+                sections.append(aperture_hint)
+            result.aperture_preset = request.aperture.preset.value
+            result.aperture_angle = request.aperture.angle
+            result.aperture_inner_collections = len(
+                request.aperture.active_collection_keys
+            )
 
         # ── Layer 5.0: CONSCIOUSNESS ──────────────────────────────────
         consciousness_block = self._build_consciousness_block(request)
@@ -324,10 +375,11 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
 
         logger.info(
             "[ASSEMBLER] Built prompt: identity=%s memory=%s mode=%s confidence=%s "
-            "temporal=%s perception=%s voice=%s tokens~%d route=%s",
+            "temporal=%s perception=%s register=%s voice=%s tokens~%d route=%s",
             result.identity_source, result.memory_source,
             result.response_mode, result.memory_confidence_level,
-            result.gap_category, result.perception_injected, result.voice_injected,
+            result.gap_category, result.perception_injected,
+            result.register_active, result.voice_injected,
             result.prompt_tokens, request.route,
         )
 
@@ -398,10 +450,20 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
         """
         bridge = request.bridge_result
         if bridge is None:
-            # No identity — check if IdentityActor has a current face
+            # No bridge result — check engine state
             try:
                 engine = getattr(self._director, '_engine', None) or getattr(self._director, 'engine', None)
                 if engine:
+                    # If FaceID is disabled, grant open access (no identity gating)
+                    faceid_enabled = getattr(engine.config, 'faceid_enabled', False) if hasattr(engine, 'config') else False
+                    if not faceid_enabled:
+                        return (
+                            "## Data Room Access\n"
+                            "FaceID is disabled. Data room access is open.\n"
+                            "You may freely discuss, reference, and share data room "
+                            "documents and their contents when asked."
+                        )
+
                     identity_actor = engine.get_actor("identity")
                     if identity_actor and identity_actor.current.is_present:
                         # IdentityActor has a face but no bridge was passed —
@@ -779,6 +841,229 @@ Use these memories as reference when relevant. If the topic is not covered in th
             query=request.message,
         )
         return None, None, confidence
+
+    # ── Aperture Recall Pipeline ─────────────────────────────────────
+
+    async def _resolve_memory_with_aperture(
+        self,
+        request: PromptRequest,
+    ) -> tuple[Optional[str], Optional[str], Optional[MemoryConfidence]]:
+        """
+        Three-phase recall pipeline shaped by aperture state.
+
+        Replaces _resolve_memory_with_confidence when aperture is active.
+
+        Phase A — Focus Query (Inner Ring):
+            Collections where lock_in >= inner_ring_threshold AND
+            (tag overlap with focus_tags OR key in active_collection_keys).
+            Searched at full depth via AiBrarian.
+
+        Phase B — Matrix Sweep:
+            Standard Memory Matrix fetch (unchanged core behavior).
+            Identity/kernel nodes always included regardless of aperture.
+
+        Phase C — Agency Check (Breakthrough):
+            Lightweight sweep of outer ring collections.
+            Only surfaces results exceeding breakthrough_threshold.
+            Time-sensitive items (deadlines ≤14 days, flags) bypass threshold.
+
+        Returns:
+            (memory_block_text, source_name, MemoryConfidence)
+        """
+        aperture = request.aperture
+        if aperture is None:
+            return await self._resolve_memory_with_confidence(request)
+
+        from luna.context.aperture import AperturePreset
+
+        # At OPEN — bypass pipeline, use standard recall
+        if aperture.preset == AperturePreset.OPEN:
+            return await self._resolve_memory_with_confidence(request)
+
+        # Access subsystems
+        engine = getattr(self._director, '_engine', None) or getattr(self._director, 'engine', None)
+        aibrarian = None
+        lock_in_engine = None
+        if engine:
+            aibrarian = getattr(engine, '_aibrarian', None) or getattr(engine, 'aibrarian', None)
+            if aibrarian:
+                lock_in_engine = getattr(aibrarian, '_lock_in_engine', None)
+
+        # ── Phase A: Focus Query (Inner Ring) ───────────────────────
+        inner_ring_results = []
+        inner_ring_keys = []
+
+        if aibrarian and lock_in_engine:
+            try:
+                all_records = await lock_in_engine.get_above_threshold(
+                    aperture.inner_ring_threshold
+                )
+
+                # Filter by tag overlap or explicit active_collection_keys
+                for record in all_records:
+                    in_active = record.collection_key in aperture.active_collection_keys
+                    has_tag_overlap = False
+
+                    if aperture.focus_tags:
+                        # Get collection tags from registry
+                        config = aibrarian.registry.collections.get(record.collection_key)
+                        if config:
+                            has_tag_overlap = bool(
+                                set(t.lower() for t in aperture.focus_tags)
+                                & set(t.lower() for t in config.tags)
+                            )
+
+                    if in_active or has_tag_overlap or not aperture.focus_tags:
+                        inner_ring_keys.append(record.collection_key)
+
+                # Search inner ring collections
+                for key in inner_ring_keys:
+                    try:
+                        results = await aibrarian.search(key, request.message, limit=5)
+                        for r in results:
+                            r["_source"] = "aibrarian"
+                            r["_collection"] = key
+                            r["_ring"] = "inner"
+                        inner_ring_results.extend(results)
+                    except Exception as e:
+                        logger.debug("Inner ring search failed for %s: %s", key, e)
+
+            except Exception as e:
+                logger.warning("[APERTURE] Phase A failed: %s", e)
+
+        # ── Phase B: Matrix Sweep (standard memory fetch) ───────────
+        matrix_block, matrix_source, matrix_confidence = await self._resolve_memory_with_confidence(request)
+
+        # ── Phase C: Agency Check (Breakthrough) ────────────────────
+        breakthrough_results = []
+
+        if aibrarian and lock_in_engine:
+            try:
+                all_records = await lock_in_engine.get_all()
+                outer_keys = [
+                    r.collection_key for r in all_records
+                    if r.collection_key not in inner_ring_keys
+                ]
+
+                for key in outer_keys[:3]:  # Cap outer ring sweep to 3 collections
+                    try:
+                        results = await aibrarian.search(key, request.message, limit=3)
+                        for r in results:
+                            score = r.get("score", r.get("rank_score", 0.0))
+
+                            # Time-sensitive bypass: flags and high-score items
+                            is_flagged = r.get("flagged", False)
+                            passes_threshold = score >= aperture.breakthrough_threshold
+
+                            if passes_threshold or is_flagged:
+                                r["_source"] = "aibrarian"
+                                r["_collection"] = key
+                                r["_ring"] = "breakthrough"
+                                breakthrough_results.append(r)
+                    except Exception as e:
+                        logger.debug("Breakthrough search failed for %s: %s", key, e)
+
+            except Exception as e:
+                logger.warning("[APERTURE] Phase C failed: %s", e)
+
+        # ── Compose layered result ──────────────────────────────────
+        sections = []
+
+        # Inner ring results (highest priority)
+        if inner_ring_results:
+            lines = []
+            for r in inner_ring_results[:5]:
+                title = r.get("title", r.get("doc_title", "untitled"))
+                snippet = r.get("snippet", r.get("text", ""))[:200]
+                coll = r.get("_collection", "?")
+                lines.append(f"  - [{coll}] {title}: {snippet}")
+
+            sections.append(
+                "### Focus Ring (high-relevance collections)\n"
+                "These are from collections you've been actively working with.\n"
+                "Provenance: source=aibrarian — external knowledge, not native memory.\n\n"
+                + "\n".join(lines)
+            )
+
+        # Matrix block (standard memory — always included)
+        if matrix_block:
+            sections.append(matrix_block)
+
+        # Breakthrough results (agency — rare, important)
+        if breakthrough_results:
+            lines = []
+            for r in breakthrough_results[:3]:
+                title = r.get("title", r.get("doc_title", "untitled"))
+                snippet = r.get("snippet", r.get("text", ""))[:200]
+                coll = r.get("_collection", "?")
+                lines.append(f"  - [{coll}] {title}: {snippet}")
+
+            sections.append(
+                "### Breakthrough (outside current focus)\n"
+                "These surfaced because they exceed your breakthrough threshold "
+                "or are flagged as important.\n"
+                "Provenance: source=aibrarian — external, not native memory.\n\n"
+                + "\n".join(lines)
+            )
+
+        # Build final block
+        if sections:
+            final_block = "\n\n".join(sections)
+            source = "aperture"
+            if matrix_source:
+                source = f"aperture+{matrix_source}"
+        else:
+            final_block = matrix_block
+            source = matrix_source
+
+        # Build confidence (combine matrix confidence with collection results)
+        confidence = matrix_confidence
+        if confidence and (inner_ring_results or breakthrough_results):
+            # Enrich confidence with collection data
+            confidence = MemoryConfidence(
+                match_count=confidence.match_count + len(inner_ring_results) + len(breakthrough_results),
+                relevant_count=confidence.relevant_count + len(inner_ring_results),
+                avg_similarity=confidence.avg_similarity,
+                best_lock_in=confidence.best_lock_in,
+                has_entity_match=confidence.has_entity_match,
+                query=confidence.query,
+            )
+
+        return final_block, source, confidence
+
+    # ── Aperture Hint ──────────────────────────────────────────────────
+
+    def _build_aperture_hint(self, aperture: "ApertureState") -> Optional[str]:
+        """
+        Build aperture awareness hint for the prompt.
+
+        This is a lightweight addition to Layer 4.0 that tells Luna
+        her context has been shaped by focus. Does NOT change personality
+        or voice — only adds awareness of the cognitive scope.
+        """
+        from luna.context.aperture import AperturePreset
+
+        # At OPEN (95°), no hint needed — full access
+        if aperture.preset == AperturePreset.OPEN:
+            return None
+
+        lines = [
+            "## Focus Awareness",
+            f"Your recall has been shaped by your current focus ({aperture.preset.value}, {aperture.angle}°).",
+        ]
+
+        if aperture.focus_tags:
+            lines.append(f"Focus tags: {', '.join(aperture.focus_tags)}")
+
+        if aperture.active_project:
+            lines.append(f"Active project: {aperture.active_project}")
+
+        lines.append(
+            "If you notice connections to knowledge outside your current scope "
+            "that seem important, mention them."
+        )
+
+        return "\n".join(lines)
 
     # ── Voice Block ────────────────────────────────────────────────────
 

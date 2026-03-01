@@ -5,6 +5,7 @@ from .assembler import PromptAssembler, PromptRequest, PromptResult, MemoryConfi
 from .modes import ResponseMode, IntentClassification, MODE_CONTRACTS
 from .temporal import TemporalContext, build_temporal_context
 from .perception import PerceptionField, Observation
+from .register import ContextRegister, RegisterState, REGISTER_CONTRACTS
 
 __all__ = [
     "ContextPipeline", "ContextPacket",
@@ -12,4 +13,5 @@ __all__ = [
     "ResponseMode", "IntentClassification", "MODE_CONTRACTS",
     "TemporalContext", "build_temporal_context",
     "PerceptionField", "Observation",
+    "ContextRegister", "RegisterState", "REGISTER_CONTRACTS",
 ]
