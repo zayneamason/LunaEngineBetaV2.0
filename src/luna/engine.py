@@ -315,6 +315,11 @@ Emojis can accompany gestures or stand alone.
             from luna.actors.librarian import LibrarianActor
             self.register_actor(LibrarianActor())
 
+        # Shared Turn Cache actor (writes cache + feeds dimensional engine)
+        if "cache" not in self.actors:
+            from luna.actors.cache import CacheActor
+            self.register_actor(CacheActor())
+
         # Phase 4: History Manager actor (conversation history tiers)
         if "history_manager" not in self.actors:
             from luna.actors.history_manager import HistoryManagerActor
@@ -350,6 +355,19 @@ Emojis can accompany gestures or stand alone.
         self.agent_loop = AgentLoop(orchestrator=self, max_iterations=50)
         self.agent_loop.on_progress(self._handle_agent_progress)
         logger.info("AgentLoop initialized")
+
+        # Initialize Scout actor + Watchdog (blockage detection + stuck state recovery)
+        if "scout" not in self.actors:
+            from luna.actors.scout import ScoutActor, Watchdog, watchdog_loop
+            self.register_actor(ScoutActor())
+            self.watchdog = Watchdog(self)
+            asyncio.create_task(watchdog_loop(self.watchdog, interval=5.0))
+            logger.info("Scout and Watchdog initialized")
+
+        # Initialize ReconcileManager (confabulation self-correction)
+        from luna.actors.reconcile import ReconcileManager
+        self.reconcile = ReconcileManager()
+        logger.info("ReconcileManager initialized")
 
         # Initialize LocalSubtaskRunner (Qwen 3B lightweight agentic dispatch)
         if SUBTASK_RUNNER_AVAILABLE:
@@ -673,7 +691,7 @@ Emojis can accompany gestures or stand alone.
                 user_message = event.payload
                 cid = event.correlation_id or "anon"
                 asyncio.create_task(
-                    self._handle_user_message(user_message, cid),
+                    self._handle_user_message(user_message, cid, source=event.source),
                     name=f"msg-{cid[:8]}",
                 )
 
@@ -697,7 +715,7 @@ Emojis can accompany gestures or stand alone.
             case EventType.SHUTDOWN:
                 await self.stop()
 
-    async def _handle_user_message(self, user_message: str, correlation_id: str) -> None:
+    async def _handle_user_message(self, user_message: str, correlation_id: str, source: str = "text") -> None:
         """
         Handle incoming user message with concurrent support.
 
@@ -746,9 +764,9 @@ Emojis can accompany gestures or stand alone.
             return
 
         # Not currently processing - handle normally with agentic routing
-        await self._process_message_agentic(user_message, correlation_id)
+        await self._process_message_agentic(user_message, correlation_id, source=source)
 
-    async def _process_message_agentic(self, user_message: str, correlation_id: str) -> None:
+    async def _process_message_agentic(self, user_message: str, correlation_id: str, source: str = "text") -> None:
         """Process message through the agentic pipeline (subtasks → router → planner → loop)."""
         self._is_processing = True
         self._current_goal = user_message
@@ -768,7 +786,7 @@ Emojis can accompany gestures or stand alone.
             await self.record_conversation_turn(
                 role="user",
                 content=user_message,
-                source="text",
+                source=source,
             )
 
             # Build recent turns list for query rewriting context
@@ -1044,7 +1062,7 @@ Emojis can accompany gestures or stand alone.
 
         # 1. Trigger extraction pipeline (Scribe → Librarian → Memory Matrix)
         try:
-            await self._trigger_extraction(role, content)
+            await self._trigger_extraction(role, content, source=source)
         except Exception as e:
             logger.error(f"Extraction error for {role} turn: {e}")
 
@@ -1075,7 +1093,7 @@ Emojis can accompany gestures or stand alone.
 
         logger.debug(f"📝 Recorded {source} turn: {role} ({len(content)} chars)")
 
-    async def _trigger_extraction(self, role: str, content: str) -> None:
+    async def _trigger_extraction(self, role: str, content: str, source: str = "text") -> None:
         """
         Trigger extraction on a conversation turn.
 
@@ -1092,6 +1110,7 @@ Emojis can accompany gestures or stand alone.
                     "content": content,
                     "session_id": self.session_id,
                     "immediate": True,  # Process immediately, don't batch
+                    "source": source,  # Surface origin for Shared Turn Cache
                 },
             )
             await scribe.mailbox.put(msg)
@@ -1394,23 +1413,30 @@ Emojis can accompany gestures or stand alone.
                 return ""
 
             # Format as directive context so Luna presents the docs
+            # NOTE: Chat UI renders plain text (no markdown), so avoid bold/italic syntax
             lines = [
-                "## Data Room Documents (PRESENT THESE TO THE USER)",
-                "The user is asking about documents. List them with names, types, status, and Google Drive links.",
+                "[DATA ROOM DOCUMENTS — Cite these by their exact names. Do NOT wrap names in asterisks or markdown.]",
             ]
             if target_category:
-                lines.append(f"Category: {target_category}\n")
+                lines.append(f"Category: {target_category}")
 
             for doc in allowed_docs:
                 meta = doc["metadata"]
-                name = (doc["summary"] or doc["content"]).split(" \u2014 ")[0]
+                name = (doc["summary"] or doc["content"] or "Untitled").split(" \u2014 ")[0].strip()
+                category = meta.get("category", "")
                 ftype = meta.get("file_type", "")
                 url = meta.get("gdrive_url", "")
                 status = meta.get("status", "")
+                entry = f'- "{name}"'
+                if ftype:
+                    entry += f" ({ftype})"
+                if category:
+                    entry += f" [{category}]"
+                if status:
+                    entry += f" — {status}"
                 if url and "drive.google.com" in url:
-                    lines.append(f"- {name} [{ftype}] ({status}) \u2014 Link: {url}")
-                else:
-                    lines.append(f"- {name} [{ftype}] ({status})")
+                    entry += f" — {url}"
+                lines.append(entry)
 
             return "\n".join(lines)
 
@@ -1682,7 +1708,7 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
     # External API
     # =========================================================================
 
-    async def send_message(self, text: str) -> None:
+    async def send_message(self, text: str, source: str = "api") -> None:
         """
         Send a message to Luna.
 
@@ -1691,7 +1717,7 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
         event = InputEvent(
             type=EventType.TEXT_INPUT,
             payload=text,
-            source="api",
+            source=source,
         )
         await self.input_buffer.put(event)
 
@@ -1716,10 +1742,21 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
         """Set or clear the active project for scoped memory."""
         old = self._active_project
         self._active_project = slug
+
+        # Load per-project search chain config and propagate
+        search_config = None
         if slug:
+            from luna.tools.search_chain import SearchChainConfig
+            search_config = SearchChainConfig.load(slug)
             logger.info(f"Active project set: {slug} (scope: project:{slug})")
         else:
             logger.info(f"Active project cleared (was: {old})")
+
+        # Store on engine so /persona/stream can access it
+        self._search_chain_config = search_config
+
+        if self._voice and hasattr(self._voice, 'persona'):
+            self._voice.persona.set_search_config(search_config)
 
     @property
     def active_project(self) -> Optional[str]:

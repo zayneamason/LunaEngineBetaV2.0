@@ -37,6 +37,7 @@ from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 
 from luna.services.orb_state import OrbStateManager, ExpressionConfig
+from luna.services.dimensional_engine import DimensionalEngine
 from luna.services.performance_state import VoiceKnobs, OrbKnobs, EMOTION_PRESETS, EmotionPreset
 from luna.services.performance_orchestrator import PerformanceOrchestrator
 
@@ -205,6 +206,7 @@ async def _require_admin():
 async def _gate_results(results: list, source: str = "api") -> list:
     """Apply permission gate to a list of result dicts/nodes. Returns allowed list."""
     from luna.identity.permissions import gate_content
+    from luna.identity.bridge import BridgeResult
     bridge = await _resolve_current_bridge()
     db = None
     try:
@@ -215,6 +217,19 @@ async def _gate_results(results: list, source: str = "api") -> list:
                 db = mem.db
     except Exception:
         pass
+
+    # MCP API calls are local/trusted — if no FaceID identity is active,
+    # treat as admin rather than denying all DOCUMENT nodes silently.
+    # The MCP server itself is authenticated by the session that started it.
+    if bridge is None and source.startswith("api/"):
+        bridge = BridgeResult(
+            entity_id="mcp-local",
+            luna_tier="admin",
+            dataroom_tier=1,
+            dataroom_categories=[],
+        )
+        logger.debug("GATE: No FaceID active — using admin fallback for MCP source '%s'", source)
+
     allowed, _denied = await gate_content(results, bridge, db=db, source=source)
     return allowed
 
@@ -252,6 +267,7 @@ class MessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
     timeout: float = Field(default=30.0, ge=1.0, le=120.0)
     stream: bool = Field(default=False, description="Use streaming mode")
+    source: str = Field(default="api", description="Origin surface: eclissi, mcp, voice, guardian, api")
 
 
 class MessageResponse(BaseModel):
@@ -377,6 +393,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to initialize orb state manager: {e}")
         _orb_state_manager = OrbStateManager()
+
+    # Wire CacheActor → OrbStateManager (dimensional feed)
+    if _engine:
+        _cache_actor = _engine.get_actor("cache")
+        if _cache_actor and hasattr(_cache_actor, "set_orb_state_manager"):
+            _cache_actor.set_orb_state_manager(_orb_state_manager)
+            logger.info("CacheActor wired to OrbStateManager")
 
     # Subscribe to identity state changes (FaceID → WebSocket broadcast)
     identity_actor = _engine.get_actor("identity")
@@ -526,10 +549,31 @@ try:
     if not _guardian_frontend.exists():
         _guardian_frontend = _Path("frontend/guardian")
     if _guardian_frontend.exists():
+        from starlette.responses import RedirectResponse as _RedirectResponse
+
+        @app.get("/guardian")
+        async def _guardian_redirect():
+            return _RedirectResponse(url="/guardian/")
+
         app.mount("/guardian", StaticFiles(directory=str(_guardian_frontend), html=True), name="guardian")
         logger.info(f"Guardian frontend mounted at /guardian from {_guardian_frontend}")
 except Exception as e:
     logger.warning(f"Guardian frontend mount failed: {e}")
+
+# Serve LUNAR STUDIO frontend (Expression Pipeline Diagnostic)
+try:
+    _studio_frontend = _Path(__file__).resolve().parent.parent.parent.parent / "Tools" / "Luna-Expression-Pipeline" / "diagnostic" / "dist"
+    if _studio_frontend.exists():
+        from starlette.responses import RedirectResponse
+
+        @app.get("/studio")
+        async def _studio_redirect():
+            return RedirectResponse(url="/studio/")
+
+        app.mount("/studio", StaticFiles(directory=str(_studio_frontend), html=True), name="studio")
+        logger.info(f"Lunar Studio mounted at /studio from {_studio_frontend}")
+except Exception as e:
+    logger.warning(f"Lunar Studio mount failed: {e}")
 
 
 # ============================================
@@ -766,6 +810,74 @@ async def reset_identity(data: dict):
     return await _proxy_faceid("/reset", data)
 
 
+@app.post("/identity/bypass")
+async def bypass_identity():
+    """
+    Manually grant identity as Ahab (admin) without FaceID camera.
+    Starts a keepalive that refreshes last_seen every 5s.
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    identity_actor = _engine.get_actor("identity")
+    if not identity_actor:
+        raise HTTPException(status_code=503, detail="Identity actor not found")
+
+    import time as _time, sqlite3 as _sqlite3
+
+    # Use 'ahab' as entity_id — must match the engine's access_bridge table
+    # (faces.db uses 'entity_ceb382cb' but the engine DB has 'ahab')
+    entity_id = "ahab"
+    entity_name = "Ahab"
+    luna_tier = "admin"
+    dataroom_tier = 1
+    dataroom_categories = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    # Set identity directly on the actor
+    identity_actor.current.entity_id = entity_id
+    identity_actor.current.entity_name = entity_name
+    identity_actor.current.confidence = 1.0
+    identity_actor.current.luna_tier = luna_tier
+    identity_actor.current.dataroom_tier = dataroom_tier
+    identity_actor.current.dataroom_categories = dataroom_categories
+    identity_actor.current.last_seen = _time.time()
+
+    # Keepalive task — refreshes last_seen so is_present stays true
+    async def _bypass_keepalive():
+        while getattr(identity_actor, '_bypass_active', False):
+            identity_actor.current.last_seen = _time.time()
+            await _broadcast_identity_state()
+            await asyncio.sleep(5)
+
+    identity_actor._bypass_active = True
+    asyncio.create_task(_bypass_keepalive())
+    await _broadcast_identity_state()
+    logger.info(f"[BYPASS] Identity set to {entity_name} ({entity_id})")
+
+    return {
+        "bypassed": True,
+        "entity_id": entity_id,
+        "entity_name": entity_name,
+        "luna_tier": luna_tier,
+        "dataroom_tier": dataroom_tier,
+    }
+
+
+@app.post("/identity/bypass-off")
+async def bypass_off():
+    """Revoke the identity bypass — clear manual identity."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    identity_actor = _engine.get_actor("identity")
+    if not identity_actor:
+        raise HTTPException(status_code=503, detail="Identity actor not found")
+
+    identity_actor._bypass_active = False
+    identity_actor.current.clear()
+    await _broadcast_identity_state()
+    logger.info("[BYPASS] Identity bypass revoked")
+    return {"bypassed": False}
 
 
 @app.post("/message", response_model=MessageResponse)
@@ -790,8 +902,8 @@ async def send_message(request: MessageRequest):
     _engine.on_response(on_response)
 
     try:
-        # Send message
-        await _engine.send_message(request.message)
+        # Send message with source tag
+        await _engine.send_message(request.message, source=request.source)
 
         # Wait for response with timeout
         text, data = await asyncio.wait_for(
@@ -804,17 +916,26 @@ async def send_message(request: MessageRequest):
             _run_qa_validation_background(request.message, text, data)
         )
 
-        # Broadcast to all chat WebSocket clients (non-blocking)
-        asyncio.create_task(_broadcast_chat_message("user", {
-            "content": request.message,
-        }))
-        asyncio.create_task(_broadcast_chat_message("assistant", {
-            "content": text,
-            "model": data.get("model", "unknown"),
-            "delegated": data.get("delegated", False),
-            "local": data.get("local", False),
-            "latency_ms": data.get("latency_ms", 0),
-        }))
+        # Process text for gesture detection + stripping (before broadcast so all paths get clean text)
+        if _orb_state_manager:
+            text = _orb_state_manager.process_text_chunk(text)
+
+        # BROADCAST DEDUPLICATION: Suppress chat broadcast when source is
+        # "mcp" to prevent shadow conversations in Eclissi. MCP calls still
+        # trigger Scribe extraction (cache updates) but don't echo to the UI.
+        if request.source != "mcp":
+            asyncio.create_task(_broadcast_chat_message("user", {
+                "content": request.message,
+                "source": request.source,
+            }))
+            asyncio.create_task(_broadcast_chat_message("assistant", {
+                "content": text,
+                "model": data.get("model", "unknown"),
+                "delegated": data.get("delegated", False),
+                "local": data.get("local", False),
+                "latency_ms": data.get("latency_ms", 0),
+                "source": request.source,
+            }))
 
         return MessageResponse(
             text=text,
@@ -837,6 +958,48 @@ async def send_message(request: MessageRequest):
         # Remove callback
         if on_response in _engine._on_response_callbacks:
             _engine._on_response_callbacks.remove(on_response)
+
+
+@app.get("/api/cache/shared-turn")
+async def get_shared_turn_cache():
+    """
+    Read the Shared Turn Cache for Eclissi frontend widgets.
+
+    Returns the current YAML snapshot as JSON, or 204 if no cache exists.
+    """
+    from luna.cache.shared_turn import read_shared_turn
+
+    snapshot = read_shared_turn()
+    if snapshot is None:
+        return Response(status_code=204)
+
+    return {
+        "turn_id": snapshot.turn_id,
+        "timestamp": snapshot.timestamp,
+        "source": snapshot.source,
+        "is_stale": snapshot.is_stale,
+        "age_seconds": round(snapshot.age_seconds, 1),
+        "flow": {
+            "mode": snapshot.flow_mode,
+            "topic": snapshot.topic,
+            "continuity_score": snapshot.continuity_score,
+            "open_threads": snapshot.open_threads,
+        },
+        "expression": {
+            "emotional_tone": snapshot.emotional_tone,
+            "expression_hint": snapshot.expression_hint,
+            "intensity": snapshot.intensity,
+        },
+        "scribed": {
+            "facts": snapshot.facts,
+            "decisions": snapshot.decisions,
+            "actions": snapshot.actions,
+            "problems": snapshot.problems,
+            "observations": snapshot.observations,
+            "total": snapshot.total_extractions,
+        },
+        "raw_summary": snapshot.raw_summary,
+    }
 
 
 @app.get("/status", response_model=StatusResponse)
@@ -1461,18 +1624,25 @@ async def persona_stream(request: MessageRequest):
             yield f"data: {json.dumps({'type': 'error', 'message': 'Director not available'})}\n\n"
             return
 
-        # Get matrix for memory context
+        # Get matrix for memory context + search chain for dataroom/web/local
         matrix = _engine.get_actor("matrix")
         memory_items = []
         memory_context = ""
 
         try:
             # --- PHASE 1: Send context first ---
-            if matrix and matrix.is_ready:
-                # Get memory context for the query
-                memory_context = await matrix.get_context(request.message, max_tokens=1500)
+            # Use the configurable search chain (matrix + dataroom + optional sources)
+            from luna.tools.search_chain import SearchChainConfig, run_search_chain
+            _search_cfg = getattr(_engine, "_search_chain_config", None) or SearchChainConfig.default()
+            chain_results = await run_search_chain(_search_cfg, request.message, _engine)
+            if chain_results:
+                memory_context = "\n\n".join(r.get("content", "") for r in chain_results if r.get("content"))
+                logger.info(f"[STREAM] Search chain returned {len(chain_results)} results, {len(memory_context)} chars")
+            else:
+                logger.info("[STREAM] Search chain returned no results")
 
-                # Get recent memories for frontend display
+            # Get recent memories for frontend display
+            if matrix and matrix.is_ready:
                 recent = await matrix.get_recent_turns(limit=5)
                 memory_items = [
                     {
@@ -1512,7 +1682,10 @@ async def persona_stream(request: MessageRequest):
             _engine.metrics.agentic_tasks_started += 1
 
             # Emit actual routing decision to Thought Stream
-            await _engine._emit_progress(f"[{routing.path.name}] {request.message[:40]}...")
+            await _engine._emit_progress(
+                f"[{routing.path.name}] {request.message[:40]}..."
+                + (f" signals={routing.signals}" if routing.signals else "")
+            )
 
             # --- PHASE 2: Execute based on routing ---
             if routing.path == ExecutionPath.DIRECT:
@@ -1525,22 +1698,22 @@ async def persona_stream(request: MessageRequest):
                 # OBSERVE phase
                 await _engine._emit_progress("[OBSERVE] Gathering context... (1/2)")
 
-                # Execute memory retrieval if this is a memory query
+                # Execute knowledge retrieval via search chain
                 if "memory_query" in routing.signals or matrix and matrix.is_ready:
-                    await _engine._emit_progress("[THINK] Deciding: Execute memory_query...")
-                    await _engine._emit_progress("[ACT:tool] Execute memory_query...")
+                    await _engine._emit_progress("[THINK] Deciding: Execute knowledge search...")
+                    await _engine._emit_progress("[ACT:tool] Execute search chain...")
 
-                    # Re-fetch with potentially more context for memory queries
-                    if matrix and matrix.is_ready:
-                        memory_context = await matrix.get_context(
-                            request.message,
-                            max_tokens=2000,  # More context for planned queries
-                        )
+                    # Re-fetch with higher budget for planned queries
+                    _plan_cfg = getattr(_engine, "_search_chain_config", None) or SearchChainConfig.default()
+                    plan_results = await run_search_chain(_plan_cfg, request.message, _engine)
+                    if plan_results:
+                        memory_context = "\n\n".join(r.get("content", "") for r in plan_results if r.get("content"))
+                        sources = list(set(r.get("source", "?") for r in plan_results))
                         await _engine._emit_progress(
-                            f"[OK] Retrieved {len(memory_context) if memory_context else 0} chars of context"
+                            f"[OK] Retrieved {len(memory_context)} chars from {sources}"
                         )
                     else:
-                        await _engine._emit_progress("[OK] Memory not available, proceeding without")
+                        await _engine._emit_progress("[OK] No knowledge found, proceeding without")
 
                 # OBSERVE phase 2
                 await _engine._emit_progress("[OBSERVE] Gathering context... (2/2)")
@@ -1548,7 +1721,9 @@ async def persona_stream(request: MessageRequest):
                 await _engine._emit_progress("[ACT:respond] Present result to user...")
 
             # --- PHASE 3: Stream tokens ---
-            # Notify orb state manager that response is starting
+            # Notify orb state manager that response is starting.
+            # Dimensional feed (sentiment, flow, topic) is handled by CacheActor
+            # on every extraction turn — no inline feed needed here.
             if _orb_state_manager:
                 _orb_state_manager.start_response()
 
@@ -1559,12 +1734,28 @@ async def persona_stream(request: MessageRequest):
             # (prevents _handle_actor_message from double-recording)
             _engine._stream_owns_response = True
 
-            # Send generation request
+            # --- PRE-GENERATION: Reconcile tick ---
+            # If Scout flagged confabulation on a previous turn, inject
+            # a self-correction instruction into the system prompt.
+            reconcile = getattr(_engine, 'reconcile', None)
+            reconcile_instruction = reconcile.tick() if reconcile else None
+
+            system_prompt = _engine._build_system_prompt(memory_context)
+            if reconcile_instruction:
+                system_prompt += f"\n\n## Self-Correction\n{reconcile_instruction}\n"
+                logger.info("[STREAM] Reconcile instruction injected into system prompt")
+                await _engine._emit_progress("[RECONCILE] Self-correction instruction active for this turn")
+
+            # Send generation request — pass pre-fetched memory_context
+            # so Director/Assembler uses it instead of auto-fetching from Matrix only
+            # Also pass structured chain_results so Director can extract dataroom content
             msg = Message(
                 type="generate_stream",
                 payload={
                     "user_message": request.message,
-                    "system_prompt": _engine._build_system_prompt(memory_context),
+                    "system_prompt": system_prompt,
+                    "memory_context": memory_context,
+                    "chain_results": chain_results if chain_results else [],
                 },
             )
             await director.mailbox.put(msg)
@@ -1597,9 +1788,15 @@ async def persona_stream(request: MessageRequest):
             route = "local" if final_metadata.get("local") else "delegated"
             await _engine._emit_progress(f"[OK] {route}: {tokens} tokens")
 
+            final_text = "".join(full_response)
+            # Strip gesture markers from final response (detection already happened per-token)
+            if _orb_state_manager and _orb_state_manager.expression_config:
+                if _orb_state_manager.expression_config.should_strip_gestures():
+                    final_text = _orb_state_manager._strip_gestures(final_text)
+
             done_event = {
                 "type": "done",
-                "response": "".join(full_response),
+                "response": final_text,
                 "metadata": final_metadata,
             }
             yield f"data: {json.dumps(done_event)}\n\n"
@@ -1612,9 +1809,68 @@ async def persona_stream(request: MessageRequest):
             _engine.metrics.agentic_tasks_completed += 1
             _engine.metrics.messages_generated += 1
 
+            # --- POST-GENERATION: Scout inspection + Reconcile ---
+            response_text = "".join(full_response)
+
+            if response_text:
+                scout = _engine.get_actor("scout") if hasattr(_engine, 'get_actor') else None
+                if scout:
+                    context_size = len(memory_context) if memory_context else 0
+                    try:
+                        scout_report = scout.inspect(
+                            draft=response_text,
+                            query=request.message,
+                            context_size=context_size,
+                            retrieved_context=memory_context or "",
+                        )
+
+                        # Confabulation → flag for next-turn reconcile
+                        if scout_report.blocked and scout_report.recommendation == "reconcile":
+                            n_claims = len(scout_report.confabulation_data.get("unsupported_claims", [])) if scout_report.confabulation_data else 0
+                            if reconcile and scout_report.confabulation_data:
+                                reconcile.flag_confabulation(
+                                    claims=scout_report.confabulation_data.get("unsupported_claims", []),
+                                    original_query=request.message,
+                                )
+                                logger.warning(
+                                    f"[STREAM] Confabulation flagged — "
+                                    f"{n_claims} unsupported claims queued for reconcile"
+                                )
+                            await _engine._emit_progress(
+                                f"[SCOUT] Confabulation detected — {n_claims} unsupported claims, reconcile queued"
+                            )
+                        elif scout_report.blocked:
+                            # Blocked for non-confabulation reason (surrender, shallow, etc.)
+                            await _engine._emit_progress(
+                                f"[SCOUT] Blockage: {scout_report.blockage_type} "
+                                f"(tier {scout_report.overdrive_tier})"
+                            )
+                        else:
+                            # Clean pass
+                            await _engine._emit_progress("[SCOUT] Integrity check passed")
+                    except Exception as e:
+                        logger.error(f"[STREAM] Scout inspection failed: {e}")
+
+                # Check if Luna self-corrected (reconcile detection)
+                if reconcile and reconcile.did_reconcile(response_text):
+                    logger.info("[STREAM] Luna reconciled — notifying Scribe")
+                    await _engine._emit_progress("[RECONCILE] Self-correction detected — filing CORRECTION node")
+                    scribe = _engine.get_actor("scribe") if hasattr(_engine, 'get_actor') else None
+                    if scribe:
+                        from luna.actors.base import Message as ActorMessage
+                        await scribe.handle(ActorMessage(
+                            type="extract_correction",
+                            payload={
+                                "original_query": reconcile._state.original_query,
+                                "flagged_claims": reconcile._state.flagged_claims,
+                                "correction_response": response_text,
+                                "session_id": getattr(_engine, "session_id", "unknown"),
+                            }
+                        ))
+                    reconcile.clear()
+
             # Record assistant turn (Scribe skips assistant turns by design,
             # but this feeds HistoryManager + matrix storage)
-            response_text = "".join(full_response)
             if response_text:
                 await _engine.record_conversation_turn(
                     role="assistant",
@@ -2381,7 +2637,19 @@ async def memory_smart_fetch(request: SmartFetchRequest):
         ]
 
         # Permission gate: strip DOCUMENT nodes the speaker can't see
+        pre_gate_count = len(results)
         results = await _gate_results(results, source="api/memory/smart-fetch")
+
+        if not results and pre_gate_count > 0:
+            logger.warning(
+                f"SMART_FETCH_GATE: Permission gate stripped all {pre_gate_count} "
+                f"results for query='{request.query[:80]}'"
+            )
+        elif not results:
+            logger.warning(
+                f"SMART_FETCH_ZERO: get_context returned 0 nodes for "
+                f"query='{request.query[:80]}', budget={max_tokens}"
+            )
 
         # Estimate tokens used (rough: ~4 chars per token)
         total_chars = sum(len(r.get("content", "")) for r in results)
@@ -2390,7 +2658,7 @@ async def memory_smart_fetch(request: SmartFetchRequest):
         return SmartFetchResponse(nodes=results, budget_used=budget_used)
 
     except Exception as e:
-        logger.error(f"Smart fetch error: {e}")
+        logger.error(f"Smart fetch error: {e}", exc_info=True)
         return SmartFetchResponse(nodes=[], budget_used=0)
 
 
@@ -3486,9 +3754,9 @@ async def text_to_speech(request: TTSRequest):
     Uses Luna's existing Piper infrastructure — same voice as desktop.
     """
     try:
-        from voice.tts.preprocessing import preprocess_for_tts
+        from voice.tts.preprocessing import preprocess_for_speech
 
-        clean_text = preprocess_for_tts(request.text)
+        clean_text = preprocess_for_speech(request.text)
         if not clean_text.strip():
             raise HTTPException(status_code=400, detail="No speakable text after preprocessing")
 
@@ -5565,6 +5833,32 @@ async def update_orb_settings(request: OrbSettingsUpdate):
     return {"success": True, "message": "Orb settings updated"}
 
 
+class DimensionOverride(BaseModel):
+    """Manual dimension overrides from the diagnostic tool."""
+    valence: Optional[float] = None
+    arousal: Optional[float] = None
+    certainty: Optional[float] = None
+    engagement: Optional[float] = None
+    warmth: Optional[float] = None
+
+
+@app.post("/api/orb/dimensions/override")
+async def override_orb_dimensions(request: DimensionOverride):
+    """Override dimensional values from the expression pipeline diagnostic tool."""
+    overrides = {k: v for k, v in request.model_dump().items() if v is not None}
+    if _orb_state_manager:
+        _orb_state_manager.apply_dimension_override(overrides)
+    return {"success": True, "overrides": overrides}
+
+
+@app.delete("/api/orb/dimensions/override")
+async def clear_orb_dimension_overrides():
+    """Clear all dimension overrides, returning to engine-driven values."""
+    if _orb_state_manager:
+        _orb_state_manager.apply_dimension_override({})
+    return {"success": True, "message": "Overrides cleared"}
+
+
 @app.get("/slash/performance", response_model=SlashCommandResponse)
 async def slash_performance():
     """
@@ -5930,10 +6224,12 @@ async def slash_prompt():
         gap = meta.get("gap_category") or "unknown"
         tokens = meta.get("prompt_tokens", 0)
         threads = meta.get("parked_thread_count", 0)
+        register = meta.get("register_active") or "–"
+        reg_on = check(meta.get("register_injected"))
         meta_block = f"""
 **Assembler:**
   Identity: **{identity}** | Memory: **{memory}** | Gap: **{gap}**
-  Temporal: {check(meta.get('temporal_injected'))} | Voice: {check(meta.get('voice_injected'))} | Tokens: ~{tokens}
+  Temporal: {check(meta.get('temporal_injected'))} | Voice: {check(meta.get('voice_injected'))} | Register: {reg_on} ({register}) | Tokens: ~{tokens}
   Threads parked: {threads}
 """
 
@@ -5953,6 +6249,127 @@ async def slash_prompt():
         success=True,
         data=prompt_info,
         formatted=formatted,
+    )
+
+
+@app.get("/slash/register", response_model=SlashCommandResponse)
+async def slash_register_get():
+    """
+    /register - Show context register state + sovereignty debug info.
+
+    Displays: active register, confidence, weights, fired signals,
+    bridge/sovereignty info, and denied document count.
+    """
+    global _engine
+
+    if not _engine:
+        return SlashCommandResponse(
+            command="/register",
+            success=False,
+            data={"error": "Engine not initialized"},
+            formatted="**Error:** Luna engine not running.",
+        )
+
+    director = _engine.get_actor("director")
+    if not director:
+        return SlashCommandResponse(
+            command="/register",
+            success=False,
+            data={"error": "Director not found"},
+            formatted="**Error:** Director actor not available.",
+        )
+
+    state = director.get_register_state()
+    reg = state.get("register", {})
+    bridge = state.get("bridge", {})
+    intent_info = state.get("intent", {})
+    enabled = state.get("enabled", False)
+
+    active = reg.get("active", "ambient")
+    confidence = reg.get("confidence", 0.0)
+    weights = reg.get("weights", {})
+    signals = reg.get("fired_signals", [])
+    denied = state.get("denied_docs", 0)
+
+    status_icon = "🟢" if enabled else "🔴"
+
+    # Build weight bars
+    weight_lines = []
+    for name, weight in sorted(weights.items(), key=lambda x: -x[1]):
+        bar_len = int(weight * 10)
+        bar = "█" * bar_len + "░" * (10 - bar_len)
+        marker = " ◄ active" if name == active else ""
+        weight_lines.append(f"  `{name:<22}` {bar} {weight:.3f}{marker}")
+
+    weights_block = "\n".join(weight_lines) if weight_lines else "  No weights (no generation yet)"
+
+    # Bridge info
+    entity = bridge.get("entity_id")
+    if entity:
+        tier = bridge.get("luna_tier", "?")
+        dt = bridge.get("dataroom_tier", "?")
+        sov = "sovereign" if bridge.get("is_sovereign") else f"tier {dt}"
+        bridge_line = f"**{entity}** ({tier}, {sov})"
+    else:
+        bridge_line = "No entity recognized"
+
+    signals_str = ", ".join(signals) if signals else "none"
+
+    formatted = f"""{status_icon} **Register: {active}** (confidence: {confidence:.2f})
+
+**Weights:**
+{weights_block}
+
+**Fired signals:** {signals_str}
+
+**Sovereignty:**
+  Bridge: {bridge_line}
+  Denied docs: {denied}
+  Intent: {intent_info.get('mode', '?')}"""
+
+    return SlashCommandResponse(
+        command="/register",
+        success=True,
+        data=state,
+        formatted=formatted,
+    )
+
+
+@app.post("/slash/register", response_model=SlashCommandResponse)
+async def slash_register_toggle(enabled: bool):
+    """
+    Toggle context register on/off.
+
+    POST /slash/register?enabled=true  → enable
+    POST /slash/register?enabled=false → disable
+    """
+    global _engine
+
+    if not _engine:
+        return SlashCommandResponse(
+            command="/register",
+            success=False,
+            data={"error": "Engine not initialized"},
+            formatted="**Error:** Luna engine not running.",
+        )
+
+    director = _engine.get_actor("director")
+    if not director:
+        return SlashCommandResponse(
+            command="/register",
+            success=False,
+            data={"error": "Director not found"},
+            formatted="**Error:** Director actor not available.",
+        )
+
+    director.set_register_enabled(enabled)
+    status = "enabled" if enabled else "disabled"
+
+    return SlashCommandResponse(
+        command="/register",
+        success=True,
+        data={"enabled": enabled},
+        formatted=f"Context register **{status}**.",
     )
 
 
@@ -6901,6 +7318,504 @@ async def observatory_ws_proxy(websocket: WebSocket, path: str):
             await websocket.close()
         except Exception:
             pass
+
+
+# ==============================================================================
+# AiBrarian Engine API (HTTP surface for Google Sheets, Guardian, etc.)
+# ==============================================================================
+
+_aibrarian_engine = None
+
+async def _get_aibrarian_engine():
+    """Lazy-initialize the AiBrarian Engine."""
+    global _aibrarian_engine
+    if _aibrarian_engine is not None:
+        return _aibrarian_engine
+    from luna.substrate.aibrarian_engine import AiBrarianEngine
+    _project = Path(__file__).parent.parent.parent.parent
+    _aibrarian_engine = AiBrarianEngine(
+        _project / "config" / "aibrarian_registry.yaml",
+        project_root=_project,
+    )
+    await _aibrarian_engine.initialize()
+    return _aibrarian_engine
+
+
+class AiBrarianSearchRequest(BaseModel):
+    collection: str = "dataroom"
+    query: str
+    search_type: str = "hybrid"
+    limit: int = 10
+
+
+class AiBrarianIngestRequest(BaseModel):
+    collection: str = "dataroom"
+    file_path: str
+    metadata: dict = Field(default_factory=dict)
+
+
+@app.get("/api/aibrarian/list")
+async def api_aibrarian_list():
+    engine = await _get_aibrarian_engine()
+    return {"collections": engine.list_collections()}
+
+
+@app.post("/api/aibrarian/search")
+async def api_aibrarian_search(req: AiBrarianSearchRequest):
+    engine = await _get_aibrarian_engine()
+    results = await engine.search(req.collection, req.query, req.search_type, req.limit)
+    return {"results": results, "count": len(results)}
+
+
+@app.get("/api/aibrarian/{collection_key}/stats")
+async def api_aibrarian_stats(collection_key: str):
+    engine = await _get_aibrarian_engine()
+    return await engine.stats(collection_key)
+
+
+@app.post("/api/aibrarian/ingest")
+async def api_aibrarian_ingest(req: AiBrarianIngestRequest):
+    engine = await _get_aibrarian_engine()
+    doc_id = await engine.ingest(req.collection, Path(req.file_path), req.metadata)
+    return {"doc_id": doc_id, "status": "ingested" if doc_id else "skipped"}
+
+
+# --- Co-occurrence (POST — matches existing pattern) ---
+
+class AiBrarianCoOccurrenceRequest(BaseModel):
+    collection: str = "dataroom"
+    terms: str
+    limit: int = 50
+
+@app.post("/api/aibrarian/co-occurrence")
+async def api_aibrarian_co_occurrence(req: AiBrarianCoOccurrenceRequest):
+    engine = await _get_aibrarian_engine()
+    term_list = [t.strip() for t in req.terms.split(",") if t.strip()]
+    results = await engine.co_occurrence(req.collection, term_list, req.limit)
+    return {"terms": term_list, "count": len(results), "documents": results}
+
+
+# --- Document retrieval ---
+
+@app.get("/api/aibrarian/{c}/documents")
+async def api_aibrarian_list_documents(c: str, skip: int = 0, limit: int = 50):
+    engine = await _get_aibrarian_engine()
+    return await engine.list_documents(c, skip, limit)
+
+@app.get("/api/aibrarian/{c}/documents/{doc_id}")
+async def api_aibrarian_get_document(c: str, doc_id: str):
+    engine = await _get_aibrarian_engine()
+    doc = await engine.get_document(c, doc_id)
+    if not doc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+    return doc
+
+
+# --- Count & term stats ---
+
+@app.get("/api/aibrarian/{c}/count")
+async def api_aibrarian_count(c: str, q: str = "", search_type: str = "keyword"):
+    engine = await _get_aibrarian_engine()
+    n = await engine.count(c, q, search_type)
+    return {"query": q, "search_type": search_type, "count": n}
+
+@app.get("/api/aibrarian/{c}/terms")
+async def api_aibrarian_term_stats(c: str, terms: str = ""):
+    engine = await _get_aibrarian_engine()
+    term_list = [t.strip() for t in terms.split(",") if t.strip()]
+    counts = await engine.term_stats(c, term_list)
+    return {"counts": counts}
+
+
+# --- Entities ---
+
+@app.get("/api/aibrarian/{c}/entities/top")
+async def api_aibrarian_top_entities(c: str, limit: int = 50, sample_size: int = 100):
+    engine = await _get_aibrarian_engine()
+    return await engine.top_entities(c, limit, sample_size)
+
+@app.get("/api/aibrarian/{c}/entities/search")
+async def api_aibrarian_search_entity(c: str, name: str = "", limit: int = 50):
+    engine = await _get_aibrarian_engine()
+    return await engine.search_entity(c, name, limit)
+
+@app.get("/api/aibrarian/{c}/entities/{doc_id}")
+async def api_aibrarian_document_entities(c: str, doc_id: str):
+    engine = await _get_aibrarian_engine()
+    return await engine.document_entities(c, doc_id)
+
+
+# --- Timeline ---
+
+@app.get("/api/aibrarian/{c}/timeline")
+async def api_aibrarian_timeline(c: str, q: str = "", limit: int = 100, confidence: str = ""):
+    engine = await _get_aibrarian_engine()
+    conf = confidence if confidence else None
+    return await engine.timeline(c, q, limit, conf)
+
+@app.get("/api/aibrarian/{c}/timeline/range")
+async def api_aibrarian_timeline_range(c: str, start: str = "", end: str = "", limit: int = 100, confidence: str = ""):
+    engine = await _get_aibrarian_engine()
+    conf = confidence if confidence else None
+    return await engine.timeline_range(c, start, end, limit, conf)
+
+@app.get("/api/aibrarian/{c}/timeline/{doc_id}")
+async def api_aibrarian_document_timeline(c: str, doc_id: str, confidence: str = ""):
+    engine = await _get_aibrarian_engine()
+    conf = confidence if confidence else None
+    return await engine.document_timeline(c, doc_id, conf)
+
+
+# --- Analytics ---
+
+@app.get("/api/aibrarian/{c}/analytics/frequency")
+async def api_aibrarian_word_frequency(c: str, q: str = "", top: int = 50):
+    engine = await _get_aibrarian_engine()
+    return await engine.word_frequency(c, q, top)
+
+@app.get("/api/aibrarian/{c}/analytics/ngrams")
+async def api_aibrarian_ngrams(c: str, q: str = "", n: int = 2, top: int = 30):
+    engine = await _get_aibrarian_engine()
+    return await engine.ngrams(c, q, n, top)
+
+@app.get("/api/aibrarian/{c}/analytics/wordcloud")
+async def api_aibrarian_wordcloud(c: str, q: str = "", top: int = 100):
+    engine = await _get_aibrarian_engine()
+    return await engine.wordcloud(c, q, top)
+
+@app.get("/api/aibrarian/{c}/analytics/compare")
+async def api_aibrarian_compare_terms(c: str, terms: str = "", context_window: int = 5, top: int = 20):
+    engine = await _get_aibrarian_engine()
+    term_list = [t.strip() for t in terms.split(",") if t.strip()]
+    return await engine.compare_terms(c, term_list, context_window, top)
+
+
+# --- Similarity ---
+
+@app.get("/api/aibrarian/{c}/similar/{doc_id}")
+async def api_aibrarian_similar(c: str, doc_id: str, limit: int = 10):
+    engine = await _get_aibrarian_engine()
+    results = await engine.similar(c, doc_id, limit)
+    return {"source_doc": doc_id, "similar_documents": results, "count": len(results)}
+
+@app.get("/api/aibrarian/{c}/similarity/batch")
+async def api_aibrarian_batch_similarity(c: str, doc_ids: str = ""):
+    engine = await _get_aibrarian_engine()
+    id_list = [d.strip() for d in doc_ids.split(",") if d.strip()]
+    return await engine.batch_similarity(c, id_list)
+
+
+# --- Export ---
+
+@app.get("/api/aibrarian/{c}/export/csv")
+async def api_aibrarian_export_csv(c: str, q: str = "", limit: int = 1000):
+    engine = await _get_aibrarian_engine()
+    import csv, io
+    from fastapi.responses import StreamingResponse
+    results = await engine.search(c, q, "hybrid", limit)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["doc_id", "title", "filename", "category", "score", "snippet"])
+    for r in results:
+        writer.writerow([r.get("doc_id"), r.get("title"), r.get("filename"),
+                         r.get("category"), r.get("score"), r.get("snippet", "")[:300]])
+    output.seek(0)
+    safe_q = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in q)[:50]
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="aibrarian_{safe_q}.csv"'},
+    )
+
+@app.get("/api/aibrarian/{c}/export/json")
+async def api_aibrarian_export_json(c: str, q: str = "", limit: int = 1000):
+    engine = await _get_aibrarian_engine()
+    return await engine.export_search(c, q, limit, "json")
+
+@app.get("/api/aibrarian/{c}/export/document/{doc_id}")
+async def api_aibrarian_export_document(c: str, doc_id: str, fmt: str = "json"):
+    engine = await _get_aibrarian_engine()
+    doc = await engine.get_document(c, doc_id)
+    if not doc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+    if fmt == "txt":
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            iter([doc.get("full_text", "")]),
+            media_type="text/plain",
+            headers={"Content-Disposition": f'attachment; filename="{doc_id}.txt"'},
+        )
+    return doc
+
+
+# --- Read-only SQL ---
+
+@app.get("/api/aibrarian/{c}/sql")
+async def api_aibrarian_sql(c: str, q: str = "", limit: int = 100):
+    engine = await _get_aibrarian_engine()
+    try:
+        return await engine.execute_sql(c, q, limit)
+    except PermissionError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================================================================
+# APERTURE & LIBRARY COGNITION ENDPOINTS
+# =====================================================================
+
+# --- Shared state ---
+_aperture_manager = None
+_collection_lock_in_engine = None
+_annotation_engine = None
+
+
+def _get_aperture_manager():
+    global _aperture_manager
+    if _aperture_manager is None:
+        from luna.context.aperture import ApertureManager
+        _aperture_manager = ApertureManager()
+    return _aperture_manager
+
+
+async def _get_lock_in_engine():
+    global _collection_lock_in_engine
+    if _collection_lock_in_engine is not None:
+        return _collection_lock_in_engine
+
+    from luna.substrate.collection_lock_in import CollectionLockInEngine
+
+    if _engine is None:
+        return None
+
+    matrix = _engine.get_actor("matrix")
+    db = getattr(matrix, "_matrix", None)
+    if db is None:
+        return None
+    mem_db = getattr(db, "db", None)
+    if mem_db is None:
+        return None
+
+    _collection_lock_in_engine = CollectionLockInEngine(mem_db)
+    await _collection_lock_in_engine.ensure_table()
+
+    # Wire into aibrarian engine if available
+    if _aibrarian_engine is not None:
+        _aibrarian_engine.set_lock_in_engine(_collection_lock_in_engine)
+
+    return _collection_lock_in_engine
+
+
+async def _get_annotation_engine():
+    global _annotation_engine
+    if _annotation_engine is not None:
+        return _annotation_engine
+
+    from luna.substrate.collection_annotations import AnnotationEngine
+
+    if _engine is None:
+        return None
+
+    matrix_actor = _engine.get_actor("matrix")
+    matrix = getattr(matrix_actor, "_matrix", None)
+    if matrix is None:
+        return None
+    mem_db = getattr(matrix, "db", None)
+    if mem_db is None:
+        return None
+
+    lock_in = await _get_lock_in_engine()
+    _annotation_engine = AnnotationEngine(mem_db, memory_matrix=matrix, lock_in_engine=lock_in)
+    await _annotation_engine.ensure_table()
+    return _annotation_engine
+
+
+# --- Aperture Endpoints ---
+
+@app.get("/api/aperture")
+async def api_aperture_get():
+    """Get current aperture state."""
+    mgr = _get_aperture_manager()
+    return mgr.state.to_dict()
+
+
+class ApertureSetRequest(BaseModel):
+    preset: Optional[str] = None
+    angle: Optional[int] = None
+    focus_tags: Optional[list[str]] = None
+    active_project: Optional[str] = None
+    active_collection_keys: Optional[list[str]] = None
+
+
+@app.post("/api/aperture")
+async def api_aperture_set(req: ApertureSetRequest):
+    """Set aperture. Preset overrides angle."""
+    from luna.context.aperture import AperturePreset
+    mgr = _get_aperture_manager()
+
+    if req.preset:
+        try:
+            mgr.set_preset(AperturePreset(req.preset))
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=f"Unknown preset: {req.preset}")
+    elif req.angle is not None:
+        mgr.set_angle(req.angle)
+
+    if req.focus_tags is not None:
+        mgr.set_focus_tags(req.focus_tags)
+    if req.active_project is not None:
+        mgr.set_active_project(req.active_project)
+    if req.active_collection_keys is not None:
+        mgr.set_active_collections(req.active_collection_keys)
+
+    return mgr.state.to_dict()
+
+
+@app.post("/api/aperture/reset")
+async def api_aperture_reset():
+    """Clear user override, revert to app default."""
+    mgr = _get_aperture_manager()
+    mgr.clear_override()
+    return mgr.state.to_dict()
+
+
+# --- Collection Lock-In Endpoints ---
+
+@app.get("/api/collections/lock-in")
+async def api_collections_lock_in():
+    """Get lock-in scores for all tracked collections."""
+    engine = await _get_lock_in_engine()
+    if engine is None:
+        return {"collections": [], "error": "Engine not ready"}
+    records = await engine.get_all()
+    return {
+        "collections": [
+            {
+                "collection_key": r.collection_key,
+                "lock_in": r.lock_in,
+                "state": r.state,
+                "access_count": r.access_count,
+                "annotation_count": r.annotation_count,
+                "connected_collections": r.connected_collections,
+                "entity_overlap_count": r.entity_overlap_count,
+                "last_accessed_at": r.last_accessed_at,
+            }
+            for r in records
+        ]
+    }
+
+
+@app.get("/api/collections/{key}/lock-in")
+async def api_collection_lock_in_detail(key: str):
+    """Get lock-in detail for a single collection."""
+    engine = await _get_lock_in_engine()
+    if engine is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    record = await engine.get_lock_in(key)
+    if record is None:
+        return {"collection_key": key, "tracked": False}
+    return {
+        "collection_key": record.collection_key,
+        "tracked": True,
+        "lock_in": record.lock_in,
+        "state": record.state,
+        "access_count": record.access_count,
+        "annotation_count": record.annotation_count,
+        "connected_collections": record.connected_collections,
+        "entity_overlap_count": record.entity_overlap_count,
+        "last_accessed_at": record.last_accessed_at,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+# --- Annotation Endpoints ---
+
+class AnnotationCreateRequest(BaseModel):
+    collection_key: str
+    doc_id: str
+    annotation_type: str  # bookmark, note, flag
+    content: Optional[str] = None
+    chunk_index: Optional[int] = None
+    original_text_preview: str = ""
+
+
+@app.post("/api/annotations")
+async def api_annotation_create(req: AnnotationCreateRequest):
+    """Create an annotation on a collection document."""
+    from luna.substrate.collection_annotations import AnnotationType
+    engine = await _get_annotation_engine()
+    if engine is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    try:
+        ann_type = AnnotationType(req.annotation_type)
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Unknown type: {req.annotation_type}")
+
+    annotation_id = await engine.create(
+        collection_key=req.collection_key,
+        doc_id=req.doc_id,
+        annotation_type=ann_type,
+        content=req.content,
+        chunk_index=req.chunk_index,
+        original_text_preview=req.original_text_preview,
+    )
+    annotation = await engine.get(annotation_id)
+    return {
+        "annotation_id": annotation_id,
+        "matrix_node_id": annotation.matrix_node_id if annotation else None,
+    }
+
+
+@app.get("/api/annotations")
+async def api_annotations_list(collection: str, limit: int = 100):
+    """List annotations for a collection."""
+    engine = await _get_annotation_engine()
+    if engine is None:
+        return {"annotations": []}
+    annotations = await engine.list_by_collection(collection, limit=limit)
+    return {
+        "annotations": [
+            {
+                "id": a.id,
+                "collection_key": a.collection_key,
+                "doc_id": a.doc_id,
+                "chunk_index": a.chunk_index,
+                "annotation_type": a.annotation_type,
+                "content": a.content,
+                "matrix_node_id": a.matrix_node_id,
+                "created_at": a.created_at,
+            }
+            for a in annotations
+        ]
+    }
+
+
+@app.get("/api/annotations/bridged")
+async def api_annotations_bridged():
+    """Get collections that have annotations creating Matrix nodes."""
+    engine = await _get_annotation_engine()
+    if engine is None:
+        return {"bridged": []}
+    return {"bridged": await engine.get_bridged_collections()}
+
+
+@app.delete("/api/annotations/{annotation_id}")
+async def api_annotation_delete(annotation_id: str):
+    """Delete an annotation (Matrix node is preserved)."""
+    engine = await _get_annotation_engine()
+    if engine is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    deleted = await engine.delete(annotation_id)
+    return {"deleted": deleted}
 
 
 # Serve main Eclissi frontend at / (MUST be last — catch-all mount)

@@ -118,6 +118,34 @@ except ImportError:
     ALL_DATAROOM_TOOLS = []
     def register_dataroom_tools(registry): pass
 
+# Aperture & Library Cognition tools
+try:
+    from .aperture_tools import (
+        aperture_get_tool,
+        aperture_set_tool,
+        collection_lock_in_tool,
+        annotate_tool,
+        register_aperture_tools,
+        set_aperture_manager,
+        get_aperture_manager,
+        set_lock_in_engine as set_aperture_lock_in_engine,
+        get_lock_in_engine as get_aperture_lock_in_engine,
+        set_annotation_engine,
+        get_annotation_engine,
+        ALL_APERTURE_TOOLS,
+    )
+    APERTURE_TOOLS_AVAILABLE = True
+except ImportError:
+    APERTURE_TOOLS_AVAILABLE = False
+    ALL_APERTURE_TOOLS = []
+    def register_aperture_tools(registry): pass
+    def set_aperture_manager(m): pass
+    def get_aperture_manager(): return None
+    def set_aperture_lock_in_engine(e): pass
+    def get_aperture_lock_in_engine(): return None
+    def set_annotation_engine(e): pass
+    def get_annotation_engine(): return None
+
 __all__ = [
     # Core classes
     "Tool",
@@ -156,6 +184,16 @@ __all__ = [
     "register_dataroom_tools",
     "ALL_DATAROOM_TOOLS",
     "DATAROOM_TOOLS_AVAILABLE",
+    # Aperture tools
+    "register_aperture_tools",
+    "set_aperture_manager",
+    "get_aperture_manager",
+    "set_aperture_lock_in_engine",
+    "get_aperture_lock_in_engine",
+    "set_annotation_engine",
+    "get_annotation_engine",
+    "ALL_APERTURE_TOOLS",
+    "APERTURE_TOOLS_AVAILABLE",
 ]
 
 
@@ -175,4 +213,5 @@ def create_default_registry() -> ToolRegistry:
     register_eden_tools(registry)  # Will no-op if Eden not available
     register_qa_tools(registry)  # Will no-op if QA not available
     register_dataroom_tools(registry)  # Will no-op if not available
+    register_aperture_tools(registry)  # Will no-op if not available
     return registry

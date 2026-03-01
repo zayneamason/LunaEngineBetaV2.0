@@ -787,14 +787,19 @@ class AgentLoop:
                 var_name = f"tool_result_{action.tool}"
                 self.working_context.variables[var_name] = result.output
 
+            import json as _json
+
             if isinstance(result.output, str):
-                output_str = result.output[:500]
-                if len(result.output) > 500:
-                    output_str += f"... ({len(result.output)} chars total)"
-            elif isinstance(result.output, dict):
-                output_str = str(result.output)
-            elif isinstance(result.output, list):
-                output_str = f"[{len(result.output)} items]"
+                output_str = result.output[:3000]
+                if len(result.output) > 3000:
+                    output_str += f"\n... ({len(result.output)} chars total)"
+            elif isinstance(result.output, (dict, list)):
+                try:
+                    output_str = _json.dumps(result.output, default=str, ensure_ascii=False)
+                    if len(output_str) > 4000:
+                        output_str = output_str[:4000] + f"\n... (truncated, {len(output_str)} chars total)"
+                except (TypeError, ValueError):
+                    output_str = str(result.output)[:2000]
             else:
                 output_str = str(result.output)
 

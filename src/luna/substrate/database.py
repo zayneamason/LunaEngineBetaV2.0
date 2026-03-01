@@ -111,6 +111,7 @@ class MemoryDatabase:
         # Run migrations for existing databases
         await self._migrate_scope_columns()
         await self._migrate_ambassador_tables()
+        await self._migrate_aperture_tables()
 
         logger.debug("Schema loaded successfully")
 
@@ -170,6 +171,65 @@ class MemoryDatabase:
             logger.info("Migration: created ambassador_protocol and ambassador_audit_log tables")
         except Exception as e:
             logger.debug(f"Ambassador migration skip: {e}")
+
+    async def _migrate_aperture_tables(self) -> None:
+        """Create aperture & library cognition tables if missing (v2.3 migration)."""
+        tables_to_check = [
+            ("collection_lock_in", """
+                CREATE TABLE IF NOT EXISTS collection_lock_in (
+                    collection_key TEXT PRIMARY KEY,
+                    lock_in REAL DEFAULT 0.15,
+                    state TEXT DEFAULT 'drifting',
+                    access_count INTEGER DEFAULT 0,
+                    annotation_count INTEGER DEFAULT 0,
+                    connected_collections INTEGER DEFAULT 0,
+                    entity_overlap_count INTEGER DEFAULT 0,
+                    last_accessed_at TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """),
+            ("collection_annotations", """
+                CREATE TABLE IF NOT EXISTS collection_annotations (
+                    id TEXT PRIMARY KEY,
+                    collection_key TEXT NOT NULL,
+                    doc_id TEXT NOT NULL,
+                    chunk_index INTEGER,
+                    annotation_type TEXT NOT NULL,
+                    content TEXT,
+                    matrix_node_id TEXT,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """),
+        ]
+
+        for table_name, create_sql in tables_to_check:
+            try:
+                cursor = await self._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,),
+                )
+                if not await cursor.fetchone():
+                    await self._connection.execute(create_sql)
+                    logger.info(f"Migration: created {table_name} table")
+            except Exception as e:
+                logger.debug(f"Migration skip for {table_name}: {e}")
+
+        # Create indexes
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_coll_lock_in_state ON collection_lock_in(state)",
+            "CREATE INDEX IF NOT EXISTS idx_coll_lock_in_score ON collection_lock_in(lock_in DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_annotations_collection ON collection_annotations(collection_key)",
+            "CREATE INDEX IF NOT EXISTS idx_annotations_type ON collection_annotations(annotation_type)",
+            "CREATE INDEX IF NOT EXISTS idx_annotations_doc ON collection_annotations(collection_key, doc_id)",
+        ]
+        for idx_sql in indexes:
+            try:
+                await self._connection.execute(idx_sql)
+            except Exception as e:
+                logger.debug(f"Aperture index skip: {e}")
+
+        await self._connection.commit()
 
     async def close(self) -> None:
         """

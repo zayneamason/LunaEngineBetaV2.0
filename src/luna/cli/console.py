@@ -379,6 +379,10 @@ class LunaConsole:
         elif cmd == "mode":
             self._cmd_mode()
 
+        elif cmd == "register":
+            arg = parts[1].strip().lower() if len(parts) > 1 else ""
+            self._cmd_register(arg)
+
         else:
             console.print(ChatUI.system_notice(f"Unknown command: /{cmd}"))
 
@@ -401,6 +405,12 @@ class LunaConsole:
   [yellow]/cloud[/yellow]     Fallback to Claude only
   [yellow]/hybrid[/yellow]    Qwen + Claude delegation (<REQ_CLAUDE>)
   [yellow]/mode[/yellow]      Show current inference mode
+
+[bold cyan]Diagnostics[/bold cyan]
+
+  [yellow]/register[/yellow]       Show register state + sovereignty debug
+  [yellow]/register on[/yellow]    Enable context register injection
+  [yellow]/register off[/yellow]   Disable context register injection
 
 [dim]Luna's mind runs locally. Claude is her research assistant.[/dim]
 """
@@ -499,6 +509,84 @@ class LunaConsole:
             if stats["total_generations"] > 0:
                 console.print(f"  Local generations: {stats['local_generations']}")
                 console.print(f"  Delegated to Claude: {stats['delegated_generations']}")
+        console.print()
+
+    def _cmd_register(self, arg: str = ""):
+        """Toggle and debug context register (conversational posture)."""
+        director = self.engine.get_actor("director")
+        if not director:
+            console.print(ChatUI.system_notice("[red]Director not available[/red]"))
+            return
+
+        # Handle toggle
+        if arg == "on":
+            director.set_register_enabled(True)
+            console.print(ChatUI.system_notice(
+                "Context register [bold green]enabled[/bold green]"
+            ))
+            return
+        elif arg == "off":
+            director.set_register_enabled(False)
+            console.print(ChatUI.system_notice(
+                "Context register [bold red]disabled[/bold red]"
+            ))
+            return
+
+        # Show debug state
+        state = director.get_register_state()
+        enabled = state.get("enabled", False)
+        reg = state.get("register", {})
+        bridge = state.get("bridge", {})
+        intent_info = state.get("intent", {})
+        denied = state.get("denied_docs", 0)
+
+        active = reg.get("active", "ambient")
+        confidence = reg.get("confidence", 0.0)
+        weights = reg.get("weights", {})
+        signals = reg.get("fired_signals", [])
+
+        # Status line
+        status_tag = "[bold green]ENABLED[/bold green]" if enabled else "[bold red]DISABLED[/bold red]"
+        console.print()
+        console.print(
+            f"  [bold cyan]Register:[/bold cyan] "
+            f"[bold]{active}[/bold] "
+            f"(confidence: {confidence:.2f})  {status_tag}"
+        )
+        console.print()
+
+        # Weight bars
+        console.print("  [dim]Weights:[/dim]")
+        for name, weight in sorted(weights.items(), key=lambda x: -x[1]):
+            bar_len = int(weight * 10)
+            bar = "▓" * bar_len + "░" * (10 - bar_len)
+            marker = "  ◄ active" if name == active else ""
+            style = "bold bright_cyan" if name == active else "dim"
+            console.print(
+                f"    [{style}]{name:<22} {bar}  {weight:.3f}{marker}[/{style}]"
+            )
+        console.print()
+
+        # Fired signals
+        if signals:
+            console.print(f"  [dim]Fired signals:[/dim] [yellow]{', '.join(signals)}[/yellow]")
+        else:
+            console.print("  [dim]Fired signals:[/dim] [dim]none (no generation yet)[/dim]")
+        console.print()
+
+        # Sovereignty / bridge info
+        console.print("  [dim]Sovereignty:[/dim]")
+        entity = bridge.get("entity_id")
+        if entity:
+            tier_label = bridge.get("luna_tier", "?")
+            dt = bridge.get("dataroom_tier", "?")
+            sov = "[green]sovereign[/green]" if bridge.get("is_sovereign") else f"tier {dt}"
+            console.print(f"    Bridge: [bold]{entity}[/bold] ({tier_label}, {sov})")
+        else:
+            console.print("    Bridge: [dim]no entity recognized[/dim]")
+
+        console.print(f"    Denied docs: {denied}")
+        console.print(f"    Intent: {intent_info.get('mode', '?')}")
         console.print()
 
     async def run(self):

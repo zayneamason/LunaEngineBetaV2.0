@@ -46,7 +46,7 @@ os.environ.setdefault("LUNA_MCP_API_URL", "http://localhost:8742")
 from mcp.server.fastmcp import FastMCP
 
 # Import tool modules
-from luna_mcp.tools import filesystem, memory, state, git, forge, qa, eden
+from luna_mcp.tools import filesystem, memory, state, git, forge, qa, eden, aibrarian
 from luna_mcp.observatory import tools as observatory
 
 # Import auto-session functions
@@ -1285,6 +1285,305 @@ async def observatory_entity_review_quest() -> str:
     import json
     result = await observatory.tool_observatory_entity_review_quest()
     return json.dumps(result, indent=2, default=str)
+
+
+# ==============================================================================
+# AiBrarian Engine Tools
+# ==============================================================================
+
+@mcp.tool()
+async def aibrarian_list() -> str:
+    """List all available document collections with connection status."""
+    return await aibrarian.aibrarian_list_impl()
+
+@mcp.tool()
+async def aibrarian_search(collection: str, query: str, search_type: str = "hybrid", limit: int = 10) -> str:
+    """Search a document collection using keyword, semantic, or hybrid (RRF) search.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        query: Search query
+        search_type: "keyword", "semantic", or "hybrid" (default)
+        limit: Max results (default 10)
+    """
+    return await aibrarian.aibrarian_search_impl(collection, query, search_type, limit)
+
+@mcp.tool()
+async def aibrarian_similar(collection: str, doc_id: str, limit: int = 5) -> str:
+    """Find documents similar to a given document.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        doc_id: Document ID to find similar docs for
+        limit: Max results (default 5)
+    """
+    return await aibrarian.aibrarian_similar_impl(collection, doc_id, limit)
+
+@mcp.tool()
+async def aibrarian_co_occurrence(collection: str, terms: str, limit: int = 20) -> str:
+    """Find documents containing ALL comma-separated terms.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        terms: Comma-separated terms (e.g., "Kinoni, solar, grant")
+        limit: Max results (default 20)
+    """
+    return await aibrarian.aibrarian_co_occurrence_impl(collection, terms, limit)
+
+@mcp.tool()
+async def aibrarian_stats(collection: str) -> str:
+    """Get statistics for a collection (document count, chunks, words, extractions).
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+    """
+    return await aibrarian.aibrarian_stats_impl(collection)
+
+@mcp.tool()
+async def aibrarian_ingest(collection: str, file_path: str) -> str:
+    """Ingest a single document into a collection (read, chunk, embed).
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        file_path: Absolute path to file
+    """
+    return await aibrarian.aibrarian_ingest_impl(collection, file_path)
+
+@mcp.tool()
+async def aibrarian_ingest_directory(collection: str, directory: str, recursive: bool = True) -> str:
+    """Ingest all supported files from a directory into a collection.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        directory: Path to directory
+        recursive: Recurse into subdirectories (default True)
+    """
+    return await aibrarian.aibrarian_ingest_dir_impl(collection, directory, recursive)
+
+
+# --- Document Retrieval ---
+
+@mcp.tool()
+async def aibrarian_get_document(collection: str, doc_id: str) -> str:
+    """Retrieve a full document by ID.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        doc_id: Document UUID
+    """
+    return await aibrarian.aibrarian_get_document_impl(collection, doc_id)
+
+@mcp.tool()
+async def aibrarian_list_documents(collection: str, skip: int = 0, limit: int = 50) -> str:
+    """List documents in a collection with pagination.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        skip: Offset (default 0)
+        limit: Max results (default 50)
+    """
+    return await aibrarian.aibrarian_list_documents_impl(collection, skip, limit)
+
+
+# --- Count & Term Stats ---
+
+@mcp.tool()
+async def aibrarian_count(collection: str, query: str, search_type: str = "keyword") -> str:
+    """Count documents matching a query without returning results.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        query: Search query
+        search_type: "keyword" or "semantic" (default "keyword")
+    """
+    return await aibrarian.aibrarian_count_impl(collection, query, search_type)
+
+@mcp.tool()
+async def aibrarian_term_stats(collection: str, terms: str) -> str:
+    """Get document counts for multiple comma-separated terms.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        terms: Comma-separated terms (e.g., "Trump,Clinton,Maxwell")
+    """
+    return await aibrarian.aibrarian_term_stats_impl(collection, terms)
+
+
+# --- Entities ---
+
+@mcp.tool()
+async def aibrarian_top_entities(collection: str, limit: int = 50) -> str:
+    """Get top persons and organizations across a sample of documents.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        limit: Max entities per type (default 50)
+    """
+    return await aibrarian.aibrarian_top_entities_impl(collection, limit)
+
+@mcp.tool()
+async def aibrarian_search_entity(collection: str, name: str, limit: int = 50) -> str:
+    """Find documents mentioning a specific entity.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        name: Entity name to search for
+        limit: Max documents (default 50)
+    """
+    return await aibrarian.aibrarian_search_entity_impl(collection, name, limit)
+
+@mcp.tool()
+async def aibrarian_document_entities(collection: str, doc_id: str) -> str:
+    """Extract persons, organizations, and dates from a specific document.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        doc_id: Document UUID
+    """
+    return await aibrarian.aibrarian_document_entities_impl(collection, doc_id)
+
+
+# --- Timeline ---
+
+@mcp.tool()
+async def aibrarian_timeline(collection: str, query: str, limit: int = 100, confidence: str = "") -> str:
+    """Extract dates from documents matching a search query.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        query: Search query
+        limit: Max events (default 100)
+        confidence: Filter by "high", "medium", or "low" (empty = all)
+    """
+    conf = confidence if confidence else None
+    return await aibrarian.aibrarian_timeline_impl(collection, query, limit, conf)
+
+
+# --- Analytics ---
+
+@mcp.tool()
+async def aibrarian_word_frequency(collection: str, query: str, top: int = 50) -> str:
+    """Word frequency analysis on documents matching a search query.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        query: Search query
+        top: Number of top words (default 50)
+    """
+    return await aibrarian.aibrarian_word_frequency_impl(collection, query, top)
+
+@mcp.tool()
+async def aibrarian_ngrams(collection: str, query: str, n: int = 2, top: int = 30) -> str:
+    """N-gram (phrase) analysis on matching documents.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        query: Search query
+        n: N-gram size (2=bigrams, 3=trigrams, default 2)
+        top: Number of top n-grams (default 30)
+    """
+    return await aibrarian.aibrarian_ngrams_impl(collection, query, n, top)
+
+
+# --- SQL & Export ---
+
+@mcp.tool()
+async def aibrarian_sql(collection: str, query: str, limit: int = 100) -> str:
+    """Execute read-only SQL (SELECT only) against a collection's database.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        query: SQL SELECT query
+        limit: Max rows (default 100)
+    """
+    return await aibrarian.aibrarian_sql_impl(collection, query, limit)
+
+@mcp.tool()
+async def aibrarian_export_search(collection: str, query: str, limit: int = 1000, fmt: str = "json") -> str:
+    """Export search results as JSON or CSV.
+
+    Args:
+        collection: Registry key (e.g., "dataroom")
+        query: Search query
+        limit: Max results (default 1000)
+        fmt: "json" or "csv" (default "json")
+    """
+    return await aibrarian.aibrarian_export_search_impl(collection, query, limit, fmt)
+
+
+# ==============================================================================
+# Bridge Tools (Desktop ↔ Code)
+# ==============================================================================
+
+@mcp.tool()
+async def luna_task_create(
+    title: str,
+    description: str,
+    priority: str = "medium",
+    tags: Optional[List[str]] = None,
+    related_files: Optional[List[str]] = None,
+) -> str:
+    """Create a task for Claude Code to pick up and execute.
+
+    Args:
+        title: Short task title (what needs to be done)
+        description: Full description with context and requirements
+        priority: low, medium, high, or critical (default: medium)
+        tags: Optional tags for categorization (e.g., ["bug", "scribe"])
+        related_files: Optional list of relevant file paths
+    """
+    from luna_mcp.tools.bridge import task_create
+    return await task_create(title, description, priority, tags, related_files)
+
+
+@mcp.tool()
+async def luna_task_status(
+    task_id: Optional[str] = None,
+    status_filter: Optional[str] = None,
+) -> str:
+    """Check status of bridge tasks. No args = all tasks.
+
+    Args:
+        task_id: Specific task ID to check (optional)
+        status_filter: Filter by status: pending, claimed, in_progress, completed, failed (optional)
+    """
+    from luna_mcp.tools.bridge import task_list, task_result
+    if task_id:
+        return await task_result(task_id)
+    return await task_list(status_filter)
+
+
+@mcp.tool()
+async def luna_task_result(task_id: str) -> str:
+    """Get the result of a completed bridge task.
+
+    Args:
+        task_id: The task ID to get results for
+    """
+    from luna_mcp.tools.bridge import task_result
+    return await task_result(task_id)
+
+
+@mcp.tool()
+async def luna_handoff_snapshot() -> str:
+    """Create a session handoff snapshot for Claude Code to resume.
+
+    Captures: current topic, flow state, recent turns, consciousness,
+    pending tasks, and expression state. Expires after 1 hour.
+    """
+    from luna_mcp.tools.bridge import handoff_create_snapshot
+    return await handoff_create_snapshot(source="desktop")
+
+
+@mcp.tool()
+async def luna_handoff_read() -> str:
+    """Read the latest handoff snapshot (created by Desktop or Code).
+
+    Returns the full context snapshot including topic, recent turns,
+    consciousness state, and pending tasks.
+    """
+    from luna_mcp.tools.bridge import handoff_read_snapshot
+    return await handoff_read_snapshot()
 
 
 # ==============================================================================

@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import httpx
+import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -83,6 +84,57 @@ async def check_engine_health() -> bool:
             return response.status_code == 200
     except (httpx.ConnectError, httpx.TimeoutException):
         return False
+
+
+# ==============================================================================
+# Shared Turn Cache Reader
+# ==============================================================================
+
+# Resolve cache path relative to the Luna Engine project root
+_ENGINE_ROOT = Path(__file__).parent.parent.parent.resolve()
+_SHARED_TURN_CACHE_PATH = _ENGINE_ROOT / "data" / "cache" / "shared_turn.yaml"
+
+
+def _read_shared_turn_cache() -> dict:
+    """Read Shared Turn Cache and return enrichment fields.
+
+    Returns a dict of extra state fields to merge into context/detect responses.
+    Returns empty dict if cache doesn't exist or is stale (> 60s).
+    """
+    if not _SHARED_TURN_CACHE_PATH.exists():
+        return {}
+
+    try:
+        with open(_SHARED_TURN_CACHE_PATH) as f:
+            data = yaml.safe_load(f)
+
+        if not data or not isinstance(data, dict):
+            return {}
+
+        # Check staleness (allow 60s for MCP — longer than engine-side TTL)
+        ts = data.get("timestamp", 0)
+        if ts and (time.time() - ts) > 60:
+            return {}
+
+        flow = data.get("flow", {})
+        expression = data.get("expression", {})
+        scribed = data.get("scribed", {})
+
+        # Count total extractions
+        total = sum(len(scribed.get(k, [])) for k in ("facts", "decisions", "actions", "problems", "observations"))
+
+        return {
+            "cache_topic": flow.get("topic", ""),
+            "cache_flow_mode": flow.get("mode", "FLOW"),
+            "cache_continuity": flow.get("continuity_score", 1.0),
+            "cache_emotional_tone": expression.get("emotional_tone", "neutral"),
+            "cache_summary": data.get("raw_summary", ""),
+            "cache_extractions": total,
+            "cache_source": data.get("source", "unknown"),
+        }
+    except Exception as e:
+        logger.warning(f"Failed to read shared turn cache: {e}")
+        return {}
 
 
 # ==============================================================================
@@ -351,12 +403,15 @@ async def detect_context(request: DetectContextRequest):
         )
 
     try:
-        # Call the main engine API
+        # Call the main engine API (source=mcp suppresses Eclissi broadcast)
         result = await call_engine(
             "POST",
             "/message",
-            json={"message": request.message, "timeout": 30.0}
+            json={"message": request.message, "timeout": 30.0, "source": "mcp"}
         )
+
+        # Enrich with Shared Turn Cache context
+        cache_context = _read_shared_turn_cache()
 
         return DetectContextResponse(
             response=result.get("text", ""),
@@ -364,7 +419,8 @@ async def detect_context(request: DetectContextRequest):
                 "model": result.get("model", "unknown"),
                 "delegated": result.get("delegated", False),
                 "local": result.get("local", False),
-                "engine_connected": True
+                "engine_connected": True,
+                **cache_context,
             },
             memory_context=[],
             system_prompt=""

@@ -330,3 +330,45 @@ CREATE TABLE IF NOT EXISTS tuning_iterations (
 CREATE INDEX IF NOT EXISTS idx_tuning_sessions_started ON tuning_sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tuning_iterations_session ON tuning_iterations(session_id);
 CREATE INDEX IF NOT EXISTS idx_tuning_iterations_score ON tuning_iterations(score DESC);
+
+-- ============================================================================
+-- APERTURE & LIBRARY COGNITION TABLES
+-- Collection-level lock-in and annotation bridge system
+-- ============================================================================
+
+-- Collection lock-in: Luna's internal state about external Aibrarian collections
+-- Lives in engine DB, NOT in individual collection databases
+CREATE TABLE IF NOT EXISTS collection_lock_in (
+    collection_key TEXT PRIMARY KEY,
+    lock_in REAL DEFAULT 0.15,
+    state TEXT DEFAULT 'drifting',         -- drifting, fluid, settled
+    access_count INTEGER DEFAULT 0,        -- Searches + document opens
+    annotation_count INTEGER DEFAULT 0,    -- Bookmarks + notes + flags
+    connected_collections INTEGER DEFAULT 0,  -- Cross-references
+    entity_overlap_count INTEGER DEFAULT 0,   -- Entities shared with Matrix
+    last_accessed_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Collection annotations: Bridge from collections into Memory Matrix
+-- Each annotation creates a Matrix node with source=aibrarian provenance
+CREATE TABLE IF NOT EXISTS collection_annotations (
+    id TEXT PRIMARY KEY,
+    collection_key TEXT NOT NULL,
+    doc_id TEXT NOT NULL,
+    chunk_index INTEGER,
+    annotation_type TEXT NOT NULL,          -- bookmark, note, flag
+    content TEXT,                            -- Luna's note text
+    matrix_node_id TEXT,                    -- ID of Matrix node created
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Collection lock-in indexes
+CREATE INDEX IF NOT EXISTS idx_coll_lock_in_state ON collection_lock_in(state);
+CREATE INDEX IF NOT EXISTS idx_coll_lock_in_score ON collection_lock_in(lock_in DESC);
+
+-- Collection annotation indexes
+CREATE INDEX IF NOT EXISTS idx_annotations_collection ON collection_annotations(collection_key);
+CREATE INDEX IF NOT EXISTS idx_annotations_type ON collection_annotations(annotation_type);
+CREATE INDEX IF NOT EXISTS idx_annotations_doc ON collection_annotations(collection_key, doc_id);

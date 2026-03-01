@@ -9,6 +9,8 @@ Organized by domain:
 - git: git_sync
 - forge: training data, personality profiles, Voight-Kampff testing
 - qa: self-diagnosis, assertions, bugs, health checks
+- aibrarian: aibrarian_search, aibrarian_similar, aibrarian_list, aibrarian_ingest
+- bridge: Desktop ↔ Code task queue and session handoff
 """
 
 from luna_mcp.tools import filesystem
@@ -17,5 +19,7 @@ from luna_mcp.tools import state
 from luna_mcp.tools import git
 from luna_mcp.tools import forge
 from luna_mcp.tools import qa
+from luna_mcp.tools import aibrarian
+from luna_mcp.tools import bridge
 
-__all__ = ["filesystem", "memory", "state", "git", "forge", "qa"]
+__all__ = ["filesystem", "memory", "state", "git", "forge", "qa", "aibrarian", "bridge"]

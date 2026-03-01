@@ -149,6 +149,7 @@ class QueryRouter:
 
     DATAROOM_PATTERNS = [
         r"\bdata\s*room\b",
+        r"\baibrarian\b",
         r"\binvestor\s*(docs?|documents?|materials?|packet)\b",
         r"\bdue\s*diligence\b",
         r"\b(what|which)\b.*\b(documents?|files?)\b.*\b(do we|have we|are in)\b",
@@ -166,6 +167,7 @@ class QueryRouter:
         "calendar": [r"\bcalendar\b", r"\bschedule\b", r"\bappointment\b", r"\bevent\b"],
         "dataroom_search": [
             r"\bdata\s*room\b",
+            r"\baibrarian\b",
             r"\binvestor\s*(docs?|documents?|materials?)\b",
             r"\bdue\s*diligence\b",
         ],
@@ -205,6 +207,17 @@ class QueryRouter:
         r"\byour memor(y|ies)\b",
     ]
 
+    # Known project entity names — any mention forces SIMPLE_PLAN → RETRIEVE
+    # This prevents "tell me about Kozmo" from routing DIRECT and skipping memory
+    ENTITY_PATTERNS = [
+        r"\bkozmo\b", r"\bguardian\b", r"\beclissi\b", r"\btapestry\b",
+        r"\bkinoni\b", r"\brosa\b", r"\beden\b", r"\bmemory.?matrix\b",
+        r"\bhai.?dai\b", r"\btarcila\b", r"\bcalvin\b", r"\bearth.?scale\b",
+        r"\brotary\b", r"\bcrane.?ai\b", r"\baibrarian\b", r"\bobservatory\b",
+        r"\bthe forger\b", r"\bben.?franklin\b", r"\bthe scribe\b",
+        r"\blibrarian\b", r"\bdataroom\b", r"\bmars college\b",
+    ]
+
     def __init__(self):
         """Initialize the query router."""
         # Compile patterns for efficiency
@@ -215,6 +228,7 @@ class QueryRouter:
         self._multi_step_re = [re.compile(p, re.IGNORECASE) for p in self.MULTI_STEP_PATTERNS]
         self._background_re = [re.compile(p, re.IGNORECASE) for p in self.BACKGROUND_PATTERNS]
         self._memory_query_re = [re.compile(p, re.IGNORECASE) for p in self.MEMORY_QUERY_PATTERNS]
+        self._entity_re = [re.compile(p, re.IGNORECASE) for p in self.ENTITY_PATTERNS]
         self._dataroom_re = [re.compile(p, re.IGNORECASE) for p in self.DATAROOM_PATTERNS]
         self._tool_re = {
             tool: [re.compile(p, re.IGNORECASE) for p in patterns]
@@ -531,6 +545,12 @@ class QueryRouter:
         # Memory query detection - triggers RETRIEVE action
         if self._matches_any(query, self._memory_query_re):
             signals.append("memory_query")
+
+        # Entity name detection — known project entities force memory retrieval
+        if self._matches_any(query, self._entity_re):
+            signals.append("entity_mention")
+            if "memory_query" not in signals:
+                signals.append("memory_query")
 
         # Creative request
         if self._matches_any(query, self._creative_re):

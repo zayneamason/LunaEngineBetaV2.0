@@ -209,10 +209,12 @@ class FaceIDHandler(BaseHTTPRequestHandler):
     def _handle_reset(self, body):
         pin = body.get("pin", "")
 
-        if not db.has_pin():
-            return self._json(200, {"reset": False, "error": "No admin PIN configured. Set one first."})
-        if not db.verify_pin(pin):
-            return self._json(200, {"reset": False, "error": "Incorrect PIN"})
+        # PIN gate disabled — skip verification
+        # To re-enable: uncomment the PIN checks below
+        # if not db.has_pin():
+        #     return self._json(200, {"reset": False, "error": "No admin PIN configured. Set one first."})
+        # if not db.verify_pin(pin):
+        #     return self._json(200, {"reset": False, "error": "Incorrect PIN"})
 
         entities = db.list_entities()
         total = 0

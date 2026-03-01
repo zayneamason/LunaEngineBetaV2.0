@@ -640,7 +640,7 @@ class MemoryMatrix:
         self,
         query: str,
         node_type: Optional[str] = None,
-        limit: int = 10,
+        limit: int = 20,
         scope: Optional[str] = None,
     ) -> list[tuple[MemoryNode, float]]:
         """
@@ -669,8 +669,23 @@ class MemoryMatrix:
             nodes = await self.search_nodes(query, node_type, limit, scope=scope)
             return [(node, 1.0) for node in nodes]
 
-        # Escape special FTS5 characters and prepare query
-        safe_query = query.replace('"', '""')
+        # Tokenize query: strip stopwords, keep top-5 most distinctive terms,
+        # then OR-join for recall. Capping prevents BM25 score dilution on long queries.
+        _fts_stops = {
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "to",
+            "of", "in", "for", "on", "with", "at", "by", "from", "and", "or",
+            "but", "not", "it", "its", "this", "that", "my", "me", "you", "we",
+            "our", "they", "them", "what", "who", "how", "do", "does", "did",
+            "will", "would", "can", "could", "should", "may", "have", "has",
+            "had", "about", "all", "just", "like", "tell", "know", "luna",
+        }
+        raw_words = [w.strip(".,!?;:'\"()[]{}").lower() for w in query.split()]
+        meaningful = [w for w in raw_words if w and len(w) >= 2 and w not in _fts_stops]
+        # Prefer longer (more specific) words; cap at 5 to keep BM25 focused
+        meaningful.sort(key=len, reverse=True)
+        top_terms = meaningful[:5] if meaningful else raw_words[:3]
+        escaped = [t.replace('"', '""') for t in top_terms]
+        safe_query = " OR ".join(escaped) if len(escaped) > 1 else (escaped[0] if escaped else query.replace('"', '""'))
 
         conditions = ["memory_nodes_fts MATCH ?"]
         params: list = [safe_query]
@@ -792,8 +807,8 @@ class MemoryMatrix:
         query: str,
         node_type: Optional[str] = None,
         limit: int = 10,
-        keyword_weight: float = 0.4,
-        semantic_weight: float = 0.6,
+        keyword_weight: float = 0.6,
+        semantic_weight: float = 0.4,
         rrf_k: int = 60,
         scope: Optional[str] = None,
     ) -> list[tuple[MemoryNode, float]]:
@@ -803,12 +818,17 @@ class MemoryMatrix:
         Combines keyword matching (exact terms, stemming) with semantic
         similarity (meaning-based) for best results.
 
+        Weights favour FTS5 (0.6) over semantic (0.4) because:
+        - FTS5 uses BM25 with per-document scoring — always reliable
+        - Semantic search falls back to LIKE with flat scores when
+          sqlite-vec is offline, making its rank signal noise
+
         Args:
             query: Search query text
             node_type: Optional filter by node type
             limit: Maximum number of results (default 10)
-            keyword_weight: Weight for FTS5 results (default 0.4)
-            semantic_weight: Weight for semantic results (default 0.6)
+            keyword_weight: Weight for FTS5 results (default 0.6)
+            semantic_weight: Weight for semantic results (default 0.4)
             rrf_k: RRF constant (default 60, higher = more emphasis on top ranks)
             scope: Optional scope filter. None = all scopes.
 
@@ -869,9 +889,8 @@ class MemoryMatrix:
         """
         Get relevant context for a query.
 
-        Retrieves memories that might be relevant to the query,
-        staying within the token budget. Uses tokenized text matching
-        and importance weighting.
+        Uses hybrid_search (FTS5 + semantic with RRF ranking) — the same
+        proven path as /memory/search — then trims to token budget.
 
         Args:
             query: The query to find context for
@@ -892,266 +911,59 @@ class MemoryMatrix:
         # Single scope (or all scopes if scope=None)
         effective_scope = scopes[0] if scopes else scope
 
-        # Approximate tokens per character (rough estimate)
         chars_per_token = 4
         max_chars = max_tokens * chars_per_token
 
-        # Tokenize query into meaningful words (skip common stopwords)
-        stopwords = {
-            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "must", "can", "to", "of", "in", "for",
-            "on", "with", "at", "by", "from", "as", "into", "through", "during",
-            "before", "after", "above", "below", "between", "under", "again",
-            "further", "then", "once", "here", "there", "when", "where", "why",
-            "how", "all", "each", "few", "more", "most", "other", "some", "such",
-            "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
-            "just", "and", "but", "if", "or", "because", "until", "while", "about",
-            "this", "that", "these", "those", "am", "it", "its", "my", "me", "you",
-            "your", "he", "him", "his", "she", "her", "we", "us", "our", "they",
-            "them", "their", "what", "which", "who", "whom", "i", "try", "remember",
-            "now", "tell", "know", "think", "want", "need", "like", "please", "hi",
-            "hello", "hey", "ok", "okay", "yes", "no", "luna",
-        }
-
-        # Extract meaningful words (3+ chars, not stopwords)
-        words = [w.strip(".,!?;:'\"()[]{}") for w in query.lower().split()]
-        keywords = [w for w in words if len(w) >= 3 and w not in stopwords]
-
-        # Detect backward reference patterns (need recent conversation, not keyword search)
-        backward_patterns = [
-            "what were we", "what did we", "what was that",
-            "earlier", "before", "last time", "just now",
-            "you said", "you mentioned", "we discussed", "we talked",
-            "remember when", "do you remember", "recall",
-            "where were we", "continue", "going back"
-        ]
-        is_backward_ref = any(p in query.lower() for p in backward_patterns)
-
-        # For backward references OR no keywords: fetch recent conversation directly
-        if is_backward_ref or not keywords:
-            logger.info(f"Context: backward_ref={is_backward_ref}, keywords={keywords or 'empty'} → fetching conversation")
-
-            # Query conversation_turns table (NOT memory_nodes)
-            conversation_rows = await self.db.fetchall("""
-                SELECT id, session_id, role, content, tokens, created_at
-                FROM conversation_turns
-                ORDER BY created_at DESC
-                LIMIT 15
-            """)
-
-            if conversation_rows:
-                results = []
-                total_chars = 0
-                max_chars = max_tokens * 4  # ~4 chars per token
-
-                for row in conversation_rows:
-                    # Row is (id, session_id, role, content, tokens, created_at)
-                    row_id, _, role, content, _, created_at = row[0], row[1], row[2], row[3], row[4], row[5]
-                    content = content or ""
-                    if total_chars + len(content) > max_chars:
-                        break
-                    # Create MemoryNode for compatibility with return type
-                    node = MemoryNode(
-                        id=str(row_id),
-                        node_type="CONVERSATION",
-                        content=f"[{role}]: {content}",
-                        created_at=created_at,
-                    )
-                    results.append(node)
-                    total_chars += len(content)
-
-                logger.info(f"Context: returning {len(results)} conversation turns ({total_chars} chars)")
-                return results
-
-            # No conversation found - fall through to keyword search
-            logger.debug("Context: no conversation found, falling back to keyword search")
-
-        if not keywords:
-            # Fall back to original behavior if no keywords found
-            keywords = [query]
-
-        logger.debug(f"Context search keywords: {keywords}")
-
-        # Build search query with compound phrase boosting
-        # Strategy:
-        # 1. Try compound phrase first (e.g., "mars college" as one phrase)
-        # 2. Fall back to individual keywords
-        # 3. Prioritize smaller nodes (extracted facts) over huge conversation dumps
-        # 4. Sort by lock_in for relevance
-
-        # If we have 2+ keywords, also search for compound phrase
-        compound_phrase = " ".join(keywords) if len(keywords) >= 2 else None
-
-        # Build scope filter SQL fragment
-        scope_clause = ""
-        scope_params: list = []
-        if effective_scope is not None:
-            scope_clause = " AND scope = ?"
-            scope_params = [effective_scope]
-
-        if node_types:
-            placeholders = ", ".join("?" * len(node_types))
-            like_clauses = " OR ".join(
-                ["(content LIKE ? OR summary LIKE ?)" for _ in keywords]
+        # ─── Use hybrid_search: the same path /memory/search uses ───
+        # This gives us FTS5 (BM25) + semantic search with RRF ranking,
+        # instead of the old LIKE-with-stopwords approach that was failing.
+        try:
+            scored_results = await self.hybrid_search(
+                query,
+                node_type=node_types[0] if node_types and len(node_types) == 1 else None,
+                limit=50,
+                scope=effective_scope,
             )
-            params = []
-            for kw in keywords:
-                params.extend([f"%{kw}%", f"%{kw}%"])
-            params.extend(node_types)
-            params.extend(scope_params)
-
-            rows = await self.db.fetchall(
-                f"""
-                SELECT * FROM memory_nodes
-                WHERE ({like_clauses})
-                  AND node_type IN ({placeholders})
-                  {scope_clause}
-                ORDER BY lock_in DESC, length(content) ASC, created_at DESC
-                LIMIT 50
-                """,
-                tuple(params)
-            )
-        else:
-            like_clauses = " OR ".join(
-                ["(content LIKE ? OR summary LIKE ?)" for _ in keywords]
-            )
-            params = []
-            for kw in keywords:
-                params.extend([f"%{kw}%", f"%{kw}%"])
-
-            # First, try to find exact compound phrase matches (these are most relevant)
-            if compound_phrase:
-                compound_params = [f"%{compound_phrase}%", f"%{compound_phrase}%"] + scope_params
-                compound_rows = await self.db.fetchall(
-                    f"""
-                    SELECT * FROM memory_nodes
-                    WHERE (content LIKE ? OR summary LIKE ?)
-                    {scope_clause}
-                    ORDER BY lock_in DESC, length(content) ASC, created_at DESC
-                    LIMIT 25
-                    """,
-                    tuple(compound_params)
-                )
-            else:
-                compound_rows = []
-
-            # Then get individual keyword matches
-            keyword_params = params + scope_params
-            keyword_rows = await self.db.fetchall(
-                f"""
-                SELECT * FROM memory_nodes
-                WHERE {like_clauses}
-                {scope_clause}
-                ORDER BY lock_in DESC, length(content) ASC, created_at DESC
-                LIMIT 50
-                """,
-                tuple(keyword_params)
-            )
-
-            # Combine: compound matches first (deduplicated), then keyword matches
-            seen_ids = set()
-            rows = []
-            for row in compound_rows:
-                if row[0] not in seen_ids:
-                    seen_ids.add(row[0])
-                    rows.append(row)
-            for row in keyword_rows:
-                if row[0] not in seen_ids:
-                    seen_ids.add(row[0])
-                    rows.append(row)
-                if len(rows) >= 50:
-                    break
-
-        # =====================================================================
-        # GRAPH EXPANSION: Use spreading activation to find connected nodes
-        # =====================================================================
-        # If we found keyword matches, expand through graph to find related nodes
-        # that keyword search would miss (e.g., "Mars College" -> Robot Body -> Tarcila)
-        if rows and self.graph:
+        except Exception as e:
+            logger.warning(f"hybrid_search failed, falling back to fts5: {e}")
             try:
-                # Get IDs from keyword results as seed nodes
-                seed_ids = [row[0] for row in rows[:10]]  # Top 10 keyword hits
-
-                # Run spreading activation from seeds
-                activations = await self.graph.spreading_activation(
-                    start_nodes=seed_ids,
-                    decay=0.5,
-                    max_depth=2,
-                    scope=effective_scope,
+                scored_results = await self.fts5_search(
+                    query, limit=50, scope=effective_scope
                 )
+            except Exception as e2:
+                logger.error(f"fts5_search also failed: {e2}")
+                scored_results = []
 
-                if activations:
-                    # Get activated node IDs not already in results
-                    existing_ids = {row[0] for row in rows}
-                    graph_ids = [
-                        (nid, score) for nid, score in activations.items()
-                        if nid not in existing_ids and score >= 0.2
-                    ]
-                    # Sort by activation score
-                    graph_ids.sort(key=lambda x: x[1], reverse=True)
+        if not scored_results:
+            logger.warning(
+                f"GET_CONTEXT_ZERO: hybrid_search returned 0 results for "
+                f"query='{query[:80]}', scope={effective_scope}"
+            )
+            return []
 
-                    # Fetch the top graph-discovered nodes (respecting scope)
-                    if graph_ids:
-                        graph_node_ids = [gid for gid, _ in graph_ids[:15]]
-                        placeholders = ",".join("?" * len(graph_node_ids))
-                        graph_query = f"""
-                            SELECT * FROM memory_nodes
-                            WHERE id IN ({placeholders})
-                            {scope_clause}
-                            ORDER BY lock_in DESC
-                        """
-                        graph_params = list(graph_node_ids) + scope_params
-                        graph_rows = await self.db.fetchall(
-                            graph_query, tuple(graph_params)
-                        )
-                        rows.extend(graph_rows)
-                        logger.info(
-                            f"GRAPH_EXPAND: Added {len(graph_rows)} nodes via "
-                            f"spreading activation from {len(seed_ids)} seeds "
-                            f"({len(activations)} total activated)"
-                        )
+        # ─── Filter by node_types if multiple were requested ───
+        if node_types and len(node_types) > 1:
+            type_set = set(node_types)
+            scored_results = [(n, s) for n, s in scored_results if n.node_type in type_set]
 
-            except Exception as e:
-                # Graph expansion is supplementary - never block retrieval
-                logger.warning(f"GRAPH_EXPAND_FAIL: {type(e).__name__}: {e}")
-
-        # Collect nodes within token budget, filtering out confusing identity nodes
+        # ─── Collect within token budget with lightweight filters ───
         results = []
         total_chars = 0
 
-        for row in rows:
-            node = MemoryNode.from_row(row)
-
-            # Filter out potentially confusing identity nodes about other people
-            # This prevents Luna from confusing the current user (Ahab/Zayne) with others
+        for node, _score in scored_results:
             content_lower = node.content.lower()
-            if "my name is" in content_lower and "ahab" not in content_lower and "zayne" not in content_lower:
-                logger.debug(f"Filtering out potentially confusing identity node: {node.id}")
-                continue
 
-            # Filter out raw conversation dumps (system prompts embedded in content)
-            # These are not useful as memory context - they're just logs
+            # Filter: system prompt dumps (not knowledge)
             if "# luna's foundation" in content_lower or "# luna's core identity" in content_lower:
-                logger.debug(f"Filtering out system prompt dump: {node.id}")
                 continue
 
-            # Filter out development notes (start with ### markdown headers)
-            # These are technical specs, not Luna's actual knowledge
-            if node.content.strip().startswith("###") or node.content.strip().startswith("## "):
-                logger.debug(f"Filtering out dev note: {node.id}")
+            # Filter: raw SESSION blobs > 2000 chars with headers
+            stripped = node.content.strip()
+            if (stripped.startswith("###") or stripped.startswith("## ")) and node.node_type == "SESSION" and len(stripped) > 2000:
                 continue
 
-            # Filter out raw "User (desktop):" conversation logs
-            # These contain system prompts and aren't useful knowledge
-            if node.content.strip().startswith("User (desktop):") or node.content.strip().startswith("User (mobile):"):
-                logger.debug(f"Filtering out raw conversation log: {node.id}")
-                continue
-
-            # Skip very long nodes (likely raw conversation dumps, not extracted facts)
-            # Prefer concise, extracted knowledge over conversation transcripts
-            if len(node.content) > 5000:
-                logger.debug(f"Skipping oversized node ({len(node.content)} chars): {node.id}")
+            # Filter: raw conversation log prefixes
+            if stripped.startswith("User (desktop):") or stripped.startswith("User (mobile):"):
                 continue
 
             node_chars = len(node.content) + (len(node.summary) if node.summary else 0)
@@ -1162,10 +974,52 @@ class MemoryMatrix:
             results.append(node)
             total_chars += node_chars
 
-            # Record access
+            # Record access for lock-in scoring
             await self.record_access(node.id)
 
-        logger.debug(f"Retrieved {len(results)} nodes for context ({total_chars} chars)")
+        # ─── Graph expansion: supplement with connected nodes ───
+        if results and self.graph:
+            try:
+                seed_ids = [n.id for n in results[:10]]
+                activations = await self.graph.spreading_activation(
+                    start_nodes=seed_ids, decay=0.5, max_depth=2,
+                    scope=effective_scope,
+                )
+                if activations:
+                    existing_ids = {n.id for n in results}
+                    graph_ids = [
+                        (nid, score) for nid, score in activations.items()
+                        if nid not in existing_ids and score >= 0.15
+                    ]
+                    graph_ids.sort(key=lambda x: x[1], reverse=True)
+
+                    if graph_ids:
+                        graph_node_ids = [gid for gid, _ in graph_ids[:15]]
+                        placeholders = ",".join("?" * len(graph_node_ids))
+                        scope_clause = " AND scope = ?" if effective_scope else ""
+                        scope_params = [effective_scope] if effective_scope else []
+                        graph_rows = await self.db.fetchall(
+                            f"SELECT * FROM memory_nodes WHERE id IN ({placeholders}){scope_clause} ORDER BY lock_in DESC",
+                            tuple(graph_node_ids + scope_params),
+                        )
+                        for row in graph_rows:
+                            node = MemoryNode.from_row(row)
+                            node_chars = len(node.content)
+                            if total_chars + node_chars > max_chars:
+                                break
+                            results.append(node)
+                            total_chars += node_chars
+                        logger.info(
+                            f"GRAPH_EXPAND: Added {len(graph_rows)} nodes via "
+                            f"spreading activation from {len(seed_ids)} seeds"
+                        )
+            except Exception as e:
+                logger.warning(f"GRAPH_EXPAND_FAIL: {type(e).__name__}: {e}")
+
+        logger.info(
+            f"get_context: {len(results)} nodes, {total_chars} chars "
+            f"(budget {max_chars}) for query='{query[:60]}'"
+        )
         return results
 
     async def _get_context_multi_scope(

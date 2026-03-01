@@ -26,6 +26,16 @@ class ExtractionType(str, Enum):
     PREFERENCE = "PREFERENCE"   # User preference or opinion
     OBSERVATION = "OBSERVATION" # Something noticed or observed
     MEMORY = "MEMORY"           # A memory or recollection shared
+    CORRECTION = "CORRECTION"   # User or Luna corrected a previous claim
+
+
+class SourceProvenance(str, Enum):
+    """Where extracted information came from."""
+    TOLD = "told"               # User explicitly stated this
+    RETRIEVED = "retrieved"     # Came from a document or dataroom
+    INFERRED = "inferred"       # Luna's inference (lower confidence)
+    CORRECTED = "corrected"     # User or Luna corrected a previous claim
+    OBSERVED = "observed"       # Scribe observed from conversation flow
 
 
 @dataclass
@@ -60,6 +70,7 @@ class ExtractedObject:
     entities: list[str] = field(default_factory=list)
     source_id: str = ""
     metadata: dict = field(default_factory=dict)
+    provenance: str = "told"  # SourceProvenance value
 
     def __post_init__(self):
         # Ensure type is ExtractionType enum
@@ -82,6 +93,7 @@ class ExtractedObject:
             "entities": self.entities,
             "source_id": self.source_id,
             "metadata": self.metadata,
+            "provenance": self.provenance,
         }
 
     @classmethod
@@ -94,6 +106,7 @@ class ExtractedObject:
             entities=data.get("entities", []),
             source_id=data.get("source_id", ""),
             metadata=data.get("metadata", {}),
+            provenance=data.get("provenance", "told"),
         )
 
 

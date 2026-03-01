@@ -72,7 +72,7 @@ function askLuna(query) {
     // Detect data room intent for document queries
     var hasDataroomIntent = false;
     if (!isGreeting) {
-      hasDataroomIntent = !!lowerQuery.match(/\b(status|overview|missing|gap|recent|document|docs|file|legal|financial|team|product|category|show|list|partnership|investor|pitch|proposal|market)\b/);
+      hasDataroomIntent = !!lowerQuery.match(/\b(status|overview|missing|gap|recent|document|docs|file|money|team|proof|how it works|demo|room|show|list|investor|pitch|proposal|need|bible|architecture|deep cuts)\b/);
       if (hasDataroomIntent) {
         contextMessage = '[asking from data room sidebar] ' + query;
       }

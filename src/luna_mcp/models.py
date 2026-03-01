@@ -354,3 +354,51 @@ class GitSyncInput(BaseModel):
         default=True,
         description="Push to remote after commit"
     )
+
+
+# ==============================================================================
+# Bridge Models (Desktop ↔ Code)
+# ==============================================================================
+
+class TaskCreateInput(BaseModel):
+    """Input for luna_task_create tool."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Short task title"
+    )
+    description: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="Full task description with context"
+    )
+    priority: str = Field(
+        default="medium",
+        description="Priority: low, medium, high, or critical"
+    )
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description="Tags for categorization"
+    )
+    related_files: Optional[List[str]] = Field(
+        default=None,
+        description="Relevant file paths"
+    )
+
+
+class TaskStatusInput(BaseModel):
+    """Input for luna_task_status tool."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    task_id: Optional[str] = Field(
+        default=None,
+        description="Specific task ID to check"
+    )
+    status_filter: Optional[str] = Field(
+        default=None,
+        description="Filter: pending, claimed, in_progress, completed, failed"
+    )
