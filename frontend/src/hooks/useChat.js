@@ -80,6 +80,9 @@ const parseSlashCommand = (text) => {
   return { ...cmd, command, args };
 };
 
+let _msgCounter = 0;
+const nextId = (prefix = 'msg') => `${prefix}-${Date.now()}-${++_msgCounter}`;
+
 export function useChat() {
   const { streamPersona, abort, isLoading, error } = useLunaAPI();
 
@@ -171,10 +174,10 @@ export function useChat() {
   // Execute a slash command
   const executeSlashCommand = useCallback(async (text, parsed) => {
     // Add user message
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
+    setMessages((prev) => [...prev, { id: nextId('user'), role: 'user', content: text }]);
 
     // Show loading
-    const msgId = Date.now();
+    const msgId = nextId('cmd');
     setMessages((prev) => [
       ...prev,
       { id: msgId, role: 'assistant', content: 'Running command...', streaming: true, isCommand: true },
@@ -227,8 +230,8 @@ export function useChat() {
       if (parsed.error) {
         setMessages((prev) => [
           ...prev,
-          { role: 'user', content: text },
-          { role: 'assistant', content: parsed.error, error: true },
+          { id: nextId('user'), role: 'user', content: text },
+          { id: nextId('err'), role: 'assistant', content: parsed.error, error: true },
         ]);
         return;
       }
@@ -239,8 +242,9 @@ export function useChat() {
           const randomAnim = ORB_ANIMATIONS[Math.floor(Math.random() * ORB_ANIMATIONS.length)];
           setMessages((prev) => [
             ...prev,
-            { role: 'user', content: text },
+            { id: nextId('user'), role: 'user', content: text },
             {
+              id: nextId('cmd'),
               role: 'assistant',
               content: `✨ Triggered animation: **${randomAnim}**`,
               isCommand: true,
@@ -265,8 +269,9 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
 
           setMessages((prev) => [
             ...prev,
-            { role: 'user', content: text },
+            { id: nextId('user'), role: 'user', content: text },
             {
+              id: nextId('cmd'),
               role: 'assistant',
               content: statusContent,
               isCommand: true,
@@ -279,8 +284,9 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
         if (parsed.type === 'orb-test') {
           setMessages((prev) => [
             ...prev,
-            { role: 'user', content: text },
+            { id: nextId('user'), role: 'user', content: text },
             {
+              id: nextId('cmd'),
               role: 'assistant',
               content: `🎬 Testing all ${ORB_ANIMATIONS.length} animations...`,
               isCommand: true,
@@ -293,8 +299,9 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
         if (parsed.type === 'restart-frontend') {
           setMessages((prev) => [
             ...prev,
-            { role: 'user', content: text },
+            { id: nextId('user'), role: 'user', content: text },
             {
+              id: nextId('cmd'),
               role: 'assistant',
               content: `🔄 Reloading frontend in 1 second...`,
               isCommand: true,
@@ -314,11 +321,11 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
     }
 
     // Add user message
-    const userMsg = { role: 'user', content: text };
+    const userMsg = { id: nextId('user'), role: 'user', content: text };
     setMessages((prev) => [...prev, userMsg]);
 
     // Prepare assistant message placeholder
-    const assistantMsgId = Date.now();
+    const assistantMsgId = nextId('ast');
     setMessages((prev) => [
       ...prev,
       { id: assistantMsgId, role: 'assistant', content: '', streaming: true },

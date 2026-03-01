@@ -11,7 +11,7 @@ const PREVIEW_W = 160;
 const PREVIEW_H = 120;
 
 const FaceIDCapture = ({
-  captureState, onStart, onStop, onReset, onEnroll,
+  captureState, onStart, onStop, onReset, onEnroll, onBypass,
   videoRef, bboxes = [], enrollCount = 0,
 }) => {
   const canvasRef = useRef(null);
@@ -101,7 +101,7 @@ const FaceIDCapture = ({
 
   return (
     <div className="flex items-center gap-2">
-      {/* Idle: Identify + Reset buttons */}
+      {/* Idle: Identify + Bypass + Reset buttons */}
       {captureState === 'idle' && (
         <>
           <button
@@ -112,6 +112,16 @@ const FaceIDCapture = ({
           >
             <CameraIcon />
             <span>Identify</span>
+          </button>
+
+          <button
+            onClick={onBypass}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border transition-all
+              bg-kozmo-bg border-kozmo-border text-kozmo-muted hover:border-emerald-500/30 hover:text-emerald-400/80"
+            title="Bypass FaceID — grant admin access without camera"
+          >
+            <BypassIcon />
+            <span>Pass</span>
           </button>
 
           <div className="relative">
@@ -276,6 +286,14 @@ const ResetIcon = () => (
     strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M1 4v6h6" />
     <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+  </svg>
+);
+
+const BypassIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
   </svg>
 );
 

@@ -6,6 +6,8 @@ const ENROLL_CAPTURES = 10;    // frames to capture during enrollment
 const API_URL = 'http://127.0.0.1:8000/identity/recognize';
 const ENROLL_URL = 'http://127.0.0.1:8000/identity/enroll';
 const RESET_URL = 'http://127.0.0.1:8000/identity/reset';
+const BYPASS_URL = 'http://127.0.0.1:8000/identity/bypass';
+const BYPASS_OFF_URL = 'http://127.0.0.1:8000/identity/bypass-off';
 
 /**
  * useIdentity — WebSocket hook for FaceID identity state + browser camera capture.
@@ -228,6 +230,49 @@ export function useIdentity() {
     }
   }, []);
 
+  // ---- Bypass (skip FaceID) ----
+
+  const [isBypassed, setIsBypassed] = useState(false);
+
+  const bypassIdentity = useCallback(async () => {
+    try {
+      const res = await fetch(BYPASS_URL, { method: 'POST' });
+      const data = await res.json();
+      if (data.bypassed) {
+        setIsBypassed(true);
+        setCaptureState('recognized');
+        setIdentity({
+          is_present: true,
+          entity_id: data.entity_id,
+          entity_name: data.entity_name,
+          luna_tier: data.luna_tier,
+          dataroom_tier: data.dataroom_tier,
+          bypass: true,
+        });
+        return { success: true };
+      }
+      return { success: false, error: data.detail || 'Bypass failed' };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }, []);
+
+  const revokeBypass = useCallback(async () => {
+    try {
+      const res = await fetch(BYPASS_OFF_URL, { method: 'POST' });
+      const data = await res.json();
+      if (data.bypassed === false) {
+        setIsBypassed(false);
+        setIdentity(null);
+        setCaptureState('idle');
+        return { success: true };
+      }
+      return { success: false, error: data.detail || 'Revoke failed' };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  }, []);
+
   // ---- Enrollment ----
 
   const startEnrollment = useCallback(async (entityName, pin = '') => {
@@ -332,6 +377,11 @@ export function useIdentity() {
     resetIdentity,
     startEnrollment,
     enrollCount,
+
+    // Bypass
+    bypassIdentity,
+    revokeBypass,
+    isBypassed,
 
     // Preview data
     videoRef,

@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
-import { LunaOrb } from './LunaOrb';
+import { OrbCanvas } from './OrbCanvas';
 import { useOrbState } from '../hooks/useOrbState';
 import { VoiceTuningPanel } from './VoiceTuningPanel';
 import { OrbSettingsPanel } from './OrbSettingsPanel';
@@ -8,6 +8,13 @@ import { FallbackChainPanel } from './FallbackChainPanel';
 import { ServerMonitorPanel } from './ServerMonitorPanel';
 import AnnotatedText from './AnnotatedText';
 import { useNavigation } from '../hooks/useNavigation';
+import { GridProvider } from '../contexts/GridContext';
+import GridLayer from './GridLayer';
+import GridDebug from './GridDebug';
+import KnowledgeBar from '../eclissi/knowledge/KnowledgeBar';
+import TPanels from '../eclissi/knowledge/TPanels';
+import VoiceModeBar from '../eclissi/components/VoiceModeBar';
+import { useWindowedMessages } from '../hooks/useWindowedMessages';
 
 // Highlight keywords in text for debug mode
 const highlightKeywords = (text, keywords) => {
@@ -58,7 +65,7 @@ const SLASH_COMMANDS = [
   { command: '/faceid', description: 'FaceID: status, set-pin, or reset', icon: '🔐', placeholder: '[set-pin <pin> | reset <pin>]' },
 ];
 
-const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null }) => {
+const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null, extractions = [], extractionEntities = [], extractionRelationships = [], voice = null }) => {
   const [input, setInput] = useState('');
   const [showCommands, setShowCommands] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -66,12 +73,29 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
   const [animationOverride, setAnimationOverride] = useState(null);
   const [activePanel, setActivePanel] = useState(null); // 'voice-tuning' | 'orb-settings' | null
   const [panelData, setPanelData] = useState(null);
+  const [activeTPanel, setActiveTPanel] = useState(null); // index of message with open T-panels
   const chatContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const animationTimeoutRef = useRef(null);
   const { orbState, isConnected } = useOrbState();
   const { navigate } = useNavigation();
+
+  // Windowed message rendering (Guardian pattern)
+  const {
+    visibleMessages,
+    onScroll: handleWindowScroll,
+    scrollRef: windowScrollRef,
+    canLoadOlder,
+    scrollToBottom: windowScrollToBottom,
+    isAtBottom: isAtBottomRef,
+  } = useWindowedMessages(messages);
+
+  // Merge scroll refs
+  const mergeScrollRefs = useCallback((el) => {
+    chatContainerRef.current = el;
+    windowScrollRef.current = el;
+  }, [windowScrollRef]);
 
   // Panel update handlers
   const handleVoiceUpdate = async (values) => {
@@ -101,13 +125,12 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
+  // Auto-scroll when new messages arrive (only if user was at bottom)
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (isAtBottomRef.current) {
+      windowScrollToBottom();
+    }
+  }, [messages.length, windowScrollToBottom]);
 
   // Filter commands based on input
   useEffect(() => {
@@ -258,16 +281,22 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
         </div>
       </div>
 
-      {/* Messages container with floating orb */}
-      <div ref={chatContainerRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 relative">
-        {/* Luna Orb - Follows conversation with spring physics */}
-        <LunaOrb
+      {/* Messages container with floating orb + grid */}
+      <GridProvider containerRef={chatContainerRef}>
+      <div ref={mergeScrollRefs} onScroll={handleWindowScroll} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 relative">
+        {/* Grid debug overlay (toggle with backtick key) */}
+        <GridLayer />
+        <GridDebug />
+
+        {/* Luna Orb — Canvas 2D ring renderer with spring physics */}
+        <OrbCanvas
           state={animationOverride || (!isConnected ? 'disconnected' : (isLoading ? 'processing' : orbState.animation))}
           colorOverride={!isConnected ? null : orbState.color}
           brightness={!isConnected ? 0.7 : orbState.brightness}
           size={56}
           chatContainerRef={chatContainerRef}
           messagesEndRef={messagesEndRef}
+          rendererState={orbState.renderer}
         />
 
         {messages.length === 0 ? (
@@ -275,65 +304,89 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
             Start a conversation with Luna
           </div>
         ) : (
-          messages.map((msg, i) => (
-            <div
-              key={i}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[80%] rounded px-4 py-3 ${
-                  msg.role === 'user'
-                    ? 'bg-kozmo-accent/10 border border-kozmo-accent/30 text-white/90'
-                    : 'bg-kozmo-surface border border-kozmo-border text-white/80'
-                }`}
-              >
-                <p className="text-sm whitespace-pre-wrap">
-                  {debugKeywords.length > 0
-                    ? highlightKeywords(msg.content, debugKeywords)
-                    : <AnnotatedText
-                        text={msg.content}
-                        entities={entities}
-                        onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
-                      />}
-                </p>
-                {(msg.model || msg.delegated || msg.local || msg.fallback || msg.accessDeniedCount > 0) && (
-                  <div className="mt-2 flex items-center gap-3 text-xs">
-                    {/* Model indicator */}
-                    {msg.delegated ? (
-                      <span className="flex items-center gap-1 text-fuchsia-400">
-                        <span>⚡</span>
-                        <span>delegated</span>
-                      </span>
-                    ) : msg.local ? (
-                      <span className="flex items-center gap-1 text-emerald-400">
-                        <span>●</span>
-                        <span>local</span>
-                      </span>
-                    ) : msg.fallback ? (
-                      <span className="flex items-center gap-1 text-amber-400">
-                        <span>☁</span>
-                        <span>cloud</span>
-                      </span>
-                    ) : (
-                      <span className="text-kozmo-muted">{msg.model}</span>
-                    )}
-                    {msg.tokens && <span className="text-kozmo-muted">{msg.tokens} tokens</span>}
-                    {msg.latency && <span className="text-kozmo-muted">{msg.latency}ms</span>}
-                    {msg.accessDeniedCount > 0 && (
-                      <span className="flex items-center gap-1 text-amber-400/60">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                        </svg>
-                        <span>{msg.accessDeniedCount} filtered</span>
-                      </span>
+          <>
+            {canLoadOlder && (
+              <div style={{
+                textAlign: 'center',
+                padding: '8px',
+                color: 'var(--ec-text-faint, #5a5a70)',
+                fontSize: 11,
+              }}>
+                Scroll up for older messages
+              </div>
+            )}
+            {visibleMessages.map((msg) => (
+              <React.Fragment key={msg.id}>
+                <div
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded px-4 py-3 ${
+                      msg.role === 'user'
+                        ? 'bg-kozmo-accent/10 border border-kozmo-accent/30 text-white/90'
+                        : 'bg-kozmo-surface border border-kozmo-border text-white/80'
+                    }`}
+                  >
+                    <p className="text-sm whitespace-pre-wrap">
+                      {debugKeywords.length > 0
+                        ? highlightKeywords(msg.content, debugKeywords)
+                        : <AnnotatedText
+                            text={msg.content}
+                            entities={entities}
+                            onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
+                          />}
+                    </p>
+                    {(msg.model || msg.delegated || msg.local || msg.fallback || msg.accessDeniedCount > 0) && (
+                      <div className="mt-2 flex items-center gap-3 text-xs">
+                        {/* Model indicator */}
+                        {msg.delegated ? (
+                          <span className="flex items-center gap-1 text-fuchsia-400">
+                            <span>⚡</span>
+                            <span>delegated</span>
+                          </span>
+                        ) : msg.local ? (
+                          <span className="flex items-center gap-1 text-emerald-400">
+                            <span>●</span>
+                            <span>local</span>
+                          </span>
+                        ) : msg.fallback ? (
+                          <span className="flex items-center gap-1 text-amber-400">
+                            <span>☁</span>
+                            <span>cloud</span>
+                          </span>
+                        ) : (
+                          <span className="text-kozmo-muted">{msg.model}</span>
+                        )}
+                        {msg.tokens && <span className="text-kozmo-muted">{msg.tokens} tokens</span>}
+                        {msg.latency && <span className="text-kozmo-muted">{msg.latency}ms</span>}
+                        {msg.accessDeniedCount > 0 && (
+                          <span className="flex items-center gap-1 text-amber-400/60">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                            </svg>
+                            <span>{msg.accessDeniedCount} filtered</span>
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
+                </div>
+
+                {/* Knowledge Bar — shown after the last assistant message if extractions exist */}
+                {msg.role === 'assistant' && !msg.streaming &&
+                  msg.id === messages[messages.length - 1]?.id &&
+                  extractions.length > 0 && (
+                  <KnowledgeBar
+                    extractions={extractions}
+                    isActive={activeTPanel === msg.id}
+                    onClick={() => setActiveTPanel(activeTPanel === msg.id ? null : msg.id)}
+                  />
                 )}
-              </div>
-            </div>
-          ))
+              </React.Fragment>
+            ))}
+          </>
         )}
 
         {isLoading && (
@@ -349,7 +402,29 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
         )}
 
         <div ref={messagesEndRef} />
+
+        {/* T-Shape Knowledge Panels overlay */}
+        {activeTPanel !== null && (
+          <TPanels
+            extractions={extractions}
+            entities={extractionEntities}
+            relationships={extractionRelationships}
+            onClose={() => setActiveTPanel(null)}
+          />
+        )}
       </div>
+      </GridProvider>
+
+      {/* Voice Mode Bar */}
+      {voice?.isRunning && (
+        <VoiceModeBar
+          voiceState={voice.voiceState}
+          isListening={voice.isListening}
+          isSpeaking={voice.isSpeaking}
+          isThinking={voice.isThinking}
+          onClose={voice.stopVoice}
+        />
+      )}
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="flex-shrink-0 p-4 border-t border-kozmo-border relative">
@@ -402,6 +477,55 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
             className="flex-1 font-mono bg-kozmo-surface border border-kozmo-border rounded px-4 py-3 text-sm text-white/90 placeholder-white/30 focus:outline-none focus:border-kozmo-accent/50 transition-all disabled:opacity-50"
             style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03), 0 2px 8px rgba(0,0,0,0.3)' }}
           />
+          {/* Mic button */}
+          {voice && (
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                if (!voice.isRunning) {
+                  voice.startVoice(false);
+                } else if (!voice.isListening) {
+                  voice.startListening();
+                }
+              }}
+              onMouseUp={() => {
+                if (voice.isListening) voice.stopListening();
+              }}
+              onMouseLeave={() => {
+                if (voice.isListening) voice.stopListening();
+              }}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 8,
+                border: voice.isRunning
+                  ? '1px solid rgba(192,132,252,0.5)'
+                  : '1px solid var(--ec-border, rgba(255,255,255,0.06))',
+                background: voice.isListening
+                  ? 'rgba(192,132,252,0.3)'
+                  : voice.isRunning
+                  ? 'rgba(192,132,252,0.12)'
+                  : 'rgba(255,255,255,0.03)',
+                color: voice.isRunning ? 'var(--ec-accent-luna, #c084fc)' : 'var(--ec-text-faint, #5a5a70)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                transition: 'all 0.2s ease',
+                animation: voice.isListening ? 'ec-mic-pulse 1.5s ease-in-out infinite' : 'none',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            </button>
+          )}
+
           <button
             type="submit"
             disabled={!input.trim() || isLoading}

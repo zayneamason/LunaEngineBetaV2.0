@@ -4,7 +4,8 @@ const DEFAULT_STATE = {
   animation: 'idle',
   color: null,
   brightness: 1,
-  source: 'default'
+  source: 'default',
+  renderer: null,
 };
 
 const RECONNECT_DELAY = 3000;
@@ -57,7 +58,9 @@ export function useOrbState(wsUrl = 'ws://127.0.0.1:8000/ws/orb') {
             animation: data.animation || 'idle',
             color: data.color || null,
             brightness: data.brightness || 1,
-            source: data.source || 'websocket'
+            source: data.source || 'websocket',
+            renderer: data.renderer || null,
+            dimensions: data.dimensions || null,
           });
 
           // Set idle timeout if this isn't already idle

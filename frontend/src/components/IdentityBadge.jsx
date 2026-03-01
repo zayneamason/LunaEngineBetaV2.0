@@ -23,7 +23,7 @@ const TIER_COLORS = {
   unknown: { bg: 'rgba(239,68,68,0.15)',   border: 'rgba(239,68,68,0.4)',   text: '#ef4444', dot: '#ef4444' },
 };
 
-const IdentityBadge = ({ isPresent, entityName, lunaTier, dataroomTier, confidence, onReset }) => {
+const IdentityBadge = ({ isPresent, entityName, lunaTier, dataroomTier, confidence, onReset, isBypassed, onRevokeBypass }) => {
   const [showReset, setShowReset] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [resetError, setResetError] = useState('');
@@ -66,10 +66,29 @@ const IdentityBadge = ({ isPresent, entityName, lunaTier, dataroomTier, confiden
             {DR_TIER_LABELS[dataroomTier] || `T${dataroomTier}`}
           </span>
         )}
-        <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>
-          {(confidence * 100).toFixed(0)}%
-        </span>
+        {isBypassed ? (
+          <span style={{ color: '#34d399', fontSize: 10, fontWeight: 600 }}>PASS</span>
+        ) : (
+          <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>
+            {(confidence * 100).toFixed(0)}%
+          </span>
+        )}
       </div>
+
+      {/* Revoke bypass button */}
+      {isBypassed && onRevokeBypass && (
+        <button
+          onClick={onRevokeBypass}
+          className="p-1.5 rounded border border-transparent text-emerald-400/60 hover:text-red-400/80 hover:border-red-500/30 transition-all"
+          title="Revoke bypass"
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </button>
+      )}
 
       {/* Small reset button */}
       <button
