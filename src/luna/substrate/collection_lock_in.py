@@ -63,6 +63,39 @@ COLLECTION_SIGMOID_X0 = 0.5
 COLLECTION_LOCK_IN_MIN = 0.05   # No collection ever reaches zero
 COLLECTION_LOCK_IN_MAX = 1.0
 
+# ── PATTERN-SPECIFIC FLOORS ─────────────────────────────────────────
+PATTERN_FLOORS = {
+    "ceremonial":  0.30,   # Immutable sovereignty floor
+    "emergent":    0.10,   # Luna's own work — persists longer
+    "utilitarian": 0.05,   # Existing default — unchanged
+}
+
+# ── PATTERN-SPECIFIC DECAY LAMBDAS ──────────────────────────────────
+PATTERN_DECAY_LAMBDAS = {
+    "ceremonial": {
+        "settled":  0.0,
+        "fluid":    0.0,
+        "drifting": 0.0,
+    },
+    "emergent": {
+        "settled":  0.0000002,
+        "fluid":    0.00003,
+        "drifting": 0.0003,
+    },
+    "utilitarian": {
+        "settled":  0.0000005,
+        "fluid":    0.00005,
+        "drifting": 0.0005,
+    },
+}
+
+# ── STARTING LOCK-IN BY PATTERN ─────────────────────────────────────
+PATTERN_STARTING_LOCK_IN = {
+    "ceremonial":  0.15,
+    "emergent":    0.50,
+    "utilitarian": 0.15,
+}
+
 # Thresholds (same as node-level for consistency)
 COLLECTION_THRESHOLD_SETTLED = 0.70
 COLLECTION_THRESHOLD_DRIFTING = 0.30
@@ -78,23 +111,17 @@ def compute_collection_lock_in(
     connected_collections: int = 0,
     entity_overlap: int = 0,
     seconds_since_access: float = 0.0,
+    ingestion_pattern: str = "utilitarian",
 ) -> float:
     """
     Compute lock-in coefficient for an Aibrarian collection.
-
-    Uses the same sigmoid-based formula as memory nodes but with
-    library-adjusted weights, decay rates, and floor.
-
-    Args:
-        access_count: Total searches + document opens
-        annotation_count: Bookmarks + notes + flags Luna has made
-        connected_collections: Cross-references to other collections
-        entity_overlap: Entities shared with Memory Matrix
-        seconds_since_access: Seconds since last access (for decay)
-
-    Returns:
-        Lock-in coefficient between 0.05 and 1.0
+    Pattern determines floor, decay rates, and minimum visibility.
     """
+    floor = PATTERN_FLOORS.get(ingestion_pattern, COLLECTION_LOCK_IN_MIN)
+    decay_table = PATTERN_DECAY_LAMBDAS.get(
+        ingestion_pattern, PATTERN_DECAY_LAMBDAS["utilitarian"]
+    )
+
     # Weighted activity score
     activity = (
         access_count * COLLECTION_WEIGHTS["access"]
@@ -106,18 +133,19 @@ def compute_collection_lock_in(
     # Sigmoid mapping
     raw = sigmoid(activity, k=COLLECTION_SIGMOID_K, x0=COLLECTION_SIGMOID_X0)
 
-    # Scale to bounded range
-    lock_in = COLLECTION_LOCK_IN_MIN + (COLLECTION_LOCK_IN_MAX - COLLECTION_LOCK_IN_MIN) * raw
+    # Scale to bounded range using pattern floor
+    lock_in = floor + (COLLECTION_LOCK_IN_MAX - floor) * raw
 
-    # State-dependent decay
+    # State-dependent decay using pattern-specific lambdas
     state = classify_collection_state(lock_in)
-    lambda_decay = COLLECTION_DECAY_LAMBDAS.get(state.value, 0.0005)
+    lambda_decay = decay_table.get(state.value, 0.0)
 
-    if seconds_since_access > 0:
+    if seconds_since_access > 0 and lambda_decay > 0:
         decay_factor = math.exp(-lambda_decay * seconds_since_access)
         lock_in *= decay_factor
 
-    return max(COLLECTION_LOCK_IN_MIN, min(COLLECTION_LOCK_IN_MAX, round(lock_in, 4)))
+    # Enforce pattern floor
+    return max(floor, min(COLLECTION_LOCK_IN_MAX, round(lock_in, 4)))
 
 
 def classify_collection_state(lock_in: float) -> LockInState:
@@ -217,16 +245,17 @@ class CollectionLockInEngine:
             for r in rows
         ]
 
-    async def ensure_tracked(self, collection_key: str) -> None:
+    async def ensure_tracked(self, collection_key: str, pattern: str = "utilitarian") -> None:
         """Ensure a collection has a lock-in tracking record."""
         existing = await self.get_lock_in(collection_key)
         if existing is None:
+            starting = PATTERN_STARTING_LOCK_IN.get(pattern, 0.15)
             await self._db.execute(
-                "INSERT OR IGNORE INTO collection_lock_in (collection_key) VALUES (?)",
-                (collection_key,),
+                "INSERT OR IGNORE INTO collection_lock_in (collection_key, lock_in) VALUES (?, ?)",
+                (collection_key, starting),
             )
 
-    async def bump_access(self, collection_key: str) -> float:
+    async def bump_access(self, collection_key: str, pattern: str = "utilitarian") -> float:
         """
         Increment access count and recalculate lock-in.
 
@@ -235,9 +264,8 @@ class CollectionLockInEngine:
         Returns:
             New lock-in value
         """
-        await self.ensure_tracked(collection_key)
+        await self.ensure_tracked(collection_key, pattern=pattern)
 
-        # Increment access count and update timestamp
         await self._db.execute(
             """UPDATE collection_lock_in
                SET access_count = access_count + 1,
@@ -247,9 +275,9 @@ class CollectionLockInEngine:
             (collection_key,),
         )
 
-        return await self._recalculate(collection_key)
+        return await self._recalculate(collection_key, ingestion_pattern=pattern)
 
-    async def bump_annotation(self, collection_key: str) -> float:
+    async def bump_annotation(self, collection_key: str, pattern: str = "utilitarian") -> float:
         """
         Increment annotation count and recalculate lock-in.
 
@@ -258,7 +286,7 @@ class CollectionLockInEngine:
         Returns:
             New lock-in value
         """
-        await self.ensure_tracked(collection_key)
+        await self.ensure_tracked(collection_key, pattern=pattern)
 
         await self._db.execute(
             """UPDATE collection_lock_in
@@ -268,7 +296,7 @@ class CollectionLockInEngine:
             (collection_key,),
         )
 
-        return await self._recalculate(collection_key)
+        return await self._recalculate(collection_key, ingestion_pattern=pattern)
 
     async def set_connections(self, collection_key: str, count: int) -> float:
         """Update connected_collections count and recalculate."""
@@ -298,13 +326,12 @@ class CollectionLockInEngine:
 
         return await self._recalculate(collection_key)
 
-    async def _recalculate(self, collection_key: str) -> float:
+    async def _recalculate(self, collection_key: str, ingestion_pattern: str = "utilitarian") -> float:
         """Recalculate and persist lock-in for a collection."""
         record = await self.get_lock_in(collection_key)
         if record is None:
-            return COLLECTION_LOCK_IN_MIN
+            return PATTERN_FLOORS.get(ingestion_pattern, COLLECTION_LOCK_IN_MIN)
 
-        # Compute seconds since last access
         seconds_since = 0.0
         if record.last_accessed_at:
             try:
@@ -319,6 +346,7 @@ class CollectionLockInEngine:
             connected_collections=record.connected_collections,
             entity_overlap=record.entity_overlap_count,
             seconds_since_access=seconds_since,
+            ingestion_pattern=ingestion_pattern,
         )
 
         new_state = classify_collection_state(new_lock_in).value

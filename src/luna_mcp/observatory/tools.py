@@ -794,3 +794,93 @@ async def tool_observatory_entity_review_quest() -> dict:
         "quest_id": result.get("quest_id"),
         "entities_queued": entity_names,
     }
+
+
+# ==============================================================================
+# 11. observatory_collection_health
+# ==============================================================================
+
+async def tool_observatory_collection_health() -> dict:
+    """
+    Collection lock-in health overview.
+    Reports lock-in scores, states, patterns, and floor violations
+    for all tracked collections.
+    """
+    if not DB_PATH.exists():
+        return {"error": f"Database not found at {DB_PATH}"}
+
+    from luna.substrate.collection_lock_in import (
+        PATTERN_FLOORS,
+        COLLECTION_LOCK_IN_MIN,
+    )
+
+    # Load registry for pattern lookup
+    registry_collections = {}
+    try:
+        import yaml
+        registry_path = DB_PATH.parent.parent / "config" / "aibrarian_registry.yaml"
+        if registry_path.exists():
+            registry = yaml.safe_load(registry_path.read_text())
+            registry_collections = registry.get("collections", {})
+    except Exception:
+        pass
+
+    collections = []
+    alerts = []
+
+    async with _readonly_db() as db:
+        cursor = await db.execute(
+            """SELECT collection_key, lock_in, state,
+                      access_count, annotation_count,
+                      last_accessed_at, updated_at
+               FROM collection_lock_in
+               ORDER BY lock_in DESC"""
+        )
+        rows = await cursor.fetchall()
+
+    for r in rows:
+        key = r["collection_key"]
+        lock_in = r["lock_in"]
+        state = r["state"]
+
+        col_cfg = registry_collections.get(key, {})
+        pattern = col_cfg.get("ingestion_pattern", "utilitarian")
+
+        floor = PATTERN_FLOORS.get(pattern, COLLECTION_LOCK_IN_MIN)
+        near_floor = lock_in < (floor + 0.05)
+        at_floor = lock_in <= floor
+
+        entry = {
+            "collection_key": key,
+            "lock_in": round(lock_in, 4),
+            "state": state,
+            "pattern": pattern,
+            "floor": floor,
+            "access_count": r["access_count"],
+            "annotation_count": r["annotation_count"],
+            "last_accessed_at": r["last_accessed_at"],
+            "near_floor": near_floor,
+            "at_floor": at_floor,
+        }
+        collections.append(entry)
+
+        if pattern == "ceremonial" and near_floor:
+            alerts.append({
+                "severity": "critical" if at_floor else "warning",
+                "collection": key,
+                "message": (
+                    f"Ceremonial collection '{key}' at floor "
+                    f"(lock_in={lock_in:.3f}, floor={floor}). "
+                    "Community knowledge at minimum visibility."
+                    if at_floor else
+                    f"Ceremonial collection '{key}' approaching floor "
+                    f"(lock_in={lock_in:.3f}, floor={floor})."
+                ),
+            })
+
+    return {
+        "collections_tracked": len(collections),
+        "collections": collections,
+        "alerts": alerts,
+        "alert_count": len(alerts),
+    }

@@ -231,6 +231,8 @@ class AiBrarianConfig:
     embedding_dim: int = 384
     tags: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    project_key: str = ""
+    ingestion_pattern: str = "utilitarian"
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +461,10 @@ class AiBrarianEngine:
         if self._lock_in_engine is None:
             return
         try:
-            await self._lock_in_engine.bump_access(collection_key)
+            pattern = "utilitarian"
+            if collection_key in self.collections:
+                pattern = self.collections[collection_key].ingestion_pattern
+            await self._lock_in_engine.bump_access(collection_key, pattern=pattern)
         except Exception as e:
             logger.debug("Lock-in bump failed for %s: %s", collection_key, e)
 
@@ -518,6 +523,8 @@ class AiBrarianEngine:
                     "db_exists": db_path.exists(),
                     "schema_type": config.schema_type,
                     "tags": config.tags,
+                    "project_key": config.project_key,
+                    "ingestion_pattern": config.ingestion_pattern,
                 }
             )
         return result

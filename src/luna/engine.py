@@ -369,6 +369,72 @@ Emojis can accompany gestures or stand alone.
         self.reconcile = ReconcileManager()
         logger.info("ReconcileManager initialized")
 
+        # =================================================================
+        # Phase 1 — Engine Ownership: substrate components
+        # Five instances the Engine owns. All MCP/API tools reference these
+        # instead of creating their own copies.
+        # Order matters: AiBrarian → CollectionLockIn → Annotations → Aperture
+        # =================================================================
+
+        # 1/4 AiBrarianEngine — universal document database layer
+        try:
+            from luna.substrate.aibrarian_engine import AiBrarianEngine
+            _project = Path(__file__).parent.parent.parent
+            self.aibrarian = AiBrarianEngine(
+                _project / "config" / "aibrarian_registry.yaml",
+                project_root=_project,
+            )
+            await self.aibrarian.initialize()
+            logger.info("AiBrarianEngine owned by Engine — connected")
+        except Exception as e:
+            self.aibrarian = None
+            logger.warning(f"AiBrarianEngine initialization failed (non-fatal): {e}")
+
+        # 2/4 CollectionLockInEngine — inject into AiBrarianEngine
+        try:
+            from luna.substrate.collection_lock_in import CollectionLockInEngine
+            matrix_actor = self.get_actor("matrix")
+            _matrix_obj = getattr(matrix_actor, "_matrix", None)
+            _mem_db = getattr(_matrix_obj, "db", None) if _matrix_obj else None
+            if _mem_db is not None:
+                self.collection_lock_in = CollectionLockInEngine(_mem_db)
+                await self.collection_lock_in.ensure_table()
+                if self.aibrarian is not None:
+                    self.aibrarian.set_lock_in_engine(self.collection_lock_in)
+                logger.info("CollectionLockInEngine owned by Engine — injected into AiBrarian")
+            else:
+                self.collection_lock_in = None
+                logger.warning("CollectionLockInEngine skipped — Matrix DB not available")
+        except Exception as e:
+            self.collection_lock_in = None
+            logger.warning(f"CollectionLockInEngine initialization failed (non-fatal): {e}")
+
+        # 3/4 AnnotationEngine — bridge from collections into Memory Matrix
+        try:
+            from luna.substrate.collection_annotations import AnnotationEngine
+            matrix_actor = self.get_actor("matrix")
+            _matrix_obj = getattr(matrix_actor, "_matrix", None)
+            _mem_db = getattr(_matrix_obj, "db", None) if _matrix_obj else None
+            if _mem_db is not None:
+                self.annotations = AnnotationEngine(
+                    _mem_db,
+                    memory_matrix=_matrix_obj,
+                    lock_in_engine=self.collection_lock_in,
+                )
+                await self.annotations.ensure_table()
+                logger.info("AnnotationEngine owned by Engine — bridged to Matrix")
+            else:
+                self.annotations = None
+                logger.warning("AnnotationEngine skipped — Matrix DB not available")
+        except Exception as e:
+            self.annotations = None
+            logger.warning(f"AnnotationEngine initialization failed (non-fatal): {e}")
+
+        # 4/4 ApertureManager — cognitive focus control (default: BALANCED)
+        from luna.context.aperture import ApertureManager
+        self.aperture = ApertureManager()
+        logger.info(f"ApertureManager owned by Engine — preset={self.aperture.state.preset.value}")
+
         # Initialize LocalSubtaskRunner (Qwen 3B lightweight agentic dispatch)
         if SUBTASK_RUNNER_AVAILABLE:
             director = self.get_actor("director")
@@ -814,6 +880,7 @@ Emojis can accompany gestures or stand alone.
             async def _retrieve_context():
                 memory_context = ""
                 history_context = None
+                retrieval_query = user_message
 
                 if history_manager and history_manager.is_ready:
                     history_context = await history_manager.build_history_context(user_message)
@@ -822,7 +889,6 @@ Emojis can accompany gestures or stand alone.
                     await self._load_conversation_history(matrix, limit=10)
 
                     # Use rewritten query for better retrieval if available
-                    retrieval_query = user_message
                     if subtask_phase and subtask_phase.rewritten_query:
                         retrieval_query = subtask_phase.rewritten_query
                         logger.info(f"[SUBTASK] Using rewritten query for retrieval: {retrieval_query[:60]}...")
@@ -833,10 +899,11 @@ Emojis can accompany gestures or stand alone.
                     if memory_context:
                         self.context.add(content=memory_context, source=ContextSource.MEMORY)
 
-                    dataroom_context = await self._get_dataroom_context(matrix, user_message)
-                    if dataroom_context:
-                        memory_context = (memory_context or "") + "\n\n" + dataroom_context
-                        self.context.add(content=dataroom_context, source=ContextSource.MEMORY)
+                # Phase 2: search chain for active project collections
+                collection_context = await self._get_collection_context(retrieval_query)
+                if collection_context:
+                    memory_context = (memory_context or "") + "\n\n" + collection_context
+                    self.context.add(content=collection_context, source=ContextSource.MEMORY)
 
                 return memory_context, history_context
 
@@ -1287,162 +1354,90 @@ Emojis can accompany gestures or stand alone.
         except Exception as e:
             logger.debug(f"Reflective tick consolidation skipped: {e}")
 
+        # Phase 4: Collection floor monitor
+        try:
+            from luna_mcp.observatory.tools import tool_observatory_collection_health
+            health = await tool_observatory_collection_health()
+            for alert in health.get("alerts", []):
+                severity = alert.get("severity", "warning")
+                msg = alert.get("message", "")
+                if severity == "critical":
+                    logger.warning("[OBSERVATORY] CRITICAL — %s", msg)
+                else:
+                    logger.info("[OBSERVATORY] %s", msg)
+        except Exception as e:
+            logger.debug(f"Collection health check skipped: {e}")
+
     # =========================================================================
     # Context Assembly
     # =========================================================================
 
+    # DEPRECATED — replaced by _get_collection_context() in Phase 2.
+    # DO NOT DELETE — AccessBridge / filter_documents permission logic
+    # below needs to be re-integrated when identity permission layer
+    # is formalized. See: luna.identity.bridge.
     async def _get_dataroom_context(self, matrix, query: str) -> str:
+        return ""  # noop — replaced by _get_collection_context()
+
+    async def _get_collection_context(self, query: str) -> str:
         """
-        Check if query is about Data Room documents and return formatted context.
-
-        Detects queries about documents, files, legal, financials, etc.
-        and searches DOCUMENT nodes specifically.
+        Phase 2: Search project collections via run_search_chain().
+        Only runs when a project is active.
+        Returns provenance-tagged context string or empty string.
         """
-        query_lower = query.lower()
-
-        # Keywords that indicate a Data Room query
-        dataroom_signals = [
-            "document", "documents", "docs", "files", "file",
-            "legal", "loi", "letter of intent",
-            "financials", "financial", "budget", "cost",
-            "proposal", "presentation", "deck", "pitch",
-            "data room", "dataroom",
-            "team", "portfolio", "resume",
-            "partnership", "partnerships",
-            "product", "architecture",
-            "market", "competition",
-            "overview", "company",
-            "bible", "manifesto",
-            "investor", "investment",
-        ]
-
-        # Category mapping for targeted queries
-        category_hints = {
-            "legal": "3. Legal",
-            "loi": "3. Legal",
-            "letter of intent": "3. Legal",
-            "financial": "2. Financials",
-            "budget": "2. Financials",
-            "cost": "2. Financials",
-            "team": "6. Team",
-            "portfolio": "6. Team",
-            "product": "4. Product",
-            "architecture": "4. Product",
-            "market": "5. Market & Competition",
-            "competition": "5. Market & Competition",
-            "overview": "1. Company Overview",
-            "company": "1. Company Overview",
-            "proposal": "1. Company Overview",
-            "partnership": "8. Partnerships & Impact",
-            "investor": "9. Risk & Mitigation",
-            "pitch": "9. Risk & Mitigation",
-            "go-to-market": "7. Go-to-Market",
-        }
-
-        if not any(sig in query_lower for sig in dataroom_signals):
+        if not self._active_project:
             return ""
+
+        search_cfg = getattr(self, "_search_chain_config", None)
+        if not search_cfg:
+            try:
+                from luna.tools.search_chain import SearchChainConfig
+                search_cfg = SearchChainConfig.default()
+            except Exception:
+                return ""
 
         try:
-            memory = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
-            if not memory:
-                return ""
-
-            # Determine if there's a specific category match
-            target_category = None
-            for keyword, category in category_hints.items():
-                if keyword in query_lower:
-                    target_category = category
-                    break
-
-            # Search DOCUMENT nodes
-            if target_category:
-                import json as _json
-                rows = await memory.db.fetchall(
-                    "SELECT id, content, summary, metadata FROM memory_nodes "
-                    "WHERE node_type = 'DOCUMENT' AND metadata LIKE ? "
-                    "ORDER BY importance DESC LIMIT 20",
-                    (f'%"{target_category}"%',),
-                )
-            else:
-                rows = await memory.db.fetchall(
-                    "SELECT id, content, summary, metadata FROM memory_nodes "
-                    "WHERE node_type = 'DOCUMENT' "
-                    "ORDER BY importance DESC LIMIT 20",
-                )
-
-            if not rows:
-                return ""
-
-            # ── Permission filter: remove documents the speaker can't see ──
-            import json as _json
-            bridge_result = None
-            identity_actor = self.get_actor("identity")
-            if identity_actor and identity_actor.current.is_present:
-                entity_id = identity_actor.current.entity_id
-                if entity_id:
-                    try:
-                        from luna.identity.bridge import AccessBridge
-                        _mem = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
-                        if _mem:
-                            _bridge = AccessBridge(_mem.db)
-                            bridge_result = await _bridge.lookup(entity_id)
-                    except Exception as e:
-                        logger.warning(f"Bridge lookup in dataroom context failed: {e}")
-
-            # Convert rows to dicts for the permission filter
-            doc_dicts = []
-            for row in rows:
-                _id, content, summary, meta_str = row[0], row[1], row[2], row[3]
-                meta = _json.loads(meta_str) if meta_str else {}
-                doc_dicts.append({
-                    "id": _id, "content": content, "summary": summary,
-                    "metadata": meta,
-                })
-
-            from luna.identity.permissions import filter_documents
-            allowed_docs, denied_docs = filter_documents(doc_dicts, bridge_result)
-
-            if denied_docs:
-                logger.info(
-                    "Dataroom filter: %d allowed, %d denied for %s",
-                    len(allowed_docs), len(denied_docs),
-                    bridge_result.entity_id if bridge_result else "unknown",
-                )
-
-            if not allowed_docs:
-                return ""
-
-            # Format as directive context so Luna presents the docs
-            # NOTE: Chat UI renders plain text (no markdown), so avoid bold/italic syntax
-            lines = [
-                "[DATA ROOM DOCUMENTS — Cite these by their exact names. Do NOT wrap names in asterisks or markdown.]",
-            ]
-            if target_category:
-                lines.append(f"Category: {target_category}")
-
-            for doc in allowed_docs:
-                meta = doc["metadata"]
-                name = (doc["summary"] or doc["content"] or "Untitled").split(" \u2014 ")[0].strip()
-                category = meta.get("category", "")
-                ftype = meta.get("file_type", "")
-                url = meta.get("gdrive_url", "")
-                status = meta.get("status", "")
-                entry = f'- "{name}"'
-                if ftype:
-                    entry += f" ({ftype})"
-                if category:
-                    entry += f" [{category}]"
-                if status:
-                    entry += f" — {status}"
-                if url and "drive.google.com" in url:
-                    entry += f" — {url}"
-                lines.append(entry)
-
-            return "\n".join(lines)
-
+            from luna.tools.search_chain import run_search_chain
+            results = await run_search_chain(search_cfg, query, self)
         except Exception as e:
-            logger.warning(f"Data Room context retrieval failed: {e}")
+            logger.warning(f"[PHASE2] Collection search failed: {e}")
             return ""
+
+        if not results:
+            return ""
+
+        parts = []
+        for r in results:
+            source = r.get("source", "collection")
+            content = r.get("content", "")
+            if content:
+                parts.append(f"[{source}]\n{content}")
+
+        assembled = "\n\n".join(parts)
+        logger.info(
+            f"[PHASE2] Collection context: {len(results)} results, "
+            f"{len(assembled)} chars, project={self._active_project}"
+        )
+        return assembled
+
+    # --- Original _get_dataroom_context body preserved for reference ---
+    # AccessBridge permission logic (RE-INTEGRATE when identity layer is formalized):
+    #
+    #   bridge_result = None
+    #   identity_actor = self.get_actor("identity")
+    #   if identity_actor and identity_actor.current.is_present:
+    #       entity_id = identity_actor.current.entity_id
+    #       if entity_id:
+    #           from luna.identity.bridge import AccessBridge
+    #           _mem = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
+    #           if _mem:
+    #               _bridge = AccessBridge(_mem.db)
+    #               bridge_result = await _bridge.lookup(entity_id)
+    #
+    #   from luna.identity.permissions import filter_documents
+    #   allowed_docs, denied_docs = filter_documents(doc_dicts, bridge_result)
+
+    # (Original _get_dataroom_context body removed — see git history)
 
     async def _load_conversation_history(self, matrix, limit: int = 10) -> int:
         """
@@ -1976,4 +1971,9 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
                 "initialized": self._voice is not None,
                 "active": self._voice.is_active if self._voice else False,
             } if self.config.voice_enabled else None,
+            # Phase 1 — Engine Ownership
+            "aibrarian": "connected" if getattr(self, "aibrarian", None) is not None else "not_initialized",
+            "collection_lock_in": "connected" if getattr(self, "collection_lock_in", None) is not None else "not_initialized",
+            "annotations": "connected" if getattr(self, "annotations", None) is not None else "not_initialized",
+            "aperture": getattr(self, "aperture", None).state.preset.value if getattr(self, "aperture", None) else "not_initialized",
         }

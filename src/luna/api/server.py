@@ -82,6 +82,12 @@ async def _run_qa_validation_background(
     try:
         validator = get_qa_validator()
 
+        # Yield event loop so director can finish writing _last_system_prompt
+        # before we read it. The background task fires immediately after the
+        # response callback, which runs in the same processing cycle as the
+        # prompt write — one yield ensures the write completes first.
+        await asyncio.sleep(0)
+
         # Get personality info from director
         personality_injected = False
         personality_length = 0
@@ -109,6 +115,11 @@ async def _run_qa_validation_background(
                 if mem:
                     try:
                         memory_stats = await mem.get_stats()
+                        # If edges = 0 on first inference after restart, retry once
+                        # (matrix may still be initializing its stats cache)
+                        if memory_stats.get("total_edges", 0) == 0:
+                            await asyncio.sleep(0.1)
+                            memory_stats = await mem.get_stats()
                     except Exception:
                         pass
 
@@ -409,9 +420,56 @@ async def lifespan(app: FastAPI):
         identity_actor.on_change(_on_identity_change)
         logger.info("Identity WebSocket broadcast wired")
 
+    # Phase 1 — Engine Ownership: wire Engine-owned AiBrarian into consumers
+    if _engine and getattr(_engine, "aibrarian", None) is not None:
+        try:
+            from luna_mcp.tools.aibrarian import set_engine as _mcp_set_engine
+            _mcp_set_engine(_engine.aibrarian)
+            logger.info("MCP aibrarian tools wired to Engine-owned AiBrarianEngine")
+        except Exception as _e:
+            logger.warning(f"Failed to wire MCP aibrarian tools: {_e}")
+        try:
+            from luna.tools.dataroom_tools import set_engine as _dr_set_engine
+            _dr_set_engine(_engine.aibrarian)
+            logger.info("Dataroom tools wired to Engine-owned AiBrarianEngine")
+        except Exception as _e:
+            logger.warning(f"Failed to wire dataroom tools: {_e}")
+
     # Start runtime watchdog for continuous health monitoring
     watchdog_task = await start_watchdog(check_interval=60, engine=_engine)
     logger.info("Runtime watchdog started")
+
+    # Auto-restore identity bypass if sentinel file exists
+    # Runs as a background task so engine actor loop is fully running first
+    _bypass_sentinel = Path(__file__).parent.parent.parent.parent / "config" / "identity_bypass.json"
+    if _bypass_sentinel.exists():
+        async def _auto_restore_bypass():
+            await asyncio.sleep(2)  # Let engine actor loop fully start
+            try:
+                import json as _json, time as _time
+                _ia = _engine.get_actor("identity") if _engine else None
+                if not _ia:
+                    logger.warning("[BYPASS] Auto-restore skipped — identity actor not found")
+                    return
+                _bypass_data = _json.loads(_bypass_sentinel.read_text())
+                _ia.current.entity_id = _bypass_data.get("entity_id", "ahab")
+                _ia.current.entity_name = _bypass_data.get("entity_name", "Ahab")
+                _ia.current.confidence = 1.0
+                _ia.current.luna_tier = _bypass_data.get("luna_tier", "admin")
+                _ia.current.dataroom_tier = _bypass_data.get("dataroom_tier", 1)
+                _ia.current.dataroom_categories = _bypass_data.get("dataroom_categories", [1,2,3,4,5,6,7,8,9])
+                _ia.current.last_seen = _time.time()
+                _ia._bypass_active = True
+
+                async def _bypass_keepalive_startup():
+                    while getattr(_ia, '_bypass_active', False):
+                        _ia.current.last_seen = _time.time()
+                        await asyncio.sleep(5)
+                asyncio.create_task(_bypass_keepalive_startup())
+                logger.info("[BYPASS] Auto-restored identity bypass from sentinel file")
+            except Exception as _e:
+                logger.warning(f"[BYPASS] Failed to restore bypass from sentinel: {_e}")
+        asyncio.create_task(_auto_restore_bypass())
 
     logger.info("Luna Engine ready")
 
@@ -852,7 +910,19 @@ async def bypass_identity():
     identity_actor._bypass_active = True
     asyncio.create_task(_bypass_keepalive())
     await _broadcast_identity_state()
-    logger.info(f"[BYPASS] Identity set to {entity_name} ({entity_id})")
+
+    # Persist bypass so it survives restarts
+    import json as _json
+    _sentinel = Path(__file__).parent.parent.parent.parent / "config" / "identity_bypass.json"
+    _sentinel.parent.mkdir(parents=True, exist_ok=True)
+    _sentinel.write_text(_json.dumps({
+        "entity_id": entity_id,
+        "entity_name": entity_name,
+        "luna_tier": luna_tier,
+        "dataroom_tier": dataroom_tier,
+        "dataroom_categories": dataroom_categories,
+    }))
+    logger.info(f"[BYPASS] Identity set to {entity_name} ({entity_id}) — persisted to sentinel")
 
     return {
         "bypassed": True,
@@ -876,7 +946,12 @@ async def bypass_off():
     identity_actor._bypass_active = False
     identity_actor.current.clear()
     await _broadcast_identity_state()
-    logger.info("[BYPASS] Identity bypass revoked")
+
+    # Remove sentinel so bypass doesn't auto-restore on next restart
+    _sentinel = Path(__file__).parent.parent.parent.parent / "config" / "identity_bypass.json"
+    if _sentinel.exists():
+        _sentinel.unlink()
+    logger.info("[BYPASS] Identity bypass revoked — sentinel removed")
     return {"bypassed": False}
 
 
@@ -1184,6 +1259,31 @@ async def get_active_project():
         "scope": _engine.active_scope,
         "scopes": _engine.active_scopes,
     }
+
+
+@app.get("/api/projects")
+async def get_projects():
+    """List all defined projects with active state."""
+    import yaml as _yaml
+    registry_path = Path(__file__).parent.parent.parent.parent / "config" / "projects" / "projects.yaml"
+    if not registry_path.exists():
+        return {"projects": [], "active": _engine.active_project if _engine else None}
+    with open(registry_path) as f:
+        data = _yaml.safe_load(f) or {}
+    projects = []
+    for slug, conf in data.get("projects", {}).items():
+        projects.append({
+            "slug": slug,
+            "name": conf.get("name", slug),
+            "description": conf.get("description", ""),
+            "ingestion_pattern": conf.get("ingestion_pattern", "utilitarian"),
+            "aperture_default": conf.get("aperture_default", "BALANCED"),
+            "collections": conf.get("collections", []),
+            "icon": conf.get("icon", "◇"),
+            "accent": conf.get("accent", "A78BFA"),
+            "active": slug == (_engine.active_project if _engine else None),
+        })
+    return {"projects": projects, "active": _engine.active_project if _engine else None}
 
 
 @app.post("/api/system/relaunch")
@@ -6566,6 +6666,16 @@ async def qa_get_health():
     return QAHealthResponse(**health)
 
 
+@app.post("/qa/recalibrate")
+async def qa_recalibrate():
+    """Mark a recalibration point. Stats will show 'since recalibration' context."""
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+    validator = get_qa_validator()
+    ts = validator.mark_recalibration()
+    return {"status": "recalibrated", "timestamp": ts.isoformat()}
+
+
 @app.get("/qa/last")
 async def qa_get_last_report():
     """
@@ -6968,64 +7078,63 @@ async def qa_simulate(request: SimulateRequest):
     inference_id = f"SIM-{uuid.uuid4().hex[:8]}"
 
     try:
-        # Get the director actor to process the query
-        director = _engine.get_actor("director")
-        if not director:
-            raise HTTPException(status_code=503, detail="Director actor not available")
+        # Run message through engine via callback pattern (same as /message)
+        response_future: asyncio.Future = asyncio.Future()
 
-        # Create an event and process it
-        event = InputEvent(type=EventType.USER_MESSAGE, payload=request.query)
+        async def on_sim_response(text: str, data: dict) -> None:
+            if not response_future.done():
+                response_future.set_result((text, data))
 
-        # Process through the director
-        response = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None, lambda: director.process(Message(event=event))
-            ),
-            timeout=30.0
-        )
+        _engine.on_response(on_sim_response)
+
+        try:
+            await _engine.send_message(request.query, source="qa-simulate")
+            response_text, response_data = await asyncio.wait_for(response_future, timeout=30.0)
+        finally:
+            if on_sim_response in _engine._on_response_callbacks:
+                _engine._on_response_callbacks.remove(on_sim_response)
 
         latency_ms = (time.time() - start_time) * 1000
 
-        # Get the validator and check the last report
+        # Use the QA report the background validator just wrote (fire-and-forget)
+        # Give it a brief moment to complete
+        await asyncio.sleep(0.2)
+
         validator = get_qa_validator()
 
-        # Build a basic InferenceContext for the simulation
-        from luna.qa import InferenceContext
+        # Use last report if it matches the query, otherwise build minimal context
+        report = None
+        if validator._last_report and validator._last_report.query == request.query:
+            report = validator._last_report
+        else:
+            from luna.qa import InferenceContext
+            ctx = InferenceContext(
+                inference_id=inference_id,
+                session_id="simulation",
+                timestamp=datetime.now(),
+                query=request.query,
+                route=response_data.get("route_decision", "SIMULATION"),
+                provider_used=response_data.get("provider_used", "unknown"),
+                latency_ms=latency_ms,
+                personality_injected=True,
+                personality_length=5000,
+                virtues_loaded=True,
+                raw_response=response_text,
+                final_response=response_text,
+            )
+            report = validator.validate(ctx)
 
-        ctx = InferenceContext(
-            inference_id=inference_id,
-            session_id="simulation",
-            timestamp=datetime.now(),
-            query=request.query,
-            route=getattr(response, "route", "SIMULATION"),
-            provider_used=getattr(response, "model", "unknown"),
-            providers_tried=[getattr(response, "model", "unknown")],
-            provider_errors={},
-            latency_ms=latency_ms,
-            input_tokens=getattr(response, "input_tokens", 0),
-            output_tokens=getattr(response, "output_tokens", 0),
-            personality_injected=True,
-            personality_length=0,
-            virtues_loaded=True,
-            narration_applied=True,
-            raw_response=getattr(response, "text", str(response)),
-            narrated_response=None,
-            final_response=getattr(response, "text", str(response)),
-        )
+        final_text = response_text
 
-        # Validate the response
-        report = validator.validate(ctx)
-
-        # Build response with results
-        result = {
+        return {
             "inference_id": inference_id,
             "bug_id": request.bug_id,
             "query": request.query,
             "passed": report.passed,
             "failed_count": report.failed_count,
             "latency_ms": latency_ms,
-            "response": ctx.final_response,
-            "final_response": ctx.final_response,
+            "response": final_text,
+            "final_response": final_text,
             "failed_assertions": [a.id for a in report.failed_assertions],
             "diagnosis": report.diagnosis,
             "assertions": [
@@ -7040,8 +7149,6 @@ async def qa_simulate(request: SimulateRequest):
                 for a in report.assertions
             ],
         }
-
-        return result
 
     except asyncio.TimeoutError:
         return {
@@ -7327,10 +7434,21 @@ async def observatory_ws_proxy(websocket: WebSocket, path: str):
 _aibrarian_engine = None
 
 async def _get_aibrarian_engine():
-    """Lazy-initialize the AiBrarian Engine."""
+    """Get the Engine-owned AiBrarianEngine instance.
+
+    Prefers the Engine-owned instance (Phase 1 ownership). Falls back to
+    standalone initialization only when the Engine hasn't booted yet.
+    """
     global _aibrarian_engine
     if _aibrarian_engine is not None:
         return _aibrarian_engine
+
+    # Phase 1: use Engine-owned instance
+    if _engine is not None and getattr(_engine, "aibrarian", None) is not None:
+        _aibrarian_engine = _engine.aibrarian
+        return _aibrarian_engine
+
+    # Fallback: standalone init (server started without full Engine boot)
     from luna.substrate.aibrarian_engine import AiBrarianEngine
     _project = Path(__file__).parent.parent.parent.parent
     _aibrarian_engine = AiBrarianEngine(
@@ -7338,6 +7456,7 @@ async def _get_aibrarian_engine():
         project_root=_project,
     )
     await _aibrarian_engine.initialize()
+    logger.warning("AiBrarianEngine fallback: standalone init in server.py")
     return _aibrarian_engine
 
 
@@ -7354,26 +7473,26 @@ class AiBrarianIngestRequest(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
-@app.get("/api/aibrarian/list")
+@app.get("/api/nexus/list")
 async def api_aibrarian_list():
     engine = await _get_aibrarian_engine()
     return {"collections": engine.list_collections()}
 
 
-@app.post("/api/aibrarian/search")
+@app.post("/api/nexus/search")
 async def api_aibrarian_search(req: AiBrarianSearchRequest):
     engine = await _get_aibrarian_engine()
     results = await engine.search(req.collection, req.query, req.search_type, req.limit)
     return {"results": results, "count": len(results)}
 
 
-@app.get("/api/aibrarian/{collection_key}/stats")
+@app.get("/api/nexus/{collection_key}/stats")
 async def api_aibrarian_stats(collection_key: str):
     engine = await _get_aibrarian_engine()
     return await engine.stats(collection_key)
 
 
-@app.post("/api/aibrarian/ingest")
+@app.post("/api/nexus/ingest")
 async def api_aibrarian_ingest(req: AiBrarianIngestRequest):
     engine = await _get_aibrarian_engine()
     doc_id = await engine.ingest(req.collection, Path(req.file_path), req.metadata)
@@ -7387,7 +7506,7 @@ class AiBrarianCoOccurrenceRequest(BaseModel):
     terms: str
     limit: int = 50
 
-@app.post("/api/aibrarian/co-occurrence")
+@app.post("/api/nexus/co-occurrence")
 async def api_aibrarian_co_occurrence(req: AiBrarianCoOccurrenceRequest):
     engine = await _get_aibrarian_engine()
     term_list = [t.strip() for t in req.terms.split(",") if t.strip()]
@@ -7397,12 +7516,12 @@ async def api_aibrarian_co_occurrence(req: AiBrarianCoOccurrenceRequest):
 
 # --- Document retrieval ---
 
-@app.get("/api/aibrarian/{c}/documents")
+@app.get("/api/nexus/{c}/documents")
 async def api_aibrarian_list_documents(c: str, skip: int = 0, limit: int = 50):
     engine = await _get_aibrarian_engine()
     return await engine.list_documents(c, skip, limit)
 
-@app.get("/api/aibrarian/{c}/documents/{doc_id}")
+@app.get("/api/nexus/{c}/documents/{doc_id}")
 async def api_aibrarian_get_document(c: str, doc_id: str):
     engine = await _get_aibrarian_engine()
     doc = await engine.get_document(c, doc_id)
@@ -7414,13 +7533,13 @@ async def api_aibrarian_get_document(c: str, doc_id: str):
 
 # --- Count & term stats ---
 
-@app.get("/api/aibrarian/{c}/count")
+@app.get("/api/nexus/{c}/count")
 async def api_aibrarian_count(c: str, q: str = "", search_type: str = "keyword"):
     engine = await _get_aibrarian_engine()
     n = await engine.count(c, q, search_type)
     return {"query": q, "search_type": search_type, "count": n}
 
-@app.get("/api/aibrarian/{c}/terms")
+@app.get("/api/nexus/{c}/terms")
 async def api_aibrarian_term_stats(c: str, terms: str = ""):
     engine = await _get_aibrarian_engine()
     term_list = [t.strip() for t in terms.split(",") if t.strip()]
@@ -7430,17 +7549,17 @@ async def api_aibrarian_term_stats(c: str, terms: str = ""):
 
 # --- Entities ---
 
-@app.get("/api/aibrarian/{c}/entities/top")
+@app.get("/api/nexus/{c}/entities/top")
 async def api_aibrarian_top_entities(c: str, limit: int = 50, sample_size: int = 100):
     engine = await _get_aibrarian_engine()
     return await engine.top_entities(c, limit, sample_size)
 
-@app.get("/api/aibrarian/{c}/entities/search")
+@app.get("/api/nexus/{c}/entities/search")
 async def api_aibrarian_search_entity(c: str, name: str = "", limit: int = 50):
     engine = await _get_aibrarian_engine()
     return await engine.search_entity(c, name, limit)
 
-@app.get("/api/aibrarian/{c}/entities/{doc_id}")
+@app.get("/api/nexus/{c}/entities/{doc_id}")
 async def api_aibrarian_document_entities(c: str, doc_id: str):
     engine = await _get_aibrarian_engine()
     return await engine.document_entities(c, doc_id)
@@ -7448,19 +7567,19 @@ async def api_aibrarian_document_entities(c: str, doc_id: str):
 
 # --- Timeline ---
 
-@app.get("/api/aibrarian/{c}/timeline")
+@app.get("/api/nexus/{c}/timeline")
 async def api_aibrarian_timeline(c: str, q: str = "", limit: int = 100, confidence: str = ""):
     engine = await _get_aibrarian_engine()
     conf = confidence if confidence else None
     return await engine.timeline(c, q, limit, conf)
 
-@app.get("/api/aibrarian/{c}/timeline/range")
+@app.get("/api/nexus/{c}/timeline/range")
 async def api_aibrarian_timeline_range(c: str, start: str = "", end: str = "", limit: int = 100, confidence: str = ""):
     engine = await _get_aibrarian_engine()
     conf = confidence if confidence else None
     return await engine.timeline_range(c, start, end, limit, conf)
 
-@app.get("/api/aibrarian/{c}/timeline/{doc_id}")
+@app.get("/api/nexus/{c}/timeline/{doc_id}")
 async def api_aibrarian_document_timeline(c: str, doc_id: str, confidence: str = ""):
     engine = await _get_aibrarian_engine()
     conf = confidence if confidence else None
@@ -7469,22 +7588,22 @@ async def api_aibrarian_document_timeline(c: str, doc_id: str, confidence: str =
 
 # --- Analytics ---
 
-@app.get("/api/aibrarian/{c}/analytics/frequency")
+@app.get("/api/nexus/{c}/analytics/frequency")
 async def api_aibrarian_word_frequency(c: str, q: str = "", top: int = 50):
     engine = await _get_aibrarian_engine()
     return await engine.word_frequency(c, q, top)
 
-@app.get("/api/aibrarian/{c}/analytics/ngrams")
+@app.get("/api/nexus/{c}/analytics/ngrams")
 async def api_aibrarian_ngrams(c: str, q: str = "", n: int = 2, top: int = 30):
     engine = await _get_aibrarian_engine()
     return await engine.ngrams(c, q, n, top)
 
-@app.get("/api/aibrarian/{c}/analytics/wordcloud")
+@app.get("/api/nexus/{c}/analytics/wordcloud")
 async def api_aibrarian_wordcloud(c: str, q: str = "", top: int = 100):
     engine = await _get_aibrarian_engine()
     return await engine.wordcloud(c, q, top)
 
-@app.get("/api/aibrarian/{c}/analytics/compare")
+@app.get("/api/nexus/{c}/analytics/compare")
 async def api_aibrarian_compare_terms(c: str, terms: str = "", context_window: int = 5, top: int = 20):
     engine = await _get_aibrarian_engine()
     term_list = [t.strip() for t in terms.split(",") if t.strip()]
@@ -7493,13 +7612,13 @@ async def api_aibrarian_compare_terms(c: str, terms: str = "", context_window: i
 
 # --- Similarity ---
 
-@app.get("/api/aibrarian/{c}/similar/{doc_id}")
+@app.get("/api/nexus/{c}/similar/{doc_id}")
 async def api_aibrarian_similar(c: str, doc_id: str, limit: int = 10):
     engine = await _get_aibrarian_engine()
     results = await engine.similar(c, doc_id, limit)
     return {"source_doc": doc_id, "similar_documents": results, "count": len(results)}
 
-@app.get("/api/aibrarian/{c}/similarity/batch")
+@app.get("/api/nexus/{c}/similarity/batch")
 async def api_aibrarian_batch_similarity(c: str, doc_ids: str = ""):
     engine = await _get_aibrarian_engine()
     id_list = [d.strip() for d in doc_ids.split(",") if d.strip()]
@@ -7508,7 +7627,7 @@ async def api_aibrarian_batch_similarity(c: str, doc_ids: str = ""):
 
 # --- Export ---
 
-@app.get("/api/aibrarian/{c}/export/csv")
+@app.get("/api/nexus/{c}/export/csv")
 async def api_aibrarian_export_csv(c: str, q: str = "", limit: int = 1000):
     engine = await _get_aibrarian_engine()
     import csv, io
@@ -7525,15 +7644,15 @@ async def api_aibrarian_export_csv(c: str, q: str = "", limit: int = 1000):
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="aibrarian_{safe_q}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="nexus_{safe_q}.csv"'},
     )
 
-@app.get("/api/aibrarian/{c}/export/json")
+@app.get("/api/nexus/{c}/export/json")
 async def api_aibrarian_export_json(c: str, q: str = "", limit: int = 1000):
     engine = await _get_aibrarian_engine()
     return await engine.export_search(c, q, limit, "json")
 
-@app.get("/api/aibrarian/{c}/export/document/{doc_id}")
+@app.get("/api/nexus/{c}/export/document/{doc_id}")
 async def api_aibrarian_export_document(c: str, doc_id: str, fmt: str = "json"):
     engine = await _get_aibrarian_engine()
     doc = await engine.get_document(c, doc_id)
@@ -7552,7 +7671,7 @@ async def api_aibrarian_export_document(c: str, doc_id: str, fmt: str = "json"):
 
 # --- Read-only SQL ---
 
-@app.get("/api/aibrarian/{c}/sql")
+@app.get("/api/nexus/{c}/sql")
 async def api_aibrarian_sql(c: str, q: str = "", limit: int = 100):
     engine = await _get_aibrarian_engine()
     try:
@@ -7566,7 +7685,7 @@ async def api_aibrarian_sql(c: str, q: str = "", limit: int = 100):
 # APERTURE & LIBRARY COGNITION ENDPOINTS
 # =====================================================================
 
-# --- Shared state ---
+# --- Shared state (Phase 1: delegates to Engine-owned instances) ---
 _aperture_manager = None
 _collection_lock_in_engine = None
 _annotation_engine = None
@@ -7574,9 +7693,15 @@ _annotation_engine = None
 
 def _get_aperture_manager():
     global _aperture_manager
-    if _aperture_manager is None:
-        from luna.context.aperture import ApertureManager
-        _aperture_manager = ApertureManager()
+    if _aperture_manager is not None:
+        return _aperture_manager
+    # Phase 1: use Engine-owned instance
+    if _engine is not None and getattr(_engine, "aperture", None) is not None:
+        _aperture_manager = _engine.aperture
+        return _aperture_manager
+    # Fallback: standalone
+    from luna.context.aperture import ApertureManager
+    _aperture_manager = ApertureManager()
     return _aperture_manager
 
 
@@ -7584,7 +7709,12 @@ async def _get_lock_in_engine():
     global _collection_lock_in_engine
     if _collection_lock_in_engine is not None:
         return _collection_lock_in_engine
+    # Phase 1: use Engine-owned instance
+    if _engine is not None and getattr(_engine, "collection_lock_in", None) is not None:
+        _collection_lock_in_engine = _engine.collection_lock_in
+        return _collection_lock_in_engine
 
+    # Fallback: standalone init
     from luna.substrate.collection_lock_in import CollectionLockInEngine
 
     if _engine is None:
@@ -7601,7 +7731,6 @@ async def _get_lock_in_engine():
     _collection_lock_in_engine = CollectionLockInEngine(mem_db)
     await _collection_lock_in_engine.ensure_table()
 
-    # Wire into aibrarian engine if available
     if _aibrarian_engine is not None:
         _aibrarian_engine.set_lock_in_engine(_collection_lock_in_engine)
 
@@ -7612,7 +7741,12 @@ async def _get_annotation_engine():
     global _annotation_engine
     if _annotation_engine is not None:
         return _annotation_engine
+    # Phase 1: use Engine-owned instance
+    if _engine is not None and getattr(_engine, "annotations", None) is not None:
+        _annotation_engine = _engine.annotations
+        return _annotation_engine
 
+    # Fallback: standalone init
     from luna.substrate.collection_annotations import AnnotationEngine
 
     if _engine is None:
@@ -7690,22 +7824,37 @@ async def api_collections_lock_in():
     engine = await _get_lock_in_engine()
     if engine is None:
         return {"collections": [], "error": "Engine not ready"}
+
+    from luna.substrate.collection_lock_in import PATTERN_FLOORS, COLLECTION_LOCK_IN_MIN
+    try:
+        import yaml
+        from pathlib import Path as _Path
+        _reg_path = _Path(__file__).parent.parent.parent / "config" / "aibrarian_registry.yaml"
+        _registry = yaml.safe_load(_reg_path.read_text()) if _reg_path.exists() else {}
+        _col_configs = _registry.get("collections", {})
+    except Exception:
+        _col_configs = {}
+
     records = await engine.get_all()
-    return {
-        "collections": [
-            {
-                "collection_key": r.collection_key,
-                "lock_in": r.lock_in,
-                "state": r.state,
-                "access_count": r.access_count,
-                "annotation_count": r.annotation_count,
-                "connected_collections": r.connected_collections,
-                "entity_overlap_count": r.entity_overlap_count,
-                "last_accessed_at": r.last_accessed_at,
-            }
-            for r in records
-        ]
-    }
+    result = []
+    for r in records:
+        pattern = _col_configs.get(r.collection_key, {}).get("ingestion_pattern", "utilitarian")
+        floor = PATTERN_FLOORS.get(pattern, COLLECTION_LOCK_IN_MIN)
+        near_floor = r.lock_in < (floor + 0.05)
+        result.append({
+            "collection_key": r.collection_key,
+            "lock_in": r.lock_in,
+            "state": r.state,
+            "access_count": r.access_count,
+            "annotation_count": r.annotation_count,
+            "connected_collections": r.connected_collections,
+            "entity_overlap_count": r.entity_overlap_count,
+            "last_accessed_at": r.last_accessed_at,
+            "pattern": pattern,
+            "floor": floor,
+            "near_floor": near_floor,
+        })
+    return {"collections": result}
 
 
 @app.get("/api/collections/{key}/lock-in")
@@ -7818,6 +7967,394 @@ async def api_annotation_delete(annotation_id: str):
     return {"deleted": deleted}
 
 
+# ═══════════════════════════════════════════════════════════
+# DEBUG: LAST INFERENCE SNAPSHOT
+# ═══════════════════════════════════════════════════════════
+
+
+@app.get("/debug/last-inference")
+async def debug_last_inference():
+    """
+    Consolidated snapshot of the last inference for pipeline I/O diff.
+
+    Pulls from director.get_last_system_prompt(), QA last report,
+    and debug context — all in one call.
+    """
+    if not _engine:
+        raise HTTPException(status_code=503, detail="Engine not started")
+
+    result = {
+        "query": None,
+        "route": None,
+        "provider": None,
+        "latency_ms": None,
+        "system_prompt_length": 0,
+        "system_prompt_preview": "",
+        "assembler": None,
+        "context_items": [],
+        "raw_response": None,
+        "final_response": None,
+        "narration_applied": False,
+        "qa_passed": None,
+        "qa_failures": [],
+    }
+
+    # Director prompt info
+    director = _engine.get_actor("director")
+    if director:
+        prompt_info = director.get_last_system_prompt()
+        if prompt_info.get("available"):
+            result["system_prompt_length"] = prompt_info.get("length", 0)
+            result["system_prompt_preview"] = prompt_info.get("preview", "")
+            result["assembler"] = prompt_info.get("assembler")
+            result["route"] = prompt_info.get("route_decision")
+
+        # Get last response from director stats
+        stats = director.get_stats() if hasattr(director, "get_stats") else {}
+        agentic = stats.get("agentic", {})
+        result["provider"] = agentic.get("last_provider") or stats.get("last_provider")
+
+    # Context items
+    try:
+        context = _engine.context
+        items = []
+        for ring in context.rings:
+            for item in context.rings[ring]:
+                items.append({
+                    "source": item.source.name,
+                    "ring": item.ring.name,
+                    "tokens": item.tokens,
+                    "relevance": round(item.relevance, 3),
+                })
+        result["context_items"] = items
+    except Exception:
+        pass
+
+    # QA last report
+    if QA_AVAILABLE:
+        try:
+            validator = get_qa_validator()
+            report = validator._last_report
+            if report:
+                result["query"] = report.query
+                result["route"] = result["route"] or report.route
+                result["provider"] = result["provider"] or report.provider_used
+                result["latency_ms"] = report.latency_ms
+                result["raw_response"] = getattr(report.context, "raw_response", None) if report.context else None
+                result["final_response"] = getattr(report.context, "final_response", None) if report.context else None
+                result["narration_applied"] = getattr(report.context, "narration_applied", False) if report.context else False
+                result["qa_passed"] = report.passed
+                result["qa_failures"] = [a.id for a in report.failed_assertions]
+        except Exception:
+            pass
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════
+# QA: CHECK SINGLE ASSERTION
+# ═══════════════════════════════════════════════════════════
+
+
+class CheckAssertionRequest(BaseModel):
+    """Request body for /qa/check-assertion."""
+    assertion_id: str = Field(..., description="ID of the assertion to check")
+    response_text: str = Field(..., description="Text to check against the assertion")
+
+
+@app.post("/qa/check-assertion")
+async def qa_check_assertion(request: CheckAssertionRequest):
+    """
+    Run a single assertion against provided text.
+
+    Lightweight check — no LLM call, no pipeline execution.
+    Builds a minimal InferenceContext and runs the assertion's check() method.
+    """
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+
+    validator = get_qa_validator()
+
+    # Find the assertion
+    target = None
+    for a in validator._assertions:
+        if a.id == request.assertion_id:
+            target = a
+            break
+
+    if not target:
+        raise HTTPException(status_code=404, detail=f"Assertion '{request.assertion_id}' not found")
+
+    # Build minimal InferenceContext
+    from datetime import datetime
+
+    ctx = InferenceContext(
+        inference_id="PLAYGROUND",
+        session_id="playground",
+        timestamp=datetime.now(),
+        query="",
+        route="PLAYGROUND",
+        provider_used="playground",
+        providers_tried=["playground"],
+        provider_errors={},
+        latency_ms=0,
+        input_tokens=0,
+        output_tokens=0,
+        personality_injected=True,
+        personality_length=0,
+        system_prompt="",
+        virtues_loaded=True,
+        narration_applied=False,
+        raw_response=request.response_text,
+        narrated_response=None,
+        final_response=request.response_text,
+    )
+
+    result = target.check(ctx)
+
+    return {
+        "assertion_id": result.id,
+        "name": result.name,
+        "passed": result.passed,
+        "severity": result.severity,
+        "expected": result.expected,
+        "actual": result.actual,
+        "details": result.details,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+# /api/diagnostics/* — MCP diagnostic control surface
+# Thin routes that delegate to existing logic so MCP tools
+# get live API data instead of DB fallback.
+# ═══════════════════════════════════════════════════════════
+
+
+@app.get("/api/diagnostics/last-inference")
+async def api_diagnostics_last_inference():
+    """Full diagnostic snapshot of the last inference (for MCP tools)."""
+    return await debug_last_inference()
+
+
+@app.get("/api/diagnostics/pipeline")
+async def api_diagnostics_pipeline():
+    """Pipeline state with QA overlay (for MCP tools)."""
+    result = {"nodes": {}, "source": "api"}
+
+    if _engine:
+        for actor_name in ["director", "scout", "scribe", "librarian", "matrix", "reconcile"]:
+            actor = _engine.get_actor(actor_name)
+            if actor:
+                result["nodes"][actor_name] = {
+                    "active": True,
+                    "type": type(actor).__name__,
+                }
+
+    if QA_AVAILABLE:
+        validator = get_qa_validator()
+        result["qa_health"] = validator.get_health()
+        report = validator._last_report
+        if report:
+            result["last_qa"] = {
+                "passed": report.passed,
+                "failed_count": report.failed_count,
+                "top_failures": [a.name for a in report.failed_assertions][:5],
+                "timestamp": report.timestamp.isoformat(),
+            }
+        # Build node_status map from last QA report assertions
+        node_status = {}
+        if report:
+            assertion_node_map = {
+                "P1": "director", "P2": "director", "P3": "director",
+                "V1": "director", "F1": "director", "F2": "director",
+                "S1": "director", "S2": "director", "S3": "director", "S4": "director", "S5": "director",
+                "I1": "matrix", "I2": "matrix", "I3": "matrix",
+                "I4": "scribe", "E1": "scribe", "E2": "scribe",
+            }
+            for a in report.assertions:
+                node = assertion_node_map.get(a.id, "director")
+                if node not in node_status:
+                    node_status[node] = "pass"
+                if not a.passed:
+                    node_status[node] = "fail" if a.severity in ("critical", "high") else "warn"
+        result["node_status"] = node_status
+
+    return result
+
+
+@app.get("/api/diagnostics/health")
+async def api_diagnostics_health():
+    """Combined health check for MCP diagnostic tools."""
+    result = {"engine": _engine is not None, "source": "api"}
+    if _engine:
+        status = _engine.status()
+        result["uptime"] = status.get("uptime_seconds", 0)
+        result["state"] = status.get("state", "unknown")
+    if QA_AVAILABLE:
+        validator = get_qa_validator()
+        result["qa"] = validator.get_health()
+    return result
+
+
+class PromptPreviewRequest(BaseModel):
+    """Request body for /api/diagnostics/trigger/prompt-preview."""
+    message: str = "Hello"
+    route_override: Optional[str] = None
+
+
+@app.post("/api/diagnostics/trigger/prompt-preview")
+async def api_diagnostics_prompt_preview(request: PromptPreviewRequest):
+    """Build assembled prompt info without calling the LLM."""
+    if not _engine:
+        raise HTTPException(status_code=503, detail="Engine not started")
+
+    director = _engine.get_actor("director")
+    if not director:
+        raise HTTPException(status_code=503, detail="Director not available")
+
+    prompt_info = director.get_last_system_prompt()
+    return {
+        "message": request.message,
+        "route_override": request.route_override,
+        "available": prompt_info.get("available", False),
+        "length": prompt_info.get("length", 0),
+        "preview": prompt_info.get("preview", ""),
+        "full_prompt": prompt_info.get("full_prompt"),
+        "route_decision": prompt_info.get("route_decision"),
+        "assembler": prompt_info.get("assembler"),
+        "source": "api",
+    }
+
+
+class TestInferenceRequest(BaseModel):
+    """Request body for /api/diagnostics/trigger/test-inference."""
+    message: str
+    route_override: Optional[str] = None
+    narration_enabled: Optional[bool] = None
+    extra_context: Optional[str] = None
+
+
+@app.post("/api/diagnostics/trigger/test-inference")
+async def api_diagnostics_test_inference(request: TestInferenceRequest):
+    """Run a test message through the full pipeline with optional overrides."""
+    import time as _time_mod
+
+    if not _engine:
+        raise HTTPException(status_code=503, detail="Engine not started")
+
+    start = _time_mod.time()
+
+    # Create a future to capture the response
+    response_future: asyncio.Future = asyncio.Future()
+
+    async def on_response(text: str, data: dict) -> None:
+        if not response_future.done():
+            response_future.set_result((text, data))
+
+    _engine.on_response(on_response)
+
+    try:
+        # Apply one-shot overrides to director before queuing the message
+        _director = _engine.get_actor("director")
+        if _director and (request.route_override or request.narration_enabled is not None or request.extra_context):
+            overrides = {}
+            if request.route_override:
+                overrides["force_route"] = request.route_override
+            if request.narration_enabled is not None:
+                overrides["narration_enabled"] = request.narration_enabled
+            if request.extra_context:
+                overrides["extra_context"] = request.extra_context
+            _director.set_next_overrides(overrides)
+
+        await _engine.send_message(request.message, source="diagnostic")
+
+        text, data = await asyncio.wait_for(response_future, timeout=30.0)
+        elapsed = (_time_mod.time() - start) * 1000
+
+        director = _engine.get_actor("director")
+        prompt_info = director.get_last_system_prompt() if director else {}
+
+        # QA on the latest report (fire-and-forget already ran)
+        qa_passed = None
+        qa_failures = 0
+        if QA_AVAILABLE:
+            validator = get_qa_validator()
+            report = validator._last_report
+            if report and report.query == request.message:
+                qa_passed = report.passed
+                qa_failures = report.failed_count
+
+        return {
+            "message": request.message,
+            "response": text,
+            "route": data.get("route_decision", "unknown"),
+            "route_reason": data.get("route_reason", ""),
+            "latency_ms": elapsed,
+            "qa_passed": qa_passed,
+            "qa_failures": qa_failures,
+            "prompt_length": prompt_info.get("length", 0) if prompt_info.get("available") else 0,
+            "assembler": prompt_info.get("assembler") if prompt_info.get("available") else None,
+            "overrides_applied": {
+                "route": request.route_override,
+                "narration": request.narration_enabled,
+                "extra_context": request.extra_context is not None,
+            },
+            "source": "api",
+        }
+    except asyncio.TimeoutError:
+        return {
+            "message": request.message,
+            "response": "Timeout",
+            "latency_ms": 30000,
+            "qa_passed": False,
+            "qa_failures": 1,
+            "source": "api",
+            "error": "Timed out after 30s",
+        }
+    finally:
+        if on_response in _engine._on_response_callbacks:
+            _engine._on_response_callbacks.remove(on_response)
+
+
+@app.post("/api/diagnostics/trigger/qa-sweep")
+async def api_diagnostics_qa_sweep():
+    """Re-validate the last inference against all assertions."""
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA not available")
+
+    validator = get_qa_validator()
+    report = validator.revalidate_last()
+    if report is None:
+        return {"error": "No previous inference to revalidate", "source": "api"}
+    return {
+        "passed": report.passed,
+        "failed_count": report.failed_count,
+        "diagnosis": report.diagnosis,
+        "assertions": [
+            {"id": a.id, "name": a.name, "passed": a.passed, "actual": a.actual}
+            for a in report.assertions
+        ],
+        "source": "api",
+    }
+
+
+class RevalidateRequest(BaseModel):
+    """Request body for /api/diagnostics/trigger/revalidate."""
+    assertion_ids: list[str]
+
+
+@app.post("/api/diagnostics/trigger/revalidate")
+async def api_diagnostics_revalidate(request: RevalidateRequest):
+    """Re-validate specific assertions against the last inference."""
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA not available")
+
+    validator = get_qa_validator()
+    results = validator.revalidate_assertions(request.assertion_ids)
+    return {"results": results, "source": "api"}
+
+
+# ═══════════════════════════════════════════════════════════
 # Serve main Eclissi frontend at / (MUST be last — catch-all mount)
 try:
     _eclissi_frontend = _Path("frontend/dist")
