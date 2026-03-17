@@ -413,6 +413,19 @@ class EntityResolver:
         # Flag for review in the next hygiene quest
         _flag_entity_for_review(entity_id, name, entity_type)
 
+        # Emit event for live knowledge feed
+        from luna.core.event_bus import event_bus, KnowledgeEvent
+        event_bus.emit("knowledge", KnowledgeEvent(
+            type="entity_created",
+            payload={
+                "entity_id": entity_id,
+                "name": name,
+                "entity_type": entity_type,
+                "needs_confirmation": True,
+                "source": source,
+            },
+        ))
+
         # Return the created entity
         return Entity(
             id=entity_id,

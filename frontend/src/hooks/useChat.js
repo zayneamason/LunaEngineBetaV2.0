@@ -120,6 +120,29 @@ export function useChat() {
   const wsRef = useRef(null);
   const processedIdsRef = useRef(new Set());
 
+  // Hydrate from backend when localStorage is empty
+  useEffect(() => {
+    if (messages.length > 0) return; // localStorage had data, skip
+    let cancelled = false;
+    fetch('/history?limit=50')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (cancelled || !data?.messages?.length) return;
+        setMessages((prev) => {
+          if (prev.length > 0) return prev; // race guard
+          return data.messages.map((m, i) => ({
+            id: `hist-${i}-${Date.now()}`,
+            role: m.role,
+            content: m.content,
+            streaming: false,
+            restored: true,
+          }));
+        });
+      })
+      .catch(() => {}); // silent — backend might not be ready
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Connect to chat WebSocket for shared session viewing
   // This allows seeing messages sent via API/curl/MCP in real-time
   useEffect(() => {

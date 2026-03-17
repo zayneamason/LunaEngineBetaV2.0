@@ -14,9 +14,19 @@ import { GridProvider } from '../contexts/GridContext';
 import GridLayer from './GridLayer';
 import GridDebug from './GridDebug';
 import KnowledgeBar from '../eclissi/knowledge/KnowledgeBar';
+import ConfirmationCard from './ConfirmationCard';
+import { useBadgeConfig } from '../hooks/useBadgeConfig';
+import BadgeRow from './BadgeRow';
+import ActivityCard from './ActivityCard';
+import ThreadCard from './ThreadCard';
+import QuestCard from './QuestCard';
+import AttentionPrompt from './AttentionPrompt';
+import ContextStrip from './ContextStrip';
+import TimelineScrubber from './TimelineScrubber';
 import WidgetAnchor from './WidgetAnchor';
 import TPanels from '../eclissi/knowledge/TPanels';
 import VoiceModeBar from '../eclissi/components/VoiceModeBar';
+import TBar from '../eclissi/components/TBar';
 import { useWindowedMessages } from '../hooks/useWindowedMessages';
 
 // LunaScript feedback (thumbs up/down)
@@ -93,7 +103,7 @@ const SLASH_COMMANDS = [
   { command: '/faceid', description: 'FaceID: status, set-pin, or reset', icon: '🔐', placeholder: '[set-pin <pin> | reset <pin>]' },
 ];
 
-const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null, extractions = [], extractionEntities = [], extractionRelationships = [], voice = null, activeProjectSlug = null }) => {
+const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null, extractions = [], extractionEntities = [], extractionRelationships = [], pendingEntities = [], onConfirmEntity, onRejectEntity, voice = null, activeProjectSlug = null, knowledgeEvents = [], guardianOpen = false, onToggleGuardian = null, consciousness = null }) => {
   const [input, setInput] = useState('');
   const [showCommands, setShowCommands] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -113,6 +123,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
   const hideApertureTimeout = useRef(null);
   const { orbState, isConnected } = useOrbState();
   const { navigate } = useNavigation();
+  const { config: badgeConfig } = useBadgeConfig();
 
   // Aperture state
   const [apertureAngle, setApertureAngle] = useState(55);
@@ -403,6 +414,20 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
         <GridLayer />
         <GridDebug />
 
+        {/* Context strip + timeline above messages */}
+        <div style={{ flexShrink: 0, padding: '4px 16px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <ContextStrip
+                consciousness={consciousness}
+                entities={entities}
+                sessionStart={messages[0]?.timestamp || messages[0]?.created_at}
+              />
+            </div>
+            <TimelineScrubber />
+          </div>
+        </div>
+
         {/* Scrollable message list */}
         <div ref={mergeScrollRefs} onScroll={handleWindowScroll} className="overflow-y-auto p-4 space-y-4" style={{ flex: 1, minHeight: 0 }}>
 
@@ -433,6 +458,15 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                         ? 'bg-kozmo-accent/10 border border-kozmo-accent/30 text-white/90'
                         : 'bg-kozmo-surface border border-kozmo-border text-white/80'
                     }`}
+                    style={msg.role === 'assistant' ? {
+                      borderLeft: `2.5px solid ${
+                        msg.metadata?.life_state === 'personal' ? '#60a5fa' :
+                        msg.metadata?.life_state === 'bridge' ? '#fbbf24' :
+                        msg.metadata?.life_state === 'mixed' ? '#c084fc' :
+                        '#34d399'
+                      }`,
+                    } : undefined}
+                    data-state={msg.role === 'assistant' ? (msg.metadata?.life_state || 'project') : undefined}
                   >
                     <div className="text-sm whitespace-pre-wrap">
                       {debugKeywords.length > 0
@@ -451,61 +485,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                             onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
                           />}
                     </div>
-                    {(msg.model || msg.delegated || msg.local || msg.fallback || msg.accessDeniedCount > 0 || msg.lunascript) && (
-                      <div className="mt-2 flex items-center gap-3 text-xs">
-                        {/* Model indicator */}
-                        {msg.delegated ? (
-                          <span className="flex items-center gap-1 text-fuchsia-400">
-                            <span>⚡</span>
-                            <span>delegated</span>
-                          </span>
-                        ) : msg.local ? (
-                          <span className="flex items-center gap-1 text-emerald-400">
-                            <span>●</span>
-                            <span>local</span>
-                          </span>
-                        ) : msg.fallback ? (
-                          <span className="flex items-center gap-1 text-amber-400">
-                            <span>☁</span>
-                            <span>cloud</span>
-                          </span>
-                        ) : (
-                          <span className="text-kozmo-muted">{msg.model}</span>
-                        )}
-                        {msg.tokens && <span className="text-kozmo-muted">{msg.tokens} tokens</span>}
-                        {msg.latency && <span className="text-kozmo-muted">{msg.latency}ms</span>}
-                        {msg.accessDeniedCount > 0 && (
-                          <span className="flex items-center gap-1 text-amber-400/60">
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                            </svg>
-                            <span>{msg.accessDeniedCount} filtered</span>
-                          </span>
-                        )}
-                        {msg.lunascript && (
-                          <>
-                            {msg.lunascript.glyph && (
-                              <span className="text-violet-400" title={msg.lunascript.position || ''}>
-                                {msg.lunascript.glyph}
-                              </span>
-                            )}
-                            {msg.lunascript.classification && (
-                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                msg.lunascript.classification === 'RESONANCE' ? 'bg-emerald-500/15 text-emerald-400' :
-                                msg.lunascript.classification === 'DRIFT' ? 'bg-red-500/15 text-red-400' :
-                                msg.lunascript.classification === 'EXPANSION' ? 'bg-blue-500/15 text-blue-400' :
-                                msg.lunascript.classification === 'COMPRESSION' ? 'bg-amber-500/15 text-amber-400' :
-                                'bg-gray-500/15 text-gray-400'
-                              }`}>
-                                {msg.lunascript.classification}
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
+                    <BadgeRow msg={msg} badgeConfig={badgeConfig} />
                     {msg.lunascript && !msg.streaming && msg.role === 'assistant' && (
                       <LunaScriptFeedback messageId={msg.id} lunascript={msg.lunascript} />
                     )}
@@ -524,10 +504,81 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                   extractions.length > 0 && (
                   <KnowledgeBar
                     extractions={extractions}
+                    liveEvents={knowledgeEvents.filter((e) => e.type === 'fact_extracted')}
                     isActive={activeTPanel === msg.id}
                     onClick={() => setActiveTPanel(activeTPanel === msg.id ? null : msg.id)}
                   />
                 )}
+
+                {/* Confirmation Cards — entity approval prompts after last assistant message */}
+                {msg.role === 'assistant' && !msg.streaming &&
+                  msg.id === messages[messages.length - 1]?.id &&
+                  pendingEntities.length > 0 && (
+                  <div className="flex flex-col gap-1 mt-1">
+                    {pendingEntities.map((entity) => (
+                      <ConfirmationCard
+                        key={entity.entity_id}
+                        entity={entity}
+                        onConfirm={onConfirmEntity}
+                        onReject={onRejectEntity}
+                        onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Activity Cards — pipeline events after last assistant message */}
+                {badgeConfig.show_knowledge_events &&
+                  msg.role === 'assistant' && !msg.streaming &&
+                  msg.id === messages[messages.length - 1]?.id &&
+                  knowledgeEvents.length > 0 && (
+                  <div className="flex flex-col mt-1">
+                    {knowledgeEvents
+                      .filter((e) => ['fact_extracted', 'edge_created', 'thread_updated', 'quest_generated'].includes(e.type))
+                      .slice(-5)
+                      .map((event, i) => (
+                        <ActivityCard key={`activity-${i}`} event={event} />
+                      ))}
+                  </div>
+                )}
+
+                {/* Thread Card — active thread after last assistant message */}
+                {msg.role === 'assistant' && !msg.streaming &&
+                  msg.id === messages[messages.length - 1]?.id &&
+                  (() => {
+                    const threadEvent = [...knowledgeEvents].reverse().find(
+                      (e) => e.type === 'thread_updated' && (e.payload?.status === 'active' || e.payload?.status === 'resumed')
+                    );
+                    return threadEvent ? <ThreadCard thread={threadEvent.payload} /> : null;
+                  })()}
+
+                {/* Quest Cards — quest notifications after last assistant message */}
+                {msg.role === 'assistant' && !msg.streaming &&
+                  msg.id === messages[messages.length - 1]?.id &&
+                  knowledgeEvents
+                    .filter((e) => e.type === 'quest_generated')
+                    .slice(-3)
+                    .map((e, i) => (
+                      <QuestCard key={`quest-${i}`} quest={e.payload} />
+                    ))}
+
+                {/* Attention Prompts — frequent entity mentions */}
+                {msg.role === 'assistant' && !msg.streaming &&
+                  msg.id === messages[messages.length - 1]?.id &&
+                  (() => {
+                    const counts = {};
+                    knowledgeEvents.forEach((e) => {
+                      if (e.type === 'entity_created' && e.payload?.name) {
+                        counts[e.payload.name] = (counts[e.payload.name] || 0) + 1;
+                      }
+                    });
+                    return Object.entries(counts)
+                      .filter(([, count]) => count >= 3)
+                      .slice(0, 2)
+                      .map(([name, count]) => (
+                        <AttentionPrompt key={`attn-${name}`} entityName={name} mentionCount={count} />
+                      ));
+                  })()}
               </React.Fragment>
             ))}
           </>
@@ -590,6 +641,13 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
           onClose={voice.stopVoice}
         />
       )}
+
+      {/* T-Bar — Guardian Luna toggle */}
+      <TBar
+        extractionCount={knowledgeEvents.filter((e) => e.type === 'extraction_batch').length}
+        isOpen={guardianOpen}
+        onToggle={onToggleGuardian}
+      />
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="flex-shrink-0 p-4 border-t border-kozmo-border relative">

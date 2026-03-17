@@ -5,6 +5,9 @@ import { useIdentity } from '../hooks/useIdentity';
 import { useChat } from '../hooks/useChat';
 import { useVoice } from '../hooks/useVoice';
 import { useExtractions } from '../hooks/useExtractions';
+import { useKnowledgeStream } from '../hooks/useKnowledgeStream';
+import { useGuardianLuna, useGuardianEventAggregator, useGuardianStats } from '../hooks/useGuardianLuna';
+import GuardianLunaPanel from './components/GuardianLunaPanel';
 
 const CHAT_STORAGE_KEY = 'luna_chat_messages';
 
@@ -35,6 +38,14 @@ const EclissiHome = ({ activeProjectSlug }) => {
 
   // T-shape knowledge panel data
   const extractionData = useExtractions(isConnected);
+
+  // Live knowledge stream (replaces polling — falls back to useExtractions)
+  const { events: knowledgeEvents, pendingEntities, confirmEntity, rejectEntity } = useKnowledgeStream();
+
+  // Guardian Luna panel state + event aggregation
+  const guardian = useGuardianLuna();
+  useGuardianEventAggregator(knowledgeEvents);
+  useGuardianStats();
 
   // Entity data for keyword highlighting
   const [knownEntities, setKnownEntities] = useState([]);
@@ -142,80 +153,102 @@ const EclissiHome = ({ activeProjectSlug }) => {
   const error = chatError || apiError;
 
   return (
-    <div className="relative h-full" style={{ background: 'var(--ec-bg)' }}>
-      {/* Ambient glow layers */}
-      <div
-        style={{
-          position: 'absolute', top: '-10%', left: '-5%', width: '500px', height: '500px',
-          background: 'radial-gradient(circle, rgba(192,132,252,0.08) 0%, transparent 70%)',
-          borderRadius: '50%', filter: 'blur(80px)', pointerEvents: 'none', zIndex: 0,
-          animation: 'ambient-drift 20s ease-in-out infinite, ambient-breathe 8s ease-in-out infinite',
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute', bottom: '-15%', right: '-5%', width: '600px', height: '600px',
-          background: 'radial-gradient(circle, rgba(129,140,248,0.06) 0%, transparent 70%)',
-          borderRadius: '50%', filter: 'blur(100px)', pointerEvents: 'none', zIndex: 0,
-          animation: 'ambient-drift 25s ease-in-out infinite reverse, ambient-breathe 10s ease-in-out infinite 2s',
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute', top: '40%', right: '20%', width: '400px', height: '400px',
-          background: 'radial-gradient(circle, rgba(52,211,153,0.04) 0%, transparent 70%)',
-          borderRadius: '50%', filter: 'blur(100px)', pointerEvents: 'none', zIndex: 0,
-          animation: 'ambient-drift 30s ease-in-out infinite 5s, ambient-breathe 12s ease-in-out infinite 4s',
-        }}
-      />
+    <div style={{ display: 'flex', height: '100%', background: 'var(--ec-bg)' }}>
+      {/* Chat column */}
+      <div className="relative" style={{ flex: 1, minWidth: 0, height: '100%' }}>
+        {/* Ambient glow layers */}
+        <div
+          style={{
+            position: 'absolute', top: '-10%', left: '-5%', width: '500px', height: '500px',
+            background: 'radial-gradient(circle, rgba(192,132,252,0.08) 0%, transparent 70%)',
+            borderRadius: '50%', filter: 'blur(80px)', pointerEvents: 'none', zIndex: 0,
+            animation: 'ambient-drift 20s ease-in-out infinite, ambient-breathe 8s ease-in-out infinite',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute', bottom: '-15%', right: '-5%', width: '600px', height: '600px',
+            background: 'radial-gradient(circle, rgba(129,140,248,0.06) 0%, transparent 70%)',
+            borderRadius: '50%', filter: 'blur(100px)', pointerEvents: 'none', zIndex: 0,
+            animation: 'ambient-drift 25s ease-in-out infinite reverse, ambient-breathe 10s ease-in-out infinite 2s',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute', top: '40%', right: '20%', width: '400px', height: '400px',
+            background: 'radial-gradient(circle, rgba(52,211,153,0.04) 0%, transparent 70%)',
+            borderRadius: '50%', filter: 'blur(100px)', pointerEvents: 'none', zIndex: 0,
+            animation: 'ambient-drift 30s ease-in-out infinite 5s, ambient-breathe 12s ease-in-out infinite 4s',
+          }}
+        />
 
-      {/* Conversation Spine */}
-      <div
-        style={{
-          position: 'relative',
-          zIndex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          height: '100%',
-          padding: '16px 24px',
-        }}
-      >
-        {/* Error Banner */}
-        {error && (
-          <div
-            style={{
-              marginBottom: 12,
-              padding: '10px 14px',
-              borderRadius: 8,
-              background: 'rgba(248,113,113,0.1)',
-              border: '1px solid rgba(248,113,113,0.3)',
-              color: 'var(--ec-accent-qa)',
-              fontSize: 13,
-              flexShrink: 0,
-            }}
-          >
-            {error}
+        {/* Conversation Spine */}
+        <div
+          style={{
+            position: 'relative',
+            zIndex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            padding: '16px 24px',
+          }}
+        >
+          {/* Error Banner */}
+          {error && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: '10px 14px',
+                borderRadius: 8,
+                background: 'rgba(248,113,113,0.1)',
+                border: '1px solid rgba(248,113,113,0.3)',
+                color: 'var(--ec-accent-qa)',
+                fontSize: 13,
+                flexShrink: 0,
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          {/* Chat fills remaining space */}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <ChatPanel
+              messages={messages}
+              onSend={send}
+              isLoading={isStreaming}
+              debugKeywords={[]}
+              entities={knownEntities}
+              identityName={isPresent ? entityName : null}
+              identityTier={isPresent ? lunaTier : null}
+              extractions={extractionData.extractions}
+              extractionEntities={extractionData.entities}
+              extractionRelationships={extractionData.relationships}
+              pendingEntities={pendingEntities}
+              onConfirmEntity={confirmEntity}
+              onRejectEntity={rejectEntity}
+              voice={voice}
+              activeProjectSlug={activeProjectSlug}
+              knowledgeEvents={knowledgeEvents}
+              consciousness={consciousness}
+              guardianOpen={guardian.isOpen}
+              onToggleGuardian={guardian.toggle}
+            />
           </div>
-        )}
-
-        {/* Chat fills remaining space */}
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <ChatPanel
-            messages={messages}
-            onSend={send}
-            isLoading={isStreaming}
-            debugKeywords={[]}
-            entities={knownEntities}
-            identityName={isPresent ? entityName : null}
-            identityTier={isPresent ? lunaTier : null}
-            extractions={extractionData.extractions}
-            extractionEntities={extractionData.entities}
-            extractionRelationships={extractionData.relationships}
-            voice={voice}
-            activeProjectSlug={activeProjectSlug}
-          />
         </div>
       </div>
+
+      {/* Guardian Luna panel — slides in from right */}
+      {guardian.isOpen && (
+        <GuardianLunaPanel
+          messages={guardian.messages}
+          stats={guardian.stats}
+          onClose={guardian.close}
+          onSend={guardian.sendMessage}
+          inputText={guardian.inputText}
+          onInputChange={guardian.setInputText}
+        />
+      )}
     </div>
   );
 };

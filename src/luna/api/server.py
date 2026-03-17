@@ -49,6 +49,7 @@ from luna.services.kozmo.routes import router as kozmo_router
 from luna.services.guardian.routes import router as guardian_router
 from luna.utils.options_parser import extract_options, build_options_widget
 from luna.services.settings.routes import router as settings_router
+from luna.services.observatory.routes import router as observatory_router
 from luna.services.guardian.memory_bridge import GuardianMemoryBridge
 from luna.compiler import KnowledgeCompiler
 from luna.compiler.conversation_extractor import ConversationExtractor, ExtractResult
@@ -214,6 +215,9 @@ _chat_websockets: set[WebSocket] = set()
 # Global identity WebSocket connections (FaceID state)
 _identity_websockets: set[WebSocket] = set()
 
+# Global knowledge event WebSocket connections (extraction pipeline events)
+_knowledge_websockets: set[WebSocket] = set()
+
 # Global performance orchestrator (coordinates voice + orb)
 _performance_orchestrator: Optional[PerformanceOrchestrator] = None
 
@@ -376,7 +380,7 @@ class HistoryMessage(BaseModel):
     """A single message in conversation history."""
     role: str
     content: str
-    timestamp: Optional[int] = None
+    timestamp: Optional[str] = None
 
 
 class HistoryResponse(BaseModel):
@@ -536,6 +540,14 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"[BYPASS] Failed to restore bypass from sentinel: {_e}")
         _track_task(_auto_restore_bypass(), name="auto-restore-bypass")
 
+    # Wire knowledge event bus → WebSocket broadcast
+    from luna.core.event_bus import event_bus as _knowledge_bus
+
+    async def _on_knowledge_event(ev):
+        await _broadcast_knowledge_event(ev)
+
+    _knowledge_bus.subscribe("knowledge", _on_knowledge_event)
+
     logger.info("Luna Engine ready")
 
     yield
@@ -639,6 +651,9 @@ app.include_router(guardian_router)
 
 # Mount SETTINGS service router
 app.include_router(settings_router)
+
+# Mount OBSERVATORY service router (replaces httpx reverse proxy to :8100)
+app.include_router(observatory_router)
 
 
 # ============================================
@@ -1086,6 +1101,130 @@ async def identity_websocket(websocket: WebSocket):
     finally:
         _identity_websockets.discard(websocket)
         logger.info(f"Identity WebSocket disconnected. Total: {len(_identity_websockets)}")
+
+
+# ============================================
+# KNOWLEDGE EVENT STREAM
+# ============================================
+
+async def _broadcast_knowledge_event(event) -> None:
+    """Broadcast a KnowledgeEvent to all /ws/knowledge clients."""
+    if not _knowledge_websockets:
+        return
+    payload = json.dumps({
+        "type": event.type,
+        "payload": event.payload,
+        "ts": event.timestamp,
+    })
+    disconnected: set[WebSocket] = set()
+    for ws in _knowledge_websockets:
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            disconnected.add(ws)
+    _knowledge_websockets.difference_update(disconnected)
+
+
+@app.websocket("/ws/knowledge")
+async def knowledge_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time knowledge pipeline events.
+
+    Clients receive JSON events for entity creation, fact extraction,
+    edge creation, and entity confirmation/rejection.
+    """
+    await websocket.accept()
+    _knowledge_websockets.add(websocket)
+    logger.info(f"Knowledge WebSocket connected. Total: {len(_knowledge_websockets)}")
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _knowledge_websockets.discard(websocket)
+        logger.info(f"Knowledge WebSocket disconnected. Total: {len(_knowledge_websockets)}")
+
+
+# ============================================
+# ENTITY CONFIRMATION / REJECTION
+# ============================================
+
+@app.post("/api/entities/{entity_id}/confirm")
+async def confirm_entity(entity_id: str):
+    """Confirm a newly auto-created entity (keeps it, removes from review queue)."""
+    if not _engine:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    matrix = _engine.get_actor("matrix")
+    if not matrix or not getattr(matrix, "_db", None):
+        raise HTTPException(status_code=503, detail="Memory not available")
+
+    row = await matrix._db.fetchone(
+        "SELECT id, name FROM entities WHERE id = ?", (entity_id,)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    # Mark confirmed in metadata
+    await matrix._db.execute(
+        "UPDATE entities SET metadata = json_set(COALESCE(metadata, '{}'), '$.confirmed', 1) WHERE id = ?",
+        (entity_id,),
+    )
+
+    # Remove from review queue file
+    from luna.entities.resolution import _REVIEW_QUEUE_PATH
+    if _REVIEW_QUEUE_PATH.exists():
+        try:
+            queue = json.loads(_REVIEW_QUEUE_PATH.read_text())
+            queue = [e for e in queue if e.get("entity_id") != entity_id]
+            _REVIEW_QUEUE_PATH.write_text(json.dumps(queue, indent=2))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Emit confirmation event
+    from luna.core.event_bus import event_bus, KnowledgeEvent
+    event_bus.emit("knowledge", KnowledgeEvent(
+        type="entity_confirmed",
+        payload={"entity_id": entity_id, "name": row[1]},
+    ))
+    return {"success": True, "entity_id": entity_id}
+
+
+@app.delete("/api/entities/{entity_id}")
+async def reject_entity(entity_id: str):
+    """Hard-delete a rejected auto-created entity and all its mentions/relationships."""
+    if not _engine:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    matrix = _engine.get_actor("matrix")
+    if not matrix or not getattr(matrix, "_db", None):
+        raise HTTPException(status_code=503, detail="Memory not available")
+
+    row = await matrix._db.fetchone(
+        "SELECT name FROM entities WHERE id = ?", (entity_id,)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    # CASCADE deletes handle entity_mentions, entity_versions, entity_relationships
+    await matrix._db.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+
+    # Remove from review queue file
+    from luna.entities.resolution import _REVIEW_QUEUE_PATH
+    if _REVIEW_QUEUE_PATH.exists():
+        try:
+            queue = json.loads(_REVIEW_QUEUE_PATH.read_text())
+            queue = [e for e in queue if e.get("entity_id") != entity_id]
+            _REVIEW_QUEUE_PATH.write_text(json.dumps(queue, indent=2))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Emit rejection event
+    from luna.core.event_bus import event_bus, KnowledgeEvent
+    event_bus.emit("knowledge", KnowledgeEvent(
+        type="entity_rejected",
+        payload={"entity_id": entity_id, "name": row[0]},
+    ))
+    return {"success": True, "entity_id": entity_id}
 
 
 # ============================================
@@ -1886,75 +2025,41 @@ async def clear_ring():
 
 
 @app.get("/history", response_model=HistoryResponse)
-async def get_history(limit: int = 20):
+async def get_history(limit: int = 50):
     """
-    Get recent conversation history.
+    Get recent conversation history from the conversation_turns table.
 
-    Retrieves recent conversation turns from the memory matrix.
+    Queries the database directly — no dependency on matrix actor readiness.
     """
-    if _engine is None:
-        raise HTTPException(status_code=503, detail="Engine not ready")
-
-    matrix = _engine.get_actor("matrix")
-    if not matrix or not matrix.is_ready:
-        return HistoryResponse(messages=[], total=0)
-
-    # Query database directly for conversation-tagged turns
     try:
-        memory = getattr(matrix, "_matrix", None) or getattr(matrix, "_memory", None)
-        if not memory or not hasattr(memory, "db"):
-            logger.warning("History: No memory matrix available")
+        import aiosqlite
+        from luna.core.paths import user_dir
+
+        db_path = user_dir() / "luna_engine.db"
+        if not db_path.exists():
             return HistoryResponse(messages=[], total=0)
 
-        logger.debug(f"History: matrix ready={matrix.is_ready}")
-
-        # Query conversation nodes from Luna's native substrate
-        rows = await memory.db.fetchall("""
-            SELECT content, created_at FROM memory_nodes
-            WHERE tags LIKE '%"conversation"%'
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,))
-
-        logger.debug(f"History: found {len(rows)} conversation turns")
+        async with aiosqlite.connect(str(db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT role, content, created_at
+                FROM conversation_turns
+                WHERE role IN ('user', 'assistant')
+                  AND content NOT LIKE '[Memory %'
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+            rows = await cursor.fetchall()
 
         messages = []
         for row in rows:
-            content = row[0]
-            timestamp = row[1]
+            messages.append(HistoryMessage(
+                role=row["role"],
+                content=row["content"],
+                timestamp=row["created_at"],
+            ))
 
-            # Parse role from content prefix - multiple formats exist
-            if content.startswith("User (desktop):") or content.startswith("User:"):
-                # Remove prefix to get actual message
-                if content.startswith("User (desktop):"):
-                    msg_content = content[15:].strip()
-                else:
-                    msg_content = content[5:].strip()
-                messages.append(HistoryMessage(
-                    role="user",
-                    content=msg_content,
-                    timestamp=timestamp
-                ))
-            elif content.startswith("Luna:"):
-                messages.append(HistoryMessage(
-                    role="assistant",
-                    content=content[5:].strip(),
-                    timestamp=timestamp
-                ))
-            elif content.startswith("[user]"):
-                messages.append(HistoryMessage(
-                    role="user",
-                    content=content[7:].strip(),
-                    timestamp=timestamp
-                ))
-            elif content.startswith("[assistant]"):
-                messages.append(HistoryMessage(
-                    role="assistant",
-                    content=content[12:].strip(),
-                    timestamp=timestamp
-                ))
-
-        # Reverse to get chronological order
+        # Reverse to chronological order
         messages.reverse()
 
         return HistoryResponse(messages=messages, total=len(messages))
@@ -1962,6 +2067,33 @@ async def get_history(limit: int = 20):
         import traceback
         logger.error(f"Failed to get history: {e}\n{traceback.format_exc()}")
         return HistoryResponse(messages=[], total=0)
+
+
+@app.get("/api/history/timeline")
+async def history_timeline():
+    """Return conversation volume per month for the timeline scrubber."""
+    try:
+        import aiosqlite
+        from luna.core.paths import user_dir
+
+        db_path = user_dir() / "luna_engine.db"
+        if not db_path.exists():
+            return {"months": []}
+
+        async with aiosqlite.connect(str(db_path)) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS count "
+                "FROM conversation_turns "
+                "WHERE role IN ('user', 'assistant') "
+                "GROUP BY month ORDER BY month"
+            )
+            rows = await cursor.fetchall()
+
+        return {"months": [{"month": row["month"], "count": row["count"]} for row in rows]}
+    except Exception as e:
+        logger.error(f"Failed to get history timeline: {e}")
+        return {"months": []}
 
 
 @app.get("/consciousness", response_model=ConsciousnessResponse)
@@ -7955,86 +8087,9 @@ async def get_vk_latest_results():
         raise HTTPException(status_code=500, detail=f"Failed to load results: {e}")
 
 
-# ============================================
-# OBSERVATORY REVERSE PROXY  (port 8100)
-# ============================================
-# Mirrors the Vite dev-server proxy: strip /observatory prefix, forward to :8100.
 
-_OBSERVATORY_TARGET = os.environ.get("LUNA_OBSERVATORY_URL", "http://127.0.0.1:8100")
-_observatory_client: Optional[httpx.AsyncClient] = None
-
-
-def _get_observatory_client() -> httpx.AsyncClient:
-    global _observatory_client
-    if _observatory_client is None or _observatory_client.is_closed:
-        _observatory_client = httpx.AsyncClient(base_url=_OBSERVATORY_TARGET, timeout=30.0)
-    return _observatory_client
-
-
-@app.api_route("/observatory/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-async def observatory_proxy(request: Request, path: str):
-    """Reverse-proxy HTTP requests to Observatory server on port 8100."""
-    client = _get_observatory_client()
-    url = f"/{path}"
-    if request.url.query:
-        url = f"{url}?{request.url.query}"
-    try:
-        resp = await client.request(
-            method=request.method,
-            url=url,
-            headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")},
-            content=await request.body(),
-        )
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            headers=dict(resp.headers),
-            media_type=resp.headers.get("content-type"),
-        )
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail="Observatory server not reachable on port 8100")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Observatory proxy error: {e}")
-
-
-@app.websocket("/observatory/ws/{path:path}")
-async def observatory_ws_proxy(websocket: WebSocket, path: str):
-    """Reverse-proxy WebSocket connections to Observatory server."""
-    await websocket.accept()
-    proto = "wss" if _OBSERVATORY_TARGET.startswith("https") else "ws"
-    host = _OBSERVATORY_TARGET.replace("http://", "").replace("https://", "")
-    ws_url = f"{proto}://{host}/ws/{path}"
-
-    try:
-        import websockets
-        async with websockets.connect(ws_url) as upstream:
-            async def forward_to_client():
-                try:
-                    async for msg in upstream:
-                        await websocket.send_text(msg)
-                except Exception:
-                    pass
-
-            async def forward_to_upstream():
-                try:
-                    while True:
-                        data = await websocket.receive_text()
-                        await upstream.send(data)
-                except Exception:
-                    pass
-
-            await asyncio.gather(forward_to_client(), forward_to_upstream())
-    except ImportError:
-        # Fallback: websockets not installed — WS proxy unavailable
-        logger.warning("websockets package not installed; Observatory WS proxy disabled")
-        await websocket.close(code=1011, reason="WebSocket proxy unavailable")
-    except Exception as e:
-        logger.debug(f"Observatory WS proxy closed: {e}")
-    finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+# Observatory routes are now mounted directly via observatory_router (see top of file).
+# The old httpx reverse proxy to :8100 has been removed.
 
 
 # ==============================================================================

@@ -26,13 +26,17 @@ const TYPE_LABELS = {
  * KnowledgeBar — gradient line below an assistant message indicating Scribe extractions.
  * Click to open the T-panels.
  */
-export default function KnowledgeBar({ extractions, isActive, onClick }) {
-  if (!extractions || extractions.length === 0) return null;
+export default function KnowledgeBar({ extractions, liveEvents, isActive, onClick }) {
+  // Prefer live WebSocket events when available, fall back to polled extractions
+  const source = (liveEvents && liveEvents.length > 0) ? liveEvents : extractions;
+  if (!source || source.length === 0) return null;
 
-  // Group extractions by type for the dot indicators
+  // Group by type for the dot indicators
   const typeCounts = {};
-  for (const ext of extractions) {
-    const t = (ext.type || 'FACT').toUpperCase();
+  for (const ext of source) {
+    // liveEvents use lowercase payload types; extractions use ext.type
+    const raw = ext.payload?.node_type || ext.type || 'FACT';
+    const t = raw.toUpperCase();
     typeCounts[t] = (typeCounts[t] || 0) + 1;
   }
 

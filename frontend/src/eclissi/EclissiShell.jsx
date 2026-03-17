@@ -13,6 +13,7 @@ import WelcomeWizard from '../components/WelcomeWizard';
 import { useNavigation } from '../hooks/useNavigation';
 import { useIdentity } from '../hooks/useIdentity';
 import { useLunaAPI } from '../hooks/useLunaAPI';
+import { useGuardianStore } from '../hooks/useGuardianLuna';
 import { useFrontendConfig } from '../hooks/useFrontendConfig';
 
 // Widget content components
@@ -78,7 +79,16 @@ export default function EclissiShell() {
     navConsume();
   }, [navPending]);
 
+  const guardianToggle = useGuardianStore((s) => s.toggle);
+  const guardianOpen = useGuardianStore((s) => s.open);
+
   const switchTab = (tab) => {
+    if (tab === 'guardian') {
+      // Guardian is a toggle on the eclissi tab, not a separate page
+      setActiveTab('eclissi');
+      guardianOpen();
+      return;
+    }
     setActiveTab(tab);
   };
 
@@ -178,13 +188,7 @@ export default function EclissiShell() {
             <ObservatoryApp onBack={() => switchTab('eclissi')} activeProjectSlug={activeProjectSlug} />
           )}
           {activeTab === 'studio' && <iframe src="/studio/?v=2" style={{ width: '100%', height: '100%', border: 'none' }} />}
-          {activeTab === 'guardian' && (
-            <PlaceholderView
-              name="GUARDIAN"
-              accent="var(--ec-accent-guardian)"
-              description="Guardian service — sovereignty & permissions. Phase 6 integration."
-            />
-          )}
+          {/* Guardian tab now redirects to eclissi + opens Guardian panel (see switchTab) */}
           {activeTab === 'settings' && <SettingsApp />}
         </main>
 

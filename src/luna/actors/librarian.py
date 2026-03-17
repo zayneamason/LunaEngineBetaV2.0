@@ -196,6 +196,18 @@ class LibrarianActor(Actor):
                 f"created {len(result.edges_created)} edges"
             )
 
+            # Emit extraction_batch summary for live knowledge feed
+            from luna.core.event_bus import event_bus, KnowledgeEvent
+            event_bus.emit("knowledge", KnowledgeEvent(
+                type="extraction_batch",
+                payload={
+                    "session_id": extraction.source_id,
+                    "facts_count": len(result.nodes_created),
+                    "edges_count": len(result.edges_created),
+                    "entities_count": len(extraction.objects),
+                },
+            ))
+
         # Process flow signal (Layer 3 — thread management)
         # MUST run even on empty extractions — the Scribe sends flow-only
         # messages for RECALIBRATION/AMEND that carry no objects or edges.
@@ -821,6 +833,19 @@ class LibrarianActor(Actor):
                 result.nodes_created.append(node_id)
                 self._nodes_created += 1
 
+                # Emit fact_extracted event for live knowledge feed
+                from luna.core.event_bus import event_bus, KnowledgeEvent
+                event_bus.emit("knowledge", KnowledgeEvent(
+                    type="fact_extracted",
+                    payload={
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "content": obj.content,
+                        "confidence": obj.confidence,
+                        "entities": obj.entities,
+                    },
+                ))
+
                 # Layer 4: Track ACTION and OUTCOME node IDs for task ledger
                 if obj.type == ExtractionType.ACTION:
                     result.action_node_ids.append(node_id)
@@ -877,6 +902,17 @@ class LibrarianActor(Actor):
                 if edge_created:
                     result.edges_created.append(f"{from_id}->{to_id}")
                     self._edges_created += 1
+
+                    # Emit edge_created event for live knowledge feed
+                    from luna.core.event_bus import event_bus, KnowledgeEvent
+                    event_bus.emit("knowledge", KnowledgeEvent(
+                        type="edge_created",
+                        payload={
+                            "from_id": from_id,
+                            "to_id": to_id,
+                            "edge_type": edge.edge_type,
+                        },
+                    ))
                 else:
                     result.edges_skipped.append(
                         f"duplicate: {edge.from_ref}->{edge.to_ref}"
@@ -1499,6 +1535,19 @@ class LibrarianActor(Actor):
         self._thread_cache[thread.id] = thread
         self._threads_created += 1
 
+        # Emit thread_updated for live knowledge feed
+        from luna.core.event_bus import event_bus, KnowledgeEvent
+        event_bus.emit("knowledge", KnowledgeEvent(
+            type="thread_updated",
+            payload={
+                "thread_id": thread.id,
+                "topic": thread.topic,
+                "status": "active",
+                "turn_count": thread.turn_count,
+                "entities": thread.entities,
+            },
+        ))
+
         # Evict oldest cached threads if over limit
         if len(self._thread_cache) > self._max_cached_threads:
             oldest_key = next(iter(self._thread_cache))
@@ -1531,6 +1580,19 @@ class LibrarianActor(Actor):
         self._thread_cache[thread.id] = thread
         self._threads_parked += 1
 
+        # Emit thread_updated (parked) for live knowledge feed
+        from luna.core.event_bus import event_bus, KnowledgeEvent
+        event_bus.emit("knowledge", KnowledgeEvent(
+            type="thread_updated",
+            payload={
+                "thread_id": thread.id,
+                "topic": thread.topic,
+                "status": "parked",
+                "turn_count": thread.turn_count,
+                "entities": thread.entities,
+            },
+        ))
+
         # Reinforce entity-to-entity edges (Level 3) for non-trivial threads
         if thread.turn_count >= 3:
             await self._reinforce_entity_edges(thread)
@@ -1544,6 +1606,19 @@ class LibrarianActor(Actor):
         await self._update_thread_node(thread)
         self._thread_cache[thread.id] = thread
         self._threads_resumed += 1
+
+        # Emit thread_updated (resumed) for live knowledge feed
+        from luna.core.event_bus import event_bus, KnowledgeEvent
+        event_bus.emit("knowledge", KnowledgeEvent(
+            type="thread_updated",
+            payload={
+                "thread_id": thread.id,
+                "topic": thread.topic,
+                "status": "resumed",
+                "turn_count": thread.turn_count,
+                "entities": thread.entities,
+            },
+        ))
 
     async def _find_resumable_thread(
         self,

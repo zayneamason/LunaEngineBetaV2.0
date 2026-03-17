@@ -855,6 +855,16 @@ async def tool_observatory_quest_create(
                 (qid, nid),
             )
 
+    # Emit quest_generated for live knowledge feed
+    try:
+        from luna.core.event_bus import event_bus, KnowledgeEvent
+        event_bus.emit("knowledge", KnowledgeEvent(
+            type="quest_generated",
+            payload={"quest_id": qid, "title": title, "quest_type": quest_type},
+        ))
+    except Exception:
+        pass  # Event bus may not be available in all contexts
+
     return {"quest_id": qid, "title": title, "status": "available", "project": project or None}
 
 
