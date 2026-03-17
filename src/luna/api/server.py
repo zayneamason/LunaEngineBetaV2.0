@@ -1231,7 +1231,7 @@ async def reject_entity(entity_id: str):
 # GUARDIAN LUNA — OPERATIONAL CHAT STREAM
 # ============================================
 
-@app.post("/guardian/chat/stream")
+@app.post("/api/guardian/chat/stream")
 async def guardian_chat_stream(request: MessageRequest):
     """
     Stream Guardian Luna's response to admin queries.

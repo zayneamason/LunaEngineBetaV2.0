@@ -38,7 +38,7 @@ const useGuardianStore = create((set, get) => ({
     }));
 
     try {
-      const response = await fetch('/guardian/chat/stream', {
+      const response = await fetch('/api/guardian/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
