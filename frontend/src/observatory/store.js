@@ -272,9 +272,9 @@ export const useObservatoryStore = create((set, get) => ({
 
   // ── Entity Actions ───────────────────────────
 
-  fetchEntities: async (typeFilter = null) => {
+  fetchEntities: async (typeFilter = null, project = null) => {
     try {
-      const data = await api.entities(typeFilter)
+      const data = await api.entities(typeFilter, project)
       set({ entities: data.entities || [] })
     } catch (e) {
       console.error('Failed to fetch entities:', e)
@@ -292,9 +292,9 @@ export const useObservatoryStore = create((set, get) => ({
 
   // ── Quest Actions ────────────────────────────
 
-  fetchQuests: async (status = null, type = null) => {
+  fetchQuests: async (status = null, type = null, project = null) => {
     try {
-      const data = await api.quests({ status, type })
+      const data = await api.quests({ status, type, project })
       set({ quests: data.quests || [] })
     } catch (e) {
       console.error('Failed to fetch quests:', e)
@@ -352,9 +352,9 @@ export const useObservatoryStore = create((set, get) => ({
 
   selectThread: (threadId) => set({ selectedThreadId: threadId }),
 
-  fetchThreads: async (status = null) => {
+  fetchThreads: async (status = null, project = null) => {
     try {
-      const data = await api.threads(status)
+      const data = await api.threads(status, project)
       set({ threads: data.threads || [] })
     } catch (e) {
       console.error('Failed to fetch threads:', e)

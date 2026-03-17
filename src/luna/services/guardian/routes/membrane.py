@@ -1,12 +1,13 @@
 """Membrane routes — serve consent and scope transition fixtures."""
 
 import json
-from pathlib import Path
 from fastapi import APIRouter
+
+from luna.core.paths import local_dir
 
 router = APIRouter()
 
-MEMBRANE_DIR = Path("data/guardian/membrane")
+MEMBRANE_DIR = local_dir() / "guardian" / "membrane"
 
 
 @router.get("/membrane/consent")

@@ -77,7 +77,8 @@ class InteractionTracer:
     ]
 
     def __init__(self, output_dir: Path = None):
-        self.output_dir = output_dir or Path("data/diagnostics")
+        from luna.core.paths import local_dir
+        self.output_dir = output_dir or (local_dir() / "diagnostics")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.current_file = self._get_trace_file()
         self._session_traces: List[InteractionTrace] = []

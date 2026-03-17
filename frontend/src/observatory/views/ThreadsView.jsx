@@ -340,14 +340,14 @@ function SummaryBar({ threads }) {
 }
 
 // ─── Main ThreadsView ───────────────────────────────────────────
-export default function ThreadsView({ navigateTab }) {
+export default function ThreadsView({ navigateTab, activeProjectSlug }) {
   const { threads, selectedThreadId, selectThread, fetchThreads } = useObservatoryStore()
   const [statusFilter, setStatusFilter] = useState(null)
   const [sortBy, setSortBy] = useState("recent")
 
   useEffect(() => {
-    fetchThreads(statusFilter)
-  }, [statusFilter])
+    fetchThreads(statusFilter, activeProjectSlug)
+  }, [statusFilter, activeProjectSlug])
 
   const filtered = useMemo(() => {
     let result = [...threads]

@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
 from luna.memory.cluster_manager import ClusterManager, Cluster
+from luna.memory.config_loader import get_retrieval_params
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,10 @@ class ClusterRetrieval:
         self.db_path = db_path
         self.cluster_mgr = ClusterManager(db_path)
 
-        # Configuration
-        self.auto_activation_threshold = 0.80  # Clusters above this are always warm
-        self.max_clusters_per_query = 5  # Limit clusters returned per query
+        # Configuration — loaded from config/memory_economy_config.json
+        params = get_retrieval_params()
+        self.auto_activation_threshold = params['auto_activation_threshold']
+        self.max_clusters_per_query = params['max_clusters_per_query']
 
         logger.info(f"ClusterRetrieval initialized with db: {db_path}")
 

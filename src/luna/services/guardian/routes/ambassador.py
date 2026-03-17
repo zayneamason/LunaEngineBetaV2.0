@@ -206,11 +206,11 @@ async def query_ambassador(body: AmbassadorQueryRequest, request: Request):
         # Retrieve from membrane context (project-scoped)
         matrix = engine.get_actor("matrix")
         if matrix and matrix.is_ready:
-            from luna.services.guardian.memory_bridge import GUARDIAN_SCOPE
+            scope = engine.active_scope if engine else "global"
             results = await matrix._matrix.search_nodes(
                 query=body.query_text,
                 limit=20,
-                scope=GUARDIAN_SCOPE,
+                scope=scope,
             )
             for r in results:
                 if isinstance(r, dict):

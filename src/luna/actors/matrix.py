@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from luna.actors.base import Actor
+from luna.core.paths import user_dir
 from luna.substrate import MemoryDatabase, MemoryMatrix, MemoryGraph
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ class MatrixActor(Actor):
             self.db_path = db_path
         else:
             # Default: project data directory
-            self.db_path = Path(__file__).parent.parent.parent.parent / "data" / "luna_engine.db"
+            self.db_path = user_dir() / "luna_engine.db"
 
         self._db: Optional[MemoryDatabase] = None
         self._matrix: Optional[MemoryMatrix] = None
@@ -107,12 +108,13 @@ class MatrixActor(Actor):
         edge_count = graph_stats.get('edge_count', 0)
         logger.info(f"Matrix actor ready: {node_count} nodes, {edge_count} edges")
 
-        # Warn if memory looks empty (likely pointing to wrong database)
-        if node_count < 1000:
+        # Warn if memory looks unusually low (but not on fresh installs)
+        if node_count == 0:
+            logger.info("Matrix is empty — fresh install or new database.")
+        elif node_count < 100:
             logger.warning(
-                f"⚠️  LOW MEMORY COUNT: Only {node_count} nodes found. "
-                f"Luna's brain should have 50k+ nodes. "
-                f"Check database path: {self.db_path}"
+                "Memory node count unusually low (%d). Possible data loss.",
+                node_count
             )
 
     async def start(self) -> None:

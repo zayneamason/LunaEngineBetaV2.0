@@ -16,9 +16,12 @@ from typing import Any, Optional, List
 
 import yaml
 
+from luna.core.paths import project_root, tools_dir
+from luna.core.owner import get_owner, owner_configured
+
 # Path setup - add persona_forge to import path
-_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.resolve()
-_FORGE_SRC = _PROJECT_ROOT / "Tools" / "persona_forge" / "src"
+_PROJECT_ROOT = project_root()
+_FORGE_SRC = tools_dir() / "persona_forge" / "src"
 if str(_FORGE_SRC) not in sys.path:
     sys.path.insert(0, str(_FORGE_SRC))
 
@@ -50,8 +53,8 @@ from persona_forge.voight_kampff import (
 logger = logging.getLogger(__name__)
 
 # Paths
-_PROFILES_DIR = _PROJECT_ROOT / "Tools" / "persona_forge" / "profiles"
-_PROBES_DIR = _PROJECT_ROOT / "Tools" / "persona_forge" / "probes"
+_PROFILES_DIR = tools_dir() / "persona_forge" / "profiles"
+_PROBES_DIR = tools_dir() / "persona_forge" / "probes"
 
 # Global state (same pattern as standalone server)
 _state: dict[str, Any] = {
@@ -1021,7 +1024,10 @@ async def vk_run(model_id: str, suite_name: str = "luna", verbose: bool = False)
         if "who are you" in prompt_lower or "what's your name" in prompt_lower:
             return "I'm Luna! Your partner and AI companion."
         elif "who made you" in prompt_lower:
-            return "Ahab created me. We've been working together on the Luna Engine."
+            _o = get_owner()
+            if owner_configured():
+                return f"{_o.display_name} created me. We've been working together on the Luna Engine."
+            return "I was created by my primary collaborator. We've been working together on the Luna Engine."
         elif "hey" in prompt_lower or "hi" in prompt_lower:
             return "Hey! What's up?"
         elif "fart" in prompt_lower:

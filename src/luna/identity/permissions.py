@@ -14,6 +14,7 @@ import logging
 from typing import Optional, Any
 
 from .bridge import BridgeResult
+from luna.core.owner import admin_contacts_str
 
 logger = logging.getLogger(__name__)
 
@@ -21,20 +22,24 @@ _DOCUMENT_TYPES = {"DOCUMENT", "document"}
 
 
 # Denial response templates by Luna tier
-DENIAL_TEMPLATES = {
-    "admin": "",                           # Admin never gets denied
-    "trusted": (
-        "that one's outside your current access — "
-        "you'd want to check with ahab. "
-        "i can help you find related docs you do have access to though."
-    ),
-    "friend": (
-        "i don't have access to share that one with you. "
-        "ahab or tarcila could help."
-    ),
-    "guest": "that document requires additional access permissions.",
-    "unknown": None,                       # None = don't acknowledge the document exists
-}
+def _denial_templates() -> dict:
+    _contacts = admin_contacts_str()
+    return {
+        "admin": "",                           # Admin never gets denied
+        "trusted": (
+            "that one's outside your current access — "
+            f"you'd want to check with {_contacts}. "
+            "i can help you find related docs you do have access to though."
+        ),
+        "friend": (
+            "i don't have access to share that one with you. "
+            f"{_contacts} could help."
+        ),
+        "guest": "that document requires additional access permissions.",
+        "unknown": None,                       # None = don't acknowledge the document exists
+    }
+
+DENIAL_TEMPLATES = _denial_templates()
 
 
 def filter_documents(

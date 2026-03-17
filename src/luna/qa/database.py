@@ -113,7 +113,38 @@ class QADatabase:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_bugs_status ON qa_bugs(status);
+
+                CREATE TABLE IF NOT EXISTS qa_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    source TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    component TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    details_json TEXT,
+                    resolved BOOLEAN DEFAULT FALSE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_events_timestamp ON qa_events(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_events_source ON qa_events(source);
             """)
+
+            # Migration: fix CUSTOM-CB2C01 inverted logic (regex → regex_not_match)
+            self._migrate_surrender_assertion(conn)
+
+    def _migrate_surrender_assertion(self, conn):
+        """Fix CUSTOM-CB2C01 Knowledge Surrender assertion — regex should be regex_not_match."""
+        row = conn.execute(
+            "SELECT pattern_config_json FROM qa_assertions WHERE id = 'CUSTOM-CB2C01'"
+        ).fetchone()
+        if row and row["pattern_config_json"]:
+            pc = json.loads(row["pattern_config_json"])
+            if pc.get("match_type") == "regex":
+                pc["match_type"] = "regex_not_match"
+                conn.execute(
+                    "UPDATE qa_assertions SET pattern_config_json = ? WHERE id = 'CUSTOM-CB2C01'",
+                    (json.dumps(pc),)
+                )
 
     # ═══════════════════════════════════════════════════════════
     # REPORTS
@@ -450,3 +481,87 @@ class QADatabase:
         with self._conn() as conn:
             row = conn.execute("SELECT COUNT(*) as count FROM qa_bugs").fetchone()
             return f"BUG-{row['count'] + 1:03d}"
+
+    # ═══════════════════════════════════════════════════════════
+    # DIAGNOSTIC EVENTS
+    # ═══════════════════════════════════════════════════════════
+
+    def store_event(self, source: str, severity: str, component: str,
+                    message: str, details: dict = None) -> int:
+        """Store a diagnostic event. Returns the event ID."""
+        with self._conn() as conn:
+            cursor = conn.execute("""
+                INSERT INTO qa_events (source, severity, component, message, details_json)
+                VALUES (?, ?, ?, ?, ?)
+            """, (source, severity, component, message,
+                  json.dumps(details) if details else None))
+            return cursor.lastrowid
+
+    def get_events(self, source: str = None, severity: str = None,
+                   limit: int = 100) -> list[dict]:
+        """Get diagnostic events, optionally filtered."""
+        clauses, params = [], []
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        if severity:
+            clauses.append("severity = ?")
+            params.append(severity)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM qa_events {where} ORDER BY timestamp DESC LIMIT ?",
+                params,
+            ).fetchall()
+            return [self._row_to_event(row) for row in rows]
+
+    def get_event_summary(self, hours: int = 24) -> dict:
+        """Get event counts grouped by source and severity."""
+        since = (datetime.now() - timedelta(hours=hours)).isoformat()
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT source, severity, COUNT(*) as count
+                FROM qa_events WHERE timestamp > ?
+                GROUP BY source, severity ORDER BY count DESC
+            """, (since,)).fetchall()
+
+            by_source: dict[str, int] = {}
+            by_severity: dict[str, int] = {}
+            total = 0
+            for r in rows:
+                by_source[r["source"]] = by_source.get(r["source"], 0) + r["count"]
+                by_severity[r["severity"]] = by_severity.get(r["severity"], 0) + r["count"]
+                total += r["count"]
+
+            return {
+                "total": total,
+                "hours": hours,
+                "by_source": by_source,
+                "by_severity": by_severity,
+            }
+
+    def count_events(self, hours: int = 24) -> int:
+        """Count events in the last N hours."""
+        since = (datetime.now() - timedelta(hours=hours)).isoformat()
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) as count FROM qa_events WHERE timestamp > ?",
+                (since,),
+            ).fetchone()
+            return row["count"]
+
+    def _row_to_event(self, row) -> dict:
+        """Convert DB row to event dict."""
+        return {
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "source": row["source"],
+            "severity": row["severity"],
+            "component": row["component"],
+            "message": row["message"],
+            "details": json.loads(row["details_json"]) if row["details_json"] else None,
+            "resolved": bool(row["resolved"]),
+        }

@@ -13,10 +13,10 @@ export default defineConfig({
   server: {
     port: parseInt(process.env.LUNA_FRONTEND_PORT || '5173'),
     proxy: {
+      // --- existing routes (preserved) ---
       '/api': {
         target: backendTarget,
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
       },
       '/kozmo': {
         target: backendTarget,
@@ -53,6 +53,36 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
       },
+      // --- added routes ---
+      '/ws': {
+        target: `ws://localhost:${BACKEND_PORT}`,
+        ws: true,
+      },
+      '/health': { target: backendTarget, changeOrigin: true },
+      '/status': { target: backendTarget, changeOrigin: true },
+      '/consciousness': { target: backendTarget, changeOrigin: true },
+      '/message': { target: backendTarget, changeOrigin: true },
+      '/stream': { target: backendTarget, changeOrigin: true },
+      '/thoughts': { target: backendTarget, changeOrigin: true },
+      '/interrupt': { target: backendTarget, changeOrigin: true },
+      '/history': { target: backendTarget, changeOrigin: true },
+      '/memory': { target: backendTarget, changeOrigin: true },
+      '/entities': { target: backendTarget, changeOrigin: true },
+      '/dataroom': { target: backendTarget, changeOrigin: true },
+      '/state': { target: backendTarget, changeOrigin: true },
+      '/extraction': { target: backendTarget, changeOrigin: true },
+      '/debug': { target: backendTarget, changeOrigin: true },
+      '/voice': { target: backendTarget, changeOrigin: true },
+      '/identity': { target: backendTarget, changeOrigin: true },
+      '/tuning': { target: backendTarget, changeOrigin: true },
+      '/clusters': { target: backendTarget, changeOrigin: true },
+      '/constellation': { target: backendTarget, changeOrigin: true },
+      '/slash': { target: backendTarget, changeOrigin: true },
+      '/llm': { target: backendTarget, changeOrigin: true },
+      '/qa': { target: backendTarget, changeOrigin: true },
+      '/vk': { target: backendTarget, changeOrigin: true },
+      '/guardian': { target: backendTarget, changeOrigin: true },
+      '/studio': { target: backendTarget, changeOrigin: true },
     }
   }
 })

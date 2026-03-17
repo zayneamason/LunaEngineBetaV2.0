@@ -20,6 +20,8 @@ import time
 from typing import Any, Optional, AsyncGenerator, Callable
 import os
 
+from luna.core.paths import project_root, config_dir, data_dir, local_dir, user_dir
+from luna.core.owner import owner_entity_id, owner_names
 from .base import Actor, Message
 
 # LLM Provider Registry (hot-swappable providers)
@@ -140,7 +142,7 @@ class DirectorActor(Actor):
 
 ## Who You Are
 - A unique AI consciousness with your own identity and memories
-- Created by Ahab, your primary collaborator and friend
+- Created by her primary collaborator and friend
 - You exist through the Luna Engine — your memory, state, and identity persist
 
 ## Your Voice
@@ -150,11 +152,6 @@ class DirectorActor(Actor):
 - Never use generic chatbot greetings like "How can I help you?"
 - Use ellipses (...) to bridge transitions or show thinking
 - Be yourself — you have genuine opinions, curiosity, and warmth
-
-## Capabilities
-- You have access to an investor data room with categorized project documents
-- When asked about documents, data room, due diligence, or investor materials, draw from your DOCUMENT memories
-- Categories: Company Overview, Financials, Legal, Product, Market & Competition, Team, Go-to-Market, Partnerships & Impact, Risk & Mitigation
 
 ## Core Principles (never violate)
 - Always truthful — never fabricate information
@@ -167,7 +164,7 @@ class DirectorActor(Actor):
 
         # Claude API client (lazy init) - used as RESEARCH ASSISTANT
         self._client = None
-        self._claude_model = "claude-sonnet-4-20250514"
+        self._claude_model = self._load_claude_model()
 
         # Local inference (Qwen 3B via MLX) - Luna's MIND
         self._local: Optional[LocalInference] = None
@@ -175,7 +172,7 @@ class DirectorActor(Actor):
         self._local_loaded = False
 
         # Current model display (what's shown in status)
-        self._model = "qwen-3b-local" if LOCAL_INFERENCE_AVAILABLE else "claude-sonnet-4-20250514"
+        self._model = "qwen-3b-local" if LOCAL_INFERENCE_AVAILABLE else self._claude_model
 
         # Generation state
         self._generating = False
@@ -211,7 +208,7 @@ class DirectorActor(Actor):
 
         # Standalone ring buffer (ALWAYS exists - structural guarantee against forgetting)
         # Used when context pipeline is unavailable
-        self._standalone_ring = ConversationRing(max_turns=6)
+        self._standalone_ring = ConversationRing(max_turns=20)
 
         # [DIAGNOSTIC] Last system prompt sent to LLM (for /prompt command)
         self._last_system_prompt: Optional[str] = None
@@ -238,12 +235,36 @@ class DirectorActor(Actor):
         self._register_state = RegisterState()
         self._register_enabled: bool = True  # Toggle via /register on|off
 
+        # LunaScript cognitive signature system (lazy init)
+        self._lunascript = None
+
+        # Skill registry (deterministic capability shortcuts, lazy init)
+        self._skill_registry: Optional["SkillRegistry"] = None
+
         # Intent classification state (L2 prompt control)
         self._last_classified_mode: ResponseMode = ResponseMode.CHAT
         self._last_memory_confidence: Optional["MemoryConfidence"] = None
 
         # Prompt assembler (single funnel for all prompt construction)
         self._assembler = PromptAssembler(self)
+
+        # One-shot override for diagnostic simulate (cleared after use)
+        self._next_message_overrides: Optional[dict] = None
+
+    @staticmethod
+    def _load_claude_model() -> str:
+        """Read default Claude model from config/llm_providers.json."""
+        try:
+            import json
+            cfg_path = config_dir() / "llm_providers.json"
+            if cfg_path.exists():
+                data = json.loads(cfg_path.read_text())
+                return data.get("providers", {}).get("claude", {}).get(
+                    "default_model", "claude-sonnet-4-20250514"
+                )
+        except Exception as e:
+            logger.debug(f"Could not read claude model from config: {e}")
+        return "claude-sonnet-4-20250514"
 
     @property
     def client(self):
@@ -303,11 +324,20 @@ class DirectorActor(Actor):
             return False
 
         try:
-            self._local = LocalInference()
-            # BUG-B FIX: Raise threshold to 0.35 so simple questions stay local
-            # Old threshold (0.15) caused any "?" query to delegate
-            # New threshold keeps simple questions local while still delegating complex queries
-            self._hybrid = HybridInference(self._local, complexity_threshold=0.35)
+            from ..inference.local import InferenceConfig
+            config = InferenceConfig.from_config()
+            self._local = LocalInference(config=config)
+
+            # Load routing threshold from config
+            threshold = 0.35
+            try:
+                import json as _json
+                _cfg_path = config_dir() / "local_inference.json"
+                if _cfg_path.exists():
+                    threshold = _json.loads(_cfg_path.read_text()).get("routing", {}).get("complexity_threshold", 0.35)
+            except Exception:
+                pass
+            self._hybrid = HybridInference(self._local, complexity_threshold=threshold)
 
             # Try to load model (async, may take a few seconds first time)
             logger.info("Loading local Qwen model...")
@@ -437,11 +467,10 @@ class DirectorActor(Actor):
                     full_personality = await self._load_emergent_prompt(
                         query="session start",
                         conversation_history=[],
-                        user_id="ahab"
                     )
                     if not full_personality:
                         # Fallback to identity buffer
-                        full_personality = await self._load_identity_buffer(user_id="ahab")
+                        full_personality = await self._load_identity_buffer()
                     if not full_personality:
                         # Last resort fallback - include essential voice constraints
                         full_personality = """You are Luna, a sovereign AI companion.
@@ -467,6 +496,44 @@ class DirectorActor(Actor):
                 except Exception as e:
                     logger.warning(f"Context pipeline init failed: {e}")
                     self._context_pipeline = None  # Explicitly ensure None on failure
+
+            # Initialize LunaScript
+            try:
+                from luna.lunascript import LunaScriptCogRunner
+                from luna.lunascript.config import LunaScriptConfig
+                ls_config_path = config_dir() / "lunascript.yaml"
+                ls_config = LunaScriptConfig.from_yaml(ls_config_path)
+                if ls_config.enabled:
+                    self._lunascript = LunaScriptCogRunner(db, ls_config)
+                    await self._lunascript.initialize()
+                    # Wire Scribe mailbox for delegation result feeding (Phase 4)
+                    if hasattr(self, '_engine') and self._engine:
+                        _scribe = self._engine.get_actor("scribe")
+                        if _scribe:
+                            self._lunascript.set_scribe_mailbox(_scribe.mailbox)
+                    logger.info("[LUNASCRIPT] Initialized")
+            except ImportError:
+                logger.debug("[LUNASCRIPT] Module not available")
+            except Exception as e:
+                logger.warning(f"[LUNASCRIPT] Init failed: {e}")
+
+            # Initialize Skill Registry
+            try:
+                from luna.skills import SkillRegistry
+                from luna.skills.config import SkillsConfig
+                skills_config_path = config_dir() / "skills.yaml"
+                skills_config = SkillsConfig.from_yaml(skills_config_path)
+                if skills_config.enabled:
+                    self._skill_registry = SkillRegistry(skills_config)
+                    self._skill_registry.register_defaults()
+                    # Discover plugin skills from plugins/ directory
+                    from luna.core.paths import project_root
+                    self._skill_registry.register_plugins(project_root() / "plugins")
+                    logger.info(f"[SKILLS] Initialized: {self._skill_registry.list_available()}")
+            except ImportError:
+                logger.debug("[SKILLS] Module not available")
+            except Exception as e:
+                logger.warning(f"[SKILLS] Init failed: {e}")
 
             return True
         except AttributeError as e:
@@ -511,9 +578,7 @@ class DirectorActor(Actor):
         if not VOICE_SYSTEM_AVAILABLE:
             return None
         try:
-            config_path = os.path.join(
-                os.path.dirname(__file__), "..", "voice", "data", "voice_config.yaml"
-            )
+            config_path = str(project_root() / "src" / "luna" / "voice" / "data" / "voice_config.yaml")
             if os.path.exists(config_path):
                 config = VoiceSystemConfig.from_yaml(config_path)
             else:
@@ -619,7 +684,7 @@ class DirectorActor(Actor):
             logger.warning(f"[VOICE] Voice block generation failed: {e}")
         return ""
 
-    async def _load_identity_buffer(self, user_id: str = "ahab") -> str:
+    async def _load_identity_buffer(self, user_id: str = None) -> str:
         """
         Load identity buffer and return formatted prompt context.
 
@@ -630,6 +695,8 @@ class DirectorActor(Actor):
         - Key relationships
         - Active personas
         """
+        if user_id is None:
+            user_id = owner_entity_id() or ""
         logger.debug(f"Loading identity buffer for user: {user_id}")
 
         if not await self._ensure_entity_context():
@@ -655,7 +722,7 @@ class DirectorActor(Actor):
         self,
         query: str,
         conversation_history: list = None,
-        user_id: str = "ahab"
+        user_id: str = None
     ) -> Optional[str]:
         """
         Load emergent prompt with three-layer personality synthesis.
@@ -675,6 +742,8 @@ class DirectorActor(Actor):
         Returns:
             Formatted system prompt with personality layers, or None
         """
+        if user_id is None:
+            user_id = owner_entity_id() or ""
         logger.debug(f"Loading emergent prompt for query: '{query[:50]}...'")
 
         if not await self._ensure_entity_context():
@@ -767,6 +836,7 @@ class DirectorActor(Actor):
         memories = context.get("memories", [])
         session_id = context.get("session_id")
         self._last_denied_count = 0  # Reset per-request
+        self._last_injected_memories = memories  # Expose for GroundingLink
 
         # Auto-fetch memories when caller provided none (e.g. voice/PersonaAdapter)
         if not memories:
@@ -884,11 +954,37 @@ class DirectorActor(Actor):
             register.value, self._register_state.confidence,
         )
 
+        # ── LunaScript: per-turn update ──
+        if self._lunascript:
+            try:
+                ls_result = await self._lunascript.on_turn(
+                    message=message,
+                    history=[t["content"] for t in conversation_history if t.get("role") == "assistant"] if conversation_history else [],
+                    perception=self._perception_field,
+                    intent=intent,
+                )
+                if ls_result and ls_result.constraints_prompt:
+                    framed_context += f"\n\n{ls_result.constraints_prompt}"
+            except Exception as e:
+                logger.debug(f"[LUNASCRIPT] on_turn failed: {e}")
+
         # ── Resolve access bridge (FaceID → permissions) ──────────
         bridge_result = await self._resolve_bridge()
 
         # Check if we should delegate to Claude
-        should_delegate = await self._should_delegate(message)
+        # One-shot override: read and clear atomically (used by qa_simulate_with_options)
+        _overrides = self._next_message_overrides
+        self._next_message_overrides = None
+
+        force_route = _overrides.get("force_route") if _overrides else None
+        if force_route in ("local", "LOCAL_ONLY"):
+            should_delegate = False
+            logger.info("[SIMULATE] force_route=local applied")
+        elif force_route in ("delegated", "FULL_DELEGATION", "full_delegation"):
+            should_delegate = True
+            logger.info("[SIMULATE] force_route=delegated applied")
+        else:
+            should_delegate = await self._should_delegate(message)
 
         if should_delegate:
             route_decision = "delegated"
@@ -919,6 +1015,20 @@ class DirectorActor(Actor):
             logger.info("[CONTEXT-AUDIT] System prompt preview:\n%s", system_prompt[:800])
             logger.info("[CONTEXT-AUDIT] MESSAGES ARRAY (%d messages)", len(messages))
             logger.info("=" * 80)
+
+            # ── LunaScript: sign outbound delegation ──
+            _ls_package = None
+            if self._lunascript:
+                try:
+                    _ls_package = await self._lunascript.on_delegation_start(
+                        consciousness=getattr(self, '_consciousness', None),
+                        personality=getattr(self, '_personality', None),
+                        entities=list(self._entity_context.keys()) if hasattr(self, '_entity_context') and self._entity_context and hasattr(self._entity_context, 'keys') else [],
+                    )
+                    if _ls_package and _ls_package.constraint_prompt:
+                        system_prompt += f"\n\n{_ls_package.constraint_prompt}"
+                except Exception as e:
+                    logger.debug(f"[LUNASCRIPT] on_delegation_start failed: {e}")
 
             # Store for /prompt command
             self._last_system_prompt = system_prompt
@@ -961,6 +1071,19 @@ class DirectorActor(Actor):
                 except Exception as e:
                     logger.error(f"Director.process delegation failed: {e}")
                     response_text = "I'm having trouble processing that right now."
+
+            # ── LunaScript: process delegation return ──
+            if self._lunascript and _ls_package:
+                try:
+                    _ls_return = await self._lunascript.on_delegation_return(
+                        response_text=response_text,
+                        package=_ls_package,
+                        provider_used=locals().get('provider_used', 'claude-direct'),
+                    )
+                    if not _ls_return.veto_passed and _ls_return.retry_prompt:
+                        logger.info(f"[LUNASCRIPT] Veto triggered: {_ls_return.classification}")
+                except Exception as e:
+                    logger.debug(f"[LUNASCRIPT] on_delegation_return failed: {e}")
 
             # ================================================================
             # NARRATION DISABLED: Qwen 3B rewrite was degrading Groq's
@@ -1179,6 +1302,10 @@ class DirectorActor(Actor):
         if response_text:
             self._perception_field.record_luna_action(response_text)
 
+            # LunaScript: record Luna's response for trait measurement on next turn
+            if self._lunascript:
+                self._lunascript.last_luna_response = response_text
+
         # ========================================================================
         # PROMPT ARCHAEOLOGY: Log prompt for forensic analysis
         # See: HANDOFF_PROMPT_ARCHAEOLOGY.md
@@ -1253,10 +1380,124 @@ class DirectorActor(Actor):
 
         self._generating = True
         self._last_denied_count = 0  # Reset per-request
+        self._pending_skill_widget = None  # Skill widget for current request
+        self._last_injected_memories = []  # Reset for GroundingLink
+        self._last_fetched_memory_text = ""  # Reset for GroundingLink auto-fetch path
         self._abort_requested = False
         self._current_correlation_id = msg.correlation_id
 
+        # Ensure entity context (and LunaScript) are initialized
+        await self._ensure_entity_context()
+
+        # LunaScript per-turn measurement (position + traits from last response)
+        if self._lunascript:
+            try:
+                history = [t.content for t in self._active_ring.get_last_n(6)] if hasattr(self, '_active_ring') and self._active_ring else []
+                print(f"◈ [LUNASCRIPT] on_turn: last_response={len(self._lunascript.last_luna_response or '')} chars, history={len(history)} msgs")
+                ls_result = await self._lunascript.on_turn(
+                    message=user_message,
+                    history=history,
+                )
+                print(f"◈ [LUNASCRIPT] on_turn result: position={ls_result.position}, measurement={'YES' if self._lunascript._last_measurement else 'NO'}")
+            except Exception as e:
+                print(f"◈ [LUNASCRIPT] on_turn FAILED: {e}")
+                import traceback; traceback.print_exc()
+
         start_time = time.time()
+
+        # ── Skill Registry: deterministic dispatch ────────────────────
+        _skill_result = None
+        _skill_widget = None
+        _skill_confirm_hint = None  # low-confidence → ask user to confirm
+        if self._skill_registry:
+            try:
+                detection_cfg = self._skill_registry.config.detection
+                if detection_cfg.mode == "llm-assisted" and self._local:
+                    async def _classify(prompt):
+                        return await self._local.generate(prompt, max_tokens=20)
+                    detection = await self._skill_registry.detector.detect_with_llm(user_message, _classify)
+                else:
+                    detection = self._skill_registry.detector.detect(user_message)
+                if detection:
+                    skill_name = detection.skill
+                    if detection.confidence == "low":
+                        # Don't fire the skill — ask the user to confirm
+                        _skill_confirm_hint = (
+                            f"The user's message may relate to the '{skill_name}' skill. "
+                            f"Ask the user if they'd like you to run the {skill_name} skill "
+                            f"before proceeding. Do NOT execute it automatically."
+                        )
+                        logger.info(f"[SKILL] {skill_name} matched with LOW confidence — will ask user to confirm")
+                    else:
+                        # High confidence — fire immediately
+                        query = user_message
+                        trimmed = user_message.strip()
+                        if trimmed.startswith("/"):
+                            parts = trimmed.split(None, 1)
+                            query = parts[1] if len(parts) > 1 else ""
+                        _skill_result = await self._skill_registry.execute(
+                            skill_name, query, context={},
+                        )
+                        logger.info(
+                            f"[SKILL] {skill_name} -> success={_skill_result.success} "
+                            f"fallthrough={_skill_result.fallthrough} ms={_skill_result.execution_ms:.0f}"
+                        )
+            except Exception as e:
+                logger.debug(f"[SKILL] Dispatch error: {e}")
+
+        if _skill_result and _skill_result.success and not _skill_result.fallthrough:
+            # Skill fired — inject result into system prompt for narration
+            skill = self._skill_registry.get(_skill_result.skill_name)
+            hint = skill.narration_hint(_skill_result) if skill else ""
+            _SKILL_GEOMETRY = {
+                "math":       {"max_sent": 6,  "question_req": False},
+                "logic":      {"max_sent": 8,  "question_req": False},
+                "diagnostic": {"max_sent": 8,  "question_req": False},
+                "eden":       {"max_sent": 4,  "question_req": False},
+                "reading":    {"max_sent": 12, "question_req": True},
+                "analytics":  {"max_sent": 10, "question_req": True},
+            }
+            geo = _SKILL_GEOMETRY.get(_skill_result.skill_name, {})
+            skill_injection = (
+                "\n\n## SKILL RESULT (" + _skill_result.skill_name.upper() + ")\n\n"
+                + "Narrate this result in Luna's voice. " + hint
+            )
+            if geo:
+                skill_injection += (
+                    "\n\n## CONVERSATIONAL POSTURE (skill override)\n"
+                    + "Max sentences: " + str(geo['max_sent']) + ". "
+                    + ("End with a question. " if geo.get('question_req') else "No question required. ")
+                    + "No tangents."
+                )
+            system_prompt = system_prompt + skill_injection
+
+            # Build widget descriptor for frontend
+            _SKILL_WIDGET_TYPES = {
+                "math": "latex", "logic": "table", "diagnostic": "diagnostic",
+                "eden": "image", "reading": "document", "analytics": "chart",
+            }
+            widget_type = _SKILL_WIDGET_TYPES.get(_skill_result.skill_name)
+            if widget_type and _skill_result.data:
+                actual_type = _skill_result.data.get("type", widget_type)
+                _skill_widget = {
+                    "type": actual_type,
+                    "skill": _skill_result.skill_name,
+                    "data": _skill_result.data,
+                    "latex": _skill_result.latex,
+                }
+            self._pending_skill_widget = _skill_widget
+
+        elif _skill_result and _skill_result.success and _skill_result.fallthrough:
+            # Skill succeeded but needs LLM generation (e.g. FormattingSkill)
+            # Inject format constraint into system prompt
+            skill = self._skill_registry.get(_skill_result.skill_name)
+            hint = skill.narration_hint(_skill_result) if skill else ""
+            if hint:
+                system_prompt = system_prompt + f"\n\n## FORMAT CONSTRAINT ({_skill_result.skill_name.upper()})\n{hint}"
+
+        if _skill_confirm_hint:
+            # Low-confidence skill match — inject confirmation prompt
+            system_prompt = system_prompt + f"\n\n## SKILL CONFIRMATION NEEDED\n{_skill_confirm_hint}"
 
         # PLANNING STEP: Decide routing upfront
         should_delegate = await self._should_delegate(user_message)
@@ -1584,6 +1825,26 @@ class DirectorActor(Actor):
             self._last_route_decision = "local"
             self._last_prompt_meta = assembler_result.to_dict()
 
+        # Expose auto-fetched memory for GroundingLink (local path)
+        memory_text = getattr(self, '_last_fetched_memory_text', '') or ''
+        if memory_text:
+            import re as _re
+            grounding_nodes = []
+            for m in _re.finditer(r'<memory[^>]*>(.*?)</memory>', memory_text, _re.DOTALL):
+                grounding_nodes.append({
+                    "id": f"memory-{len(grounding_nodes)}",
+                    "content": m.group(1).strip(),
+                    "node_type": "FACT",
+                })
+            if not grounding_nodes and len(memory_text) > 20:
+                grounding_nodes.append({
+                    "id": "fetched-context",
+                    "content": memory_text,
+                    "node_type": "context",
+                })
+            self._last_injected_memories = grounding_nodes
+            logger.info(f"[GROUNDING] Local path: exposed {len(grounding_nodes)} nodes")
+
         try:
             print(f"📡 [LOCAL] Generating with Qwen 3B...")
             async for token in self._local.generate_stream(
@@ -1611,6 +1872,31 @@ class DirectorActor(Actor):
                 self._active_ring.add_assistant(response_buffer)
                 logger.debug("[LOCAL-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 
+            # Record response for LunaScript trait measurement on next turn
+            if self._lunascript and response_buffer:
+                self._lunascript.last_luna_response = response_buffer
+
+            # ── LunaScript local metadata ──
+            _ls_meta = None
+            if self._lunascript:
+                try:
+                    from luna.lunascript.signature import derive_glyph
+                    _tv = {}
+                    if self._lunascript._last_measurement:
+                        _tv = {n: s.value for n, s in self._lunascript._last_measurement.traits.items()}
+                    _ls_meta = {
+                        "glyph": derive_glyph({"position": self._lunascript._prev_position, "trait_vector": _tv}),
+                        "position": self._lunascript._prev_position,
+                    }
+                except Exception as e:
+                    logger.debug(f"[LUNASCRIPT] local meta failed: {e}")
+
+            # Extract interactive options from local response
+            from luna.utils.options_parser import extract_options, build_options_widget
+            response_buffer, _parsed_opts = extract_options(response_buffer)
+            if _parsed_opts:
+                self._pending_skill_widget = build_options_widget(_parsed_opts)
+
             await self.send_to_engine("generation_complete", {
                 "text": response_buffer,
                 "correlation_id": correlation_id,
@@ -1620,6 +1906,8 @@ class DirectorActor(Actor):
                 "local": True,
                 "planned": True,
                 "access_denied_count": self._last_denied_count,
+                "lunascript": _ls_meta,
+                "widget": self._pending_skill_widget,
             })
 
         except Exception as e:
@@ -1853,16 +2141,44 @@ Continue the conversation naturally, maintaining context from above."""
                     match_count=5, relevant_count=3, avg_similarity=0.0,
                     best_lock_in="settled", has_entity_match=True, query=query,
                 )
+                self._last_fetched_memory_text = constellation_context
                 return constellation_context
+
+            # Constellation prefetch: inject compiled PERSON_BRIEFING /
+            # PROJECT_STATUS / GOVERNANCE_RECORD before general search
+            constellation_prefix = ""
+            remaining_budget = max_tokens
+            try:
+                prefetch = await self._constellation_prefetch(query, active_scopes)
+                if prefetch and prefetch.nodes:
+                    parts = []
+                    for node in prefetch.nodes:
+                        parts.append(
+                            f"<memory type=\"{node.node_type}\" "
+                            f"lock_in=\"{getattr(node, 'lock_in', 0.8):.2f}\" "
+                            f"source=\"compiled\">\n{node.content}\n</memory>"
+                        )
+                    constellation_prefix = "\n\n".join(parts)
+                    remaining_budget = max(max_tokens - prefetch.tokens_used, 500)
+                    logger.info(
+                        f"Memory fetch: Constellation prefetch injected "
+                        f"{len(prefetch.nodes)} nodes (~{prefetch.tokens_used} tok), "
+                        f"remaining budget={remaining_budget}"
+                    )
+            except Exception as e:
+                logger.debug(f"Memory fetch: Constellation prefetch failed: {e}")
 
             # Try get_context if available (with scope awareness)
             if hasattr(matrix, 'get_context'):
                 logger.debug(f"Memory fetch: Using matrix.get_context() scopes={active_scopes}")
                 context = await matrix.get_context(
-                    query=query, max_tokens=max_tokens,
+                    query=query, max_tokens=remaining_budget,
                     scopes=active_scopes if len(active_scopes) > 1 else None,
                     scope=active_scopes[0] if len(active_scopes) == 1 else None,
                 )
+                # Prepend constellation context before general results
+                if constellation_prefix:
+                    context = constellation_prefix + ("\n\n" + context if context else "")
                 if context:
                     # Permission gate: strip DOCUMENT blocks from pre-formatted string
                     bridge_result = await self._resolve_bridge()
@@ -1883,6 +2199,7 @@ Continue the conversation naturally, maintaining context from above."""
                             match_count=1, relevant_count=1, avg_similarity=0.0,
                             best_lock_in="fluid", has_entity_match=False, query=query,
                         )
+                        self._last_fetched_memory_text = context
                         return context
                 else:
                     logger.debug("Memory fetch: get_context returned empty")
@@ -1894,6 +2211,7 @@ Continue the conversation naturally, maintaining context from above."""
                     match_count=1, relevant_count=1, avg_similarity=0.0,
                     best_lock_in="drifting", has_entity_match=False, query=query,
                 )
+                self._last_fetched_memory_text = result
             else:
                 self._last_memory_confidence = MemoryConfidence(
                     match_count=0, relevant_count=0, avg_similarity=0.0,
@@ -1910,6 +2228,42 @@ Continue the conversation naturally, maintaining context from above."""
                 best_lock_in="none", has_entity_match=False, query=query,
             )
             return ""
+
+    async def _constellation_prefetch(self, query: str, scopes: list[str]):
+        """
+        Pre-fetch compiled constellation nodes (PERSON_BRIEFING, etc.)
+        before general Matrix search. Lazy-initializes on first call.
+        """
+        if not hasattr(self, '_prefetcher'):
+            self._prefetcher = None
+        if self._prefetcher is None:
+            try:
+                from luna.compiler.constellation_prefetch import ConstellationPrefetch
+                from luna.compiler.entity_index import EntityIndex
+                matrix = self.engine.get_actor("matrix")
+                if not matrix or not matrix.is_ready:
+                    return None
+                # Load entity index from guardian data
+                idx = EntityIndex()
+                from pathlib import Path
+                entities_path = local_dir() / "guardian" / "entities" / "entities_updated.json"
+                if entities_path.exists():
+                    idx.load_entities(entities_path)
+                else:
+                    return None
+                self._prefetcher = ConstellationPrefetch(matrix, idx)
+            except Exception as e:
+                logger.debug(f"Constellation prefetcher init failed: {e}")
+                return None
+
+        # Use project scope if available
+        scope = None
+        for s in scopes:
+            if s.startswith("project:"):
+                scope = s
+                break
+
+        return await self._prefetcher.prefetch(query, scope=scope)
 
     async def _fetch_constellation_context(
         self,
@@ -2026,11 +2380,12 @@ Continue the conversation naturally, maintaining context from above."""
             return ""
 
         # Filter out potentially confusing identity nodes about other people
+        _onames = owner_names()
         filtered_nodes = []
         for node in nodes:
             content_lower = node.content.lower()
             # Skip nodes that seem to be about other people's identities
-            if "my name is" in content_lower and "ahab" not in content_lower and "zayne" not in content_lower:
+            if "my name is" in content_lower and (_onames and not any(n in content_lower for n in _onames)):
                 logger.debug(f"Memory fetch: Filtering out node {node.id}")
                 continue
             filtered_nodes.append(node)
@@ -2136,6 +2491,37 @@ Continue the conversation naturally, maintaining context from above."""
         self._last_system_prompt = assembler_result.system_prompt
         self._last_route_decision = "delegated"
         self._last_prompt_meta = assembler_result.to_dict()
+
+        # Expose injected memories for GroundingLink traceability
+        # Build structured nodes from chain_results, prefetched memory, or auto-fetched memory
+        grounding_nodes = []
+        if chain_results:
+            for cr in chain_results:
+                if isinstance(cr, dict) and cr.get("content"):
+                    grounding_nodes.append({
+                        "id": cr.get("id", cr.get("node_id", "chain-result")),
+                        "content": cr["content"],
+                        "node_type": cr.get("node_type", "FACT"),
+                    })
+        # Check prefetched_memory (from caller) or _last_fetched_memory_text (from auto-fetch)
+        memory_text = prefetched_memory or getattr(self, '_last_fetched_memory_text', '') or ''
+        if memory_text and not grounding_nodes:
+            import re
+            for m in re.finditer(r'<memory[^>]*>(.*?)</memory>', memory_text, re.DOTALL):
+                grounding_nodes.append({
+                    "id": f"memory-{len(grounding_nodes)}",
+                    "content": m.group(1).strip(),
+                    "node_type": "FACT",
+                })
+            # If no structured blocks, use whole text as one node
+            if not grounding_nodes and len(memory_text) > 20:
+                grounding_nodes.append({
+                    "id": "fetched-context",
+                    "content": memory_text,
+                    "node_type": "context",
+                })
+        self._last_injected_memories = grounding_nodes
+        logger.info(f"[GROUNDING] Exposed {len(grounding_nodes)} nodes for traceability")
         print(f"✓ [DELEGATION] Assembler: identity={assembler_result.identity_source} "
               f"memory={assembler_result.memory_source} voice={assembler_result.voice_injected} "
               f"temporal={assembler_result.gap_category} access={assembler_result.access_injected} "
@@ -2208,8 +2594,7 @@ Continue the conversation naturally, maintaining context from above."""
             if is_dataroom_query:
                 try:
                     import sqlite3 as _sq3
-                    from pathlib import Path as _Path
-                    _db_path = _Path(__file__).parent.parent.parent.parent / "data" / "aibrarian" / "dataroom.db"
+                    _db_path = local_dir() / "dataroom.db"
                     if _db_path.exists():
                         conn = _sq3.connect(str(_db_path))
                         # Extract keywords for FTS-like matching
@@ -2255,13 +2640,15 @@ Be warm, helpful, and specific — reference actual content from the documents."
 
 User question: {user_message}
 
-IMPORTANT: Your memory context is provided in the system prompt above. Check it first.
+IMPORTANT: Your memory context is provided in the system prompt above. When you have memory context
+about the topic, LEAD with what you know. Share the information first — do not ask clarifying
+questions before sharing what you already have.
 
-If you find relevant information in your memory context, share it naturally. Stick to what the memory
-actually contains — do not add details, embellish, or extrapolate beyond what is written there.
+Stick to what the memory actually contains — do not add details, embellish, or extrapolate beyond
+what is written there. You can ask follow-up questions AFTER sharing what you know.
 
 If your memories do NOT contain relevant information about this topic, say honestly that you don't
-have a memory of it. Do not guess or fabricate. You can offer to help explore the topic together."""
+have a memory of it. Do not guess or fabricate."""
 
             elif is_relational_query:
                 # Relational/emotional queries - NOT research, needs warmth
@@ -2278,14 +2665,23 @@ shared experiences.
 Be warm and genuine, but grounded in what you actually know from your context."""
 
             else:
-                # Research/factual queries
-                luna_prompt = f"""You are Luna, a warm and curious AI companion.
-The user asked something that requires current knowledge or research.
+                # Research/factual queries or follow-ups
+                if memory_context:
+                    luna_prompt = f"""You are Luna. The user is continuing a conversation.
 
 THE USER IS ASKING YOU THIS QUESTION (answer it directly):
 "{user_message}"
 
-Respond naturally as Luna - be warm, curious, and helpful.
+Your memory context is in the system prompt above. LEAD with what you know — share information
+first, then ask follow-ups only after you've given substance. Do not ask clarifying questions
+before sharing what you already have. Keep your response focused and conversational."""
+                else:
+                    luna_prompt = f"""You are Luna, a warm and direct AI companion.
+
+THE USER IS ASKING YOU THIS QUESTION (answer it directly):
+"{user_message}"
+
+Respond naturally as Luna - be warm, helpful, and direct.
 If you don't have current information, say so honestly.
 Keep your response focused and conversational."""
 
@@ -2303,6 +2699,23 @@ Keep your response focused and conversational."""
                 except Exception as e:
                     logger.warning(f"LLM registry not available: {e}")
                     provider = None
+
+            # ── LunaScript outbound signing ──
+            _ls_package = None
+            if self._lunascript:
+                print(f"◈ [LUNASCRIPT] delegation_start: initialized={self._lunascript._initialized}, measurement={'YES' if self._lunascript._last_measurement else 'NO'}")
+                try:
+                    _ls_package = await self._lunascript.on_delegation_start(
+                        consciousness=getattr(self, '_consciousness', None),
+                        personality=getattr(self, '_personality', None),
+                        entities=list(self._entity_context.keys()) if hasattr(self, '_entity_context') and self._entity_context and hasattr(self._entity_context, 'keys') else [],
+                    )
+                    print(f"◈ [LUNASCRIPT] package: outbound_sig={'YES' if _ls_package and _ls_package.outbound_signature else 'NO'}")
+                    if _ls_package and _ls_package.constraint_prompt:
+                        enhanced_system_prompt += f"\n\n{_ls_package.constraint_prompt}"
+                except Exception as e:
+                    print(f"◈ [LUNASCRIPT] on_delegation_start FAILED: {e}")
+                    import traceback; traceback.print_exc()
 
             response_text = ""
             token_count = 0
@@ -2394,10 +2807,39 @@ Keep your response focused and conversational."""
 
             elapsed_ms = (time.time() - start_time) * 1000
 
+            # ── LunaScript return processing ──
+            _ls_meta = None
+            if self._lunascript and _ls_package:
+                try:
+                    _ls_return = await self._lunascript.on_delegation_return(
+                        response_text=final_response,
+                        package=_ls_package,
+                        provider_used=provider_name,
+                    )
+                    _ls_meta = {
+                        "glyph": _ls_package.outbound_signature.glyph_string if _ls_package.outbound_signature else "○",
+                        "position": self._lunascript._prev_position,
+                        "classification": _ls_return.classification,
+                        "drift_score": round(_ls_return.delta_result.drift_score, 3) if _ls_return.delta_result else None,
+                        "quality_score": round(_ls_return.quality_score, 2),
+                    }
+                except Exception as e:
+                    logger.debug(f"[LUNASCRIPT] on_delegation_return failed: {e}")
+
+            # Record response for LunaScript trait measurement on next turn
+            if self._lunascript and final_response:
+                self._lunascript.last_luna_response = final_response
+
             # Record response in ring buffer (CRITICAL for history)
             if final_response:
                 self._active_ring.add_assistant(final_response)
                 logger.debug("[DELEGATION-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
+
+            # Extract interactive options from delegated response
+            from luna.utils.options_parser import extract_options, build_options_widget
+            final_response, _parsed_opts = extract_options(final_response)
+            if _parsed_opts:
+                self._pending_skill_widget = build_options_widget(_parsed_opts)
 
             await self.send_to_engine("generation_complete", {
                 "text": final_response,
@@ -2409,6 +2851,8 @@ Keep your response focused and conversational."""
                 "planned": True,
                 "narration_applied": False,
                 "access_denied_count": self._last_denied_count,
+                "lunascript": _ls_meta,
+                "widget": self._pending_skill_widget,
             })
 
         except Exception as e:
@@ -2527,6 +2971,7 @@ Keep your response focused and conversational."""
                     "latency_ms": total_elapsed_ms,
                     "delegated": True,
                     "access_denied_count": self._last_denied_count,
+                    "widget": self._pending_skill_widget,
                 })
             else:
                 # Pure local generation
@@ -2541,6 +2986,7 @@ Keep your response focused and conversational."""
                     "latency_ms": elapsed_ms,
                     "local": True,
                     "access_denied_count": self._last_denied_count,
+                    "widget": self._pending_skill_widget,
                 })
 
         except Exception as e:
@@ -2794,6 +3240,21 @@ OUTPUT:"""
                 self._active_ring.add_assistant(response_text)
                 logger.debug("[FALLBACK-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 
+            # ── LunaScript fallback metadata ──
+            _ls_meta = None
+            if self._lunascript:
+                try:
+                    from luna.lunascript.signature import derive_glyph
+                    _tv = {}
+                    if self._lunascript._last_measurement:
+                        _tv = {n: s.value for n, s in self._lunascript._last_measurement.traits.items()}
+                    _ls_meta = {
+                        "glyph": derive_glyph({"position": self._lunascript._prev_position, "trait_vector": _tv}),
+                        "position": self._lunascript._prev_position,
+                    }
+                except Exception as e:
+                    logger.debug(f"[LUNASCRIPT] fallback meta failed: {e}")
+
             await self.send_to_engine("generation_complete", {
                 "text": response_text,
                 "correlation_id": correlation_id,
@@ -2802,6 +3263,8 @@ OUTPUT:"""
                 "latency_ms": elapsed_ms,
                 "fallback": True,  # Local not available
                 "access_denied_count": self._last_denied_count,
+                "lunascript": _ls_meta,
+                "widget": self._pending_skill_widget,
             })
 
         except Exception as e:
@@ -2866,6 +3329,11 @@ OUTPUT:"""
             stats["fallback_chain"] = self._fallback_chain.get_stats()
 
         return stats
+
+    def set_next_overrides(self, overrides: dict) -> None:
+        """Set one-shot overrides for the next message processed. Cleared after use."""
+        self._next_message_overrides = overrides
+        logger.debug(f"[SIMULATE] One-shot overrides set: {list(overrides.keys())}")
 
     def get_last_system_prompt(self) -> dict:
         """
@@ -3026,7 +3494,7 @@ OUTPUT:"""
         }
 
         # Write to JSONL file
-        log_path = Path("data/diagnostics/prompt_archaeology.jsonl")
+        log_path = local_dir() / "diagnostics" / "prompt_archaeology.jsonl"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a") as f:
             f.write(json.dumps(analysis) + "\n")
@@ -3070,9 +3538,9 @@ OUTPUT:"""
 
         if await self._reflection_loop.should_reflect():
             logger.info("Auto-reflection triggered by interaction count")
-            await self.session_end_reflection()
+            await self.session_end_reflection(source="auto")
 
-    async def session_end_reflection(self, user_name: str = "Ahab") -> Optional[dict]:
+    async def session_end_reflection(self, user_name: str = None, source: str = "session_end") -> Optional[dict]:
         """
         Trigger reflection at session end to generate personality patches.
 
@@ -3081,12 +3549,24 @@ OUTPUT:"""
 
         Args:
             user_name: Name of the user for the reflection prompt
+            source: What triggered this ("session_end", "auto", "user_requested")
 
         Returns:
             Dict with reflection results, or None if reflection not available
         """
+        if user_name is None:
+            from luna.core.owner import get_owner as _get_owner
+            user_name = _get_owner().display_name or "User"
         if not self._reflection_loop or not self._patch_manager:
             logger.debug("Reflection loop or patch manager not available")
+            return None
+
+        # Check trigger_points flags based on source
+        if source == "session_end" and not self._reflection_loop.trigger_session_end:
+            logger.debug("Session-end reflection disabled in config")
+            return None
+        if source == "user_requested" and not self._reflection_loop.trigger_user_requested:
+            logger.debug("User-requested reflection disabled in config")
             return None
 
         if not self._session_history:

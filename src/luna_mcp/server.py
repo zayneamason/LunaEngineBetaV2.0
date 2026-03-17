@@ -33,11 +33,15 @@ import sys
 from pathlib import Path
 from typing import Optional, List
 
-# Path setup
-PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
-SRC_PATH = PROJECT_ROOT / "src"
-if str(SRC_PATH) not in sys.path:
-    sys.path.insert(0, str(SRC_PATH))
+# Path setup — bootstrap before luna.core.paths is importable
+_BOOTSTRAP_ROOT = Path(__file__).parent.parent.parent.resolve()
+_BOOTSTRAP_SRC = _BOOTSTRAP_ROOT / "src"
+if str(_BOOTSTRAP_SRC) not in sys.path:
+    sys.path.insert(0, str(_BOOTSTRAP_SRC))
+
+from luna.core.paths import project_root  # noqa: E402
+
+PROJECT_ROOT = project_root()
 
 # Set environment variables before imports
 os.environ.setdefault("LUNA_BASE_PATH", str(PROJECT_ROOT))
@@ -46,7 +50,7 @@ os.environ.setdefault("LUNA_MCP_API_URL", "http://localhost:8742")
 from mcp.server.fastmcp import FastMCP
 
 # Import tool modules
-from luna_mcp.tools import filesystem, memory, state, git, forge, qa, eden, aibrarian
+from luna_mcp.tools import filesystem, memory, state, git, forge, qa, eden, aibrarian, engine_control
 from luna_mcp.observatory import tools as observatory
 
 # Import auto-session functions
@@ -1202,29 +1206,37 @@ async def observatory_quest_board(
     journal_text: str = "",
     status: str = "",
     quest_type: str = "",
+    project: str = "",
 ) -> str:
     """
-    Manage observatory quests: list, accept, complete, or create from sweep.
+    Manage observatory quests: list, accept, complete, create, and directive/skill management.
 
     Actions:
-    - "list": List quests (optionally filter by status/quest_type)
+    - "list": List quests (optionally filter by status/quest_type/project)
     - "accept": Accept a quest (requires quest_id)
     - "complete": Complete a quest (requires quest_id, optional journal_text)
     - "create": Run maintenance sweep and create quests from candidates
+    - "create_directive": Create a directive quest (quest_id = JSON config with title, trigger_type, trigger_config, action, trust_tier, authored_by, approved_by, cooldown_minutes)
+    - "create_skill": Create a skill quest (quest_id = JSON config with title, objective, steps, tags, authored_by)
+    - "arm": Arm a directive (quest_id required)
+    - "disarm": Disable a directive or skill (quest_id required)
+    - "disable_all_directives": Emergency kill all armed directives
+    - "fire_history": Get fire/invocation history (quest_id required)
 
     Args:
-        action: "list", "accept", "complete", or "create"
-        quest_id: Quest ID for accept/complete
+        action: Action to perform
+        quest_id: Quest ID or JSON config for create_directive/create_skill
         journal_text: Reflection text for completed quests
-        status: Filter by status (available, active, complete)
-        quest_type: Filter by type (scavenger, treasure_hunt, contract, side)
+        status: Filter by status (available, active, complete, armed, fired, disabled)
+        quest_type: Filter by type (scavenger, treasure_hunt, contract, side, directive, skill)
+        project: Filter by project slug (e.g. 'my-project'). Only returns quests for that project.
 
     Returns:
         JSON with action result
     """
     import json
     result = await observatory.tool_observatory_quest_board(
-        action, quest_id, journal_text, status, quest_type
+        action, quest_id, journal_text, status, quest_type, project
     )
     return json.dumps(result, indent=2, default=str)
 
@@ -1240,28 +1252,31 @@ async def observatory_quest_create(
     journal_prompt: str = "",
     target_entity_ids: str = "[]",
     target_node_ids: str = "[]",
+    project: str = "",
 ) -> str:
     """
-    Create a quest manually.
+    Create a quest manually, optionally scoped to a project.
 
     Args:
         title: Quest title
         objective: What needs to be done
-        quest_type: Type - side, contract, main, treasure_hunt, scavenger
+        quest_type: Type - side, contract, main, treasure_hunt, scavenger, directive, skill
         priority: Priority - low, medium, high, urgent
         subtitle: Short subtitle
         source: Where this quest came from (e.g. "Luna diagnostic", "manual")
         journal_prompt: Prompt for the journal entry on completion
         target_entity_ids: JSON array of entity IDs to target (e.g. '["entity-abc"]')
         target_node_ids: JSON array of node IDs to target (e.g. '["node-xyz"]')
+        project: Project slug to scope this quest to (e.g. 'my-project')
 
     Returns:
-        JSON with quest_id, title, status
+        JSON with quest_id, title, status, project
     """
     import json
     result = await observatory.tool_observatory_quest_create(
         title, objective, quest_type, priority, subtitle,
         source, journal_prompt, target_entity_ids, target_node_ids,
+        project,
     )
     return json.dumps(result, indent=2, default=str)
 
@@ -1584,6 +1599,157 @@ async def luna_handoff_read() -> str:
     """
     from luna_mcp.tools.bridge import handoff_read_snapshot
     return await handoff_read_snapshot()
+
+
+# ==============================================================================
+# Engine Control Tools (Aperture, Voice, LLM, Consciousness, Extraction)
+# ==============================================================================
+
+@mcp.tool()
+async def aperture_get() -> str:
+    """Get current aperture state — mode, thresholds, and active collections."""
+    return await engine_control.aperture_get()
+
+@mcp.tool()
+async def aperture_set(mode: str = None, angle: float = None) -> str:
+    """Set aperture mode. Presets: wide, balanced, focused, pinpoint. Or pass angle 0.0-1.0."""
+    return await engine_control.aperture_set(mode, angle)
+
+@mcp.tool()
+async def aperture_reset() -> str:
+    """Reset aperture to defaults."""
+    return await engine_control.aperture_reset()
+
+@mcp.tool()
+async def aperture_lock_in_status() -> str:
+    """Get lock-in levels for all collections."""
+    return await engine_control.aperture_lock_in_status()
+
+@mcp.tool()
+async def voice_start() -> str:
+    """Start a voice session."""
+    return await engine_control.voice_start()
+
+@mcp.tool()
+async def voice_stop() -> str:
+    """Stop the active voice session."""
+    return await engine_control.voice_stop()
+
+@mcp.tool()
+async def voice_status() -> str:
+    """Get current voice session state."""
+    return await engine_control.voice_status()
+
+@mcp.tool()
+async def voice_speak(text: str) -> str:
+    """Speak text via TTS.
+
+    Args:
+        text: The text for Luna to speak aloud
+    """
+    return await engine_control.voice_speak(text)
+
+@mcp.tool()
+async def llm_providers() -> str:
+    """List available LLM providers and their status."""
+    return await engine_control.llm_providers()
+
+@mcp.tool()
+async def llm_switch_provider(provider: str) -> str:
+    """Switch the active LLM provider.
+
+    Args:
+        provider: Provider name — local, groq, claude, openai, together
+    """
+    return await engine_control.llm_switch_provider(provider)
+
+@mcp.tool()
+async def llm_fallback_chain() -> str:
+    """Get the current LLM fallback chain order."""
+    return await engine_control.llm_fallback_chain()
+
+@mcp.tool()
+async def consciousness_state() -> str:
+    """Get Luna's current consciousness state model."""
+    return await engine_control.consciousness_state()
+
+@mcp.tool()
+async def extraction_trigger() -> str:
+    """Trigger extraction on recent conversation."""
+    return await engine_control.extraction_trigger()
+
+@mcp.tool()
+async def extraction_stats() -> str:
+    """Get extraction pipeline stats."""
+    return await engine_control.extraction_stats()
+
+
+# ==============================================================================
+# QA Diagnostic MCP Tools
+# ==============================================================================
+
+@mcp.tool()
+async def qa_node_status() -> str:
+    """Get pass/warn/fail status for each pipeline node."""
+    return await engine_control.qa_node_status()
+
+@mcp.tool()
+async def qa_force_revalidate(assertion_ids: str) -> str:
+    """Re-run specific assertions against the last inference.
+
+    Args:
+        assertion_ids: Comma-separated assertion IDs, e.g. "R1,R3,V1"
+    """
+    return await engine_control.qa_force_revalidate(assertion_ids)
+
+@mcp.tool()
+async def luna_last_inference() -> str:
+    """Full diagnostic of the last inference — route, QA, prompt length, assembler state."""
+    return await engine_control.luna_last_inference()
+
+@mcp.tool()
+async def luna_pipeline_state() -> str:
+    """Actor states + QA overlay — shows health of each pipeline node."""
+    return await engine_control.luna_pipeline_state()
+
+@mcp.tool()
+async def luna_prompt_preview(message: str = "Hello", route: str = None) -> str:
+    """Preview the assembled system prompt for a message without calling the LLM."""
+    return await engine_control.luna_prompt_preview(message, route)
+
+@mcp.tool()
+async def qa_simulate_with_options(
+    message: str,
+    route_override: str = None,
+    narration_enabled: bool = None,
+    extra_context: str = None,
+) -> str:
+    """Run a test message through the full pipeline with diagnostic overrides.
+
+    Args:
+        message: Test message to run through the pipeline
+        route_override: Force "local", "delegated", or "fallback" routing
+        narration_enabled: Override narration on (true) or off (false)
+        extra_context: Extra context text to inject for this turn
+    """
+    return await engine_control.qa_simulate_with_options(
+        message, route_override, narration_enabled, extra_context
+    )
+
+@mcp.tool()
+async def qa_check_assertion(assertion_id: str, response_text: str) -> str:
+    """Test a single QA assertion against provided text.
+
+    Args:
+        assertion_id: The assertion ID (e.g. "V1", "S4", "P3", "CUSTOM-CB2C01")
+        response_text: The text to check against the assertion
+    """
+    return await engine_control.qa_check_assertion_text(assertion_id, response_text)
+
+@mcp.tool()
+async def qa_diagnostics_summary() -> str:
+    """Full diagnostic summary — engine health, QA pass rate, top failures, component status."""
+    return await engine_control.diagnostics_full()
 
 
 # ==============================================================================

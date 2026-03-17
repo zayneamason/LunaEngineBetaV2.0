@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from luna.core.paths import config_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,7 +146,7 @@ class EdenPolicy:
         Falls back to defaults if no policy section exists.
         """
         if config_path is None:
-            config_path = str(Path(__file__).parent.parent.parent.parent / "config" / "eden.json")
+            config_path = str(config_dir() / "eden.json")
 
         try:
             with open(config_path) as f:
@@ -167,7 +169,7 @@ class EdenPolicy:
     def save(self, config_path: Optional[str] = None) -> None:
         """Save policy back to config/eden.json."""
         if config_path is None:
-            config_path = str(Path(__file__).parent.parent.parent.parent / "config" / "eden.json")
+            config_path = str(config_dir() / "eden.json")
 
         try:
             # Read existing config

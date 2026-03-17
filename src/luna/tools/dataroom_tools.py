@@ -12,20 +12,31 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from luna.core.paths import project_root
 from .registry import Tool
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Lazy-initialized AiBrarian engine (singleton)
+# Engine-owned AiBrarian instance — set by set_engine() from server.py startup
 # ---------------------------------------------------------------------------
 
 _engine = None
-_engine_failed = False  # avoid retrying if init failed
+_engine_failed = False  # avoid retrying if standalone fallback failed
+
+
+def set_engine(engine_instance):
+    """Attach the Engine-owned AiBrarianEngine. Called once at startup."""
+    global _engine
+    _engine = engine_instance
 
 
 async def _get_engine():
-    """Get or lazily initialize the AiBrarianEngine for tool use."""
+    """Get the Engine-owned AiBrarianEngine instance.
+
+    Falls back to standalone initialization only if the Engine hasn't
+    booted yet (e.g. tools loaded before Engine boot).
+    """
     global _engine, _engine_failed
     if _engine is not None:
         return _engine
@@ -35,18 +46,18 @@ async def _get_engine():
     try:
         from luna.substrate.aibrarian_engine import AiBrarianEngine
 
-        project_root = Path(__file__).parent.parent.parent.parent.resolve()
-        registry_path = project_root / "config" / "aibrarian_registry.yaml"
+        _root = project_root()
+        registry_path = _root / "config" / "aibrarian_registry.yaml"
 
         if not registry_path.exists():
             logger.warning("AiBrarian registry not found at %s", registry_path)
             _engine_failed = True
             return None
 
-        engine = AiBrarianEngine(registry_path, project_root=project_root)
+        engine = AiBrarianEngine(registry_path, project_root=_root)
         await engine.initialize()
         _engine = engine
-        logger.info("AiBrarian engine initialized for dataroom tools")
+        logger.warning("AiBrarian engine fallback: standalone init (Engine not booted)")
         return _engine
     except Exception as e:
         logger.warning("Failed to initialize AiBrarian engine: %s", e)

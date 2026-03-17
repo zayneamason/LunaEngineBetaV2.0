@@ -14,9 +14,12 @@ The watchdog runs in the background and periodically checks:
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Optional, Callable, List
 import sqlite3
+
+from luna.core.paths import project_root as _default_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +66,7 @@ class LunaWatchdog:
         self._start_time: Optional[float] = None
 
         if project_root is None:
-            self.project_root = Path(__file__).parent.parent.parent.parent
+            self.project_root = _default_project_root()
         else:
             self.project_root = Path(project_root)
 
@@ -71,17 +74,26 @@ class LunaWatchdog:
 
         # Track consecutive failures for escalation
         self._failure_counts = {}
+        # Alert cooldown: prevent same alert from firing more than once per 5 min
+        self._alert_cooldowns: dict[str, float] = {}
 
         # Minimum expected values (lowered after brain scrub Jan 2026)
         self.min_memory_nodes = 10000
         self.min_graph_edges = 10000
 
     def _emit_alert(self, alert: WatchdogAlert):
-        """Emit an alert via logging and optional callback."""
+        """Emit an alert via logging and optional callback, with 5-min cooldown per key."""
+        alert_key = f"{alert.system}:{alert.level}"
+        now = time.monotonic()
+        last = self._alert_cooldowns.get(alert_key, 0)
+        if now - last < 300:  # 5 minute cooldown
+            return
+        self._alert_cooldowns[alert_key] = now
+
         if alert.level == "critical":
-            logger.critical(f"🚨 WATCHDOG: {alert.system} - {alert.message}")
+            logger.critical(f"WATCHDOG: {alert.system} - {alert.message}")
         else:
-            logger.warning(f"⚠️ WATCHDOG: {alert.system} - {alert.message}")
+            logger.warning(f"WATCHDOG: {alert.system} - {alert.message}")
 
         if self._alert_callback:
             try:
@@ -113,7 +125,7 @@ class LunaWatchdog:
 
     def _check_memory_database(self) -> Optional[WatchdogAlert]:
         """Check memory database is accessible and has data."""
-        db_path = self.project_root / "data/luna_engine.db"
+        db_path = self.project_root / "data" / "user" / "luna_engine.db"
 
         if not db_path.exists():
             return WatchdogAlert(
@@ -254,7 +266,33 @@ class LunaWatchdog:
                     f"Check itself failed: {e}"
                 ))
 
+        # Also run HealthChecker and surface non-healthy results
+        alerts.extend(self._run_health_checks())
+
         return alerts
+
+    def _run_health_checks(self) -> List[WatchdogAlert]:
+        """Run HealthChecker and convert non-healthy results to alerts."""
+        try:
+            from luna.diagnostics.health import HealthChecker, HealthStatus
+            checker = HealthChecker()
+            results = checker.check_all()
+            out = []
+            level_map = {
+                HealthStatus.BROKEN: "critical",
+                HealthStatus.DEGRADED: "warning",
+            }
+            for hc in results:
+                if hc.status in level_map:
+                    out.append(WatchdogAlert(
+                        level_map[hc.status],
+                        f"health:{hc.component}",
+                        hc.message,
+                    ))
+            return out
+        except Exception as e:
+            logger.error(f"Health check integration failed: {e}")
+            return []
 
     async def check_once(self) -> List[WatchdogAlert]:
         """Run a single health check cycle (for testing)."""

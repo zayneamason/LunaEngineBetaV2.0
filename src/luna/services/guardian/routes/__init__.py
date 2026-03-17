@@ -5,11 +5,12 @@ Combines sub-routers into a single router for server.py.
 Mirrors the Kozmo routes pattern exactly.
 """
 
-from pathlib import Path
 from fastapi import APIRouter
 
+from luna.core.paths import local_dir
+
 # Demo data root
-GUARDIAN_DATA_ROOT = Path("data/guardian")
+GUARDIAN_DATA_ROOT = local_dir() / "guardian"
 
 from .threads import router as threads_router
 from .knowledge import router as knowledge_router

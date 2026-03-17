@@ -14,9 +14,11 @@ Trigger Points:
 - User-requested reflection
 """
 
+import json
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from .models import PersonalityPatch, PatchTopic, PatchTrigger
@@ -94,17 +96,57 @@ class ReflectionLoop:
     significant personality evolution is detected.
     """
 
-    def __init__(self, patch_manager: "PersonalityPatchManager"):
+    def __init__(self, patch_manager: "PersonalityPatchManager", config_path: str = "config/personality.json"):
         """
         Initialize the reflection loop.
 
         Args:
             patch_manager: The PersonalityPatchManager for storing patches
+            config_path: Path to personality config JSON
         """
         self.patch_manager = patch_manager
         self._interaction_count = 0
-        self._trigger_threshold = 15  # Reflect every N interactions
-        logger.info("ReflectionLoop initialized")
+        self._config_path = config_path
+        self._load_config()
+        logger.info("ReflectionLoop initialized (enabled=%s)", self._enabled)
+
+    def _load_config(self):
+        """Load reflection config from personality.json."""
+        config_file = Path(self._config_path)
+        self._enabled = True
+        self._trigger_threshold = 15
+        self._trigger_session_end = True
+        self._trigger_user_requested = True
+
+        if config_file.exists():
+            try:
+                with open(config_file, "r") as f:
+                    config = json.load(f)
+                rl = config.get("reflection_loop", {})
+                self._enabled = rl.get("enabled", True)
+                triggers = rl.get("trigger_points", {})
+                self._trigger_threshold = int(triggers.get("every_n_interactions", 15))
+                self._trigger_session_end = triggers.get("session_end", True)
+                self._trigger_user_requested = triggers.get("user_requested", True)
+                logger.debug("Reflection config: enabled=%s, threshold=%d, session_end=%s, user_requested=%s",
+                             self._enabled, self._trigger_threshold, self._trigger_session_end, self._trigger_user_requested)
+            except (json.JSONDecodeError, IOError, ValueError) as e:
+                logger.warning(f"Failed to load reflection config from {self._config_path}: {e}")
+
+    @property
+    def is_enabled(self) -> bool:
+        """Whether the reflection loop is enabled."""
+        return self._enabled
+
+    @property
+    def trigger_session_end(self) -> bool:
+        """Whether reflection should trigger on session end."""
+        return self._enabled and self._trigger_session_end
+
+    @property
+    def trigger_user_requested(self) -> bool:
+        """Whether user-requested reflection is allowed."""
+        return self._enabled and self._trigger_user_requested
 
     async def should_reflect(self, force: bool = False) -> bool:
         """
@@ -116,6 +158,9 @@ class ReflectionLoop:
         Returns:
             True if reflection should occur
         """
+        if not self._enabled:
+            return False
+
         if force:
             return True
 
@@ -131,7 +176,7 @@ class ReflectionLoop:
         session_history: list,
         current_patches: list[PersonalityPatch],
         llm_generate: callable,
-        user_name: str = "Ahab"
+        user_name: str = "User"
     ) -> Optional[PersonalityPatch]:
         """
         Generate a reflection and potentially create a new patch.

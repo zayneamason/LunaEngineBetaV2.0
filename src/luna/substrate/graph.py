@@ -5,7 +5,7 @@ Memory Graph for Luna Engine
 NetworkX graph layer for Luna's Memory Matrix.
 
 The graph maintains relationships between memory nodes:
-- In-memory graph (NetworkX DiGraph) for fast traversal
+- In-memory graph (NetworkX MultiDiGraph) for fast traversal
 - SQLite database for persistence
 - Spreading activation for relevance calculation
 
@@ -81,10 +81,11 @@ class MemoryGraph:
     """
     In-memory graph backed by SQLite for persistence.
 
-    Uses NetworkX DiGraph for fast traversal operations:
+    Uses NetworkX MultiDiGraph for fast traversal operations:
     - O(1) neighbor lookup
     - O(V+E) shortest path
     - Spreading activation for relevance
+    - Multiple edge types per node pair (MENTIONS, INVOLVES, etc.)
 
     All mutations update both the in-memory graph and the database.
     """
@@ -97,11 +98,11 @@ class MemoryGraph:
             db: MemoryDatabase instance for persistence
         """
         self.db = db
-        self._graph: nx.DiGraph = nx.DiGraph()
+        self._graph: nx.MultiDiGraph = nx.MultiDiGraph()
         self._loaded = False
 
     @property
-    def graph(self) -> nx.DiGraph:
+    def graph(self) -> nx.MultiDiGraph:
         """Access the underlying NetworkX graph."""
         return self._graph
 
@@ -134,6 +135,7 @@ class MemoryGraph:
             self._graph.add_edge(
                 from_id,
                 to_id,
+                key=relationship,
                 relationship=relationship,
                 strength=strength,
                 created_at=created_at,
@@ -179,6 +181,7 @@ class MemoryGraph:
         self._graph.add_edge(
             from_id,
             to_id,
+            key=relationship,
             relationship=relationship,
             strength=strength,
             created_at=created_at.isoformat(),
@@ -229,9 +232,8 @@ class MemoryGraph:
             return False
 
         if relationship:
-            # Only remove if relationship matches
-            edge_data = self._graph.get_edge_data(from_id, to_id)
-            if edge_data and edge_data.get("relationship") != relationship:
+            # Only remove the specific relationship edge
+            if not self._graph.has_edge(from_id, to_id, key=relationship):
                 return False
 
             query = """
@@ -239,15 +241,17 @@ class MemoryGraph:
                 WHERE from_id = ? AND to_id = ? AND relationship = ?
             """
             await self.db.execute(query, (from_id, to_id, relationship))
+            self._graph.remove_edge(from_id, to_id, key=relationship)
         else:
             query = """
                 DELETE FROM graph_edges
                 WHERE from_id = ? AND to_id = ?
             """
             await self.db.execute(query, (from_id, to_id))
-
-        # Remove from NetworkX
-        self._graph.remove_edge(from_id, to_id)
+            # Remove ALL edges between the pair
+            keys_to_remove = list(self._graph[from_id][to_id].keys())
+            for key in keys_to_remove:
+                self._graph.remove_edge(from_id, to_id, key=key)
 
         logger.debug(f"Removed edge: {from_id} --> {to_id}")
         return True
@@ -265,7 +269,7 @@ class MemoryGraph:
         edges: list[Edge] = []
 
         # Outgoing edges
-        for _, to_id, data in self._graph.out_edges(node_id, data=True):
+        for _, to_id, key, data in self._graph.out_edges(node_id, data=True, keys=True):
             edges.append(Edge(
                 from_id=node_id,
                 to_id=to_id,
@@ -275,7 +279,7 @@ class MemoryGraph:
             ))
 
         # Incoming edges
-        for from_id, _, data in self._graph.in_edges(node_id, data=True):
+        for from_id, _, key, data in self._graph.in_edges(node_id, data=True, keys=True):
             edges.append(Edge(
                 from_id=from_id,
                 to_id=node_id,
@@ -352,12 +356,12 @@ class MemoryGraph:
         related: list[str] = []
 
         # Check outgoing edges
-        for _, to_id, data in self._graph.out_edges(node_id, data=True):
+        for _, to_id, key, data in self._graph.out_edges(node_id, data=True, keys=True):
             if relationship is None or data.get("relationship") == relationship:
                 related.append(to_id)
 
         # Check incoming edges
-        for from_id, _, data in self._graph.in_edges(node_id, data=True):
+        for from_id, _, key, data in self._graph.in_edges(node_id, data=True, keys=True):
             if relationship is None or data.get("relationship") == relationship:
                 if from_id not in related:  # Avoid duplicates
                     related.append(from_id)
@@ -420,7 +424,7 @@ class MemoryGraph:
                 node_activation = activations.get(node_id, 0)
 
                 # Spread to successors
-                for _, neighbor, data in self._graph.out_edges(node_id, data=True):
+                for _, neighbor, key, data in self._graph.out_edges(node_id, data=True, keys=True):
                     # Scope boundary: skip edges outside scope (global always traversable)
                     if scope is not None:
                         edge_scope = data.get("scope", "global")
@@ -436,7 +440,7 @@ class MemoryGraph:
                     next_layer.add(neighbor)
 
                 # Spread to predecessors (bidirectional activation)
-                for neighbor, _, data in self._graph.in_edges(node_id, data=True):
+                for neighbor, _, key, data in self._graph.in_edges(node_id, data=True, keys=True):
                     # Scope boundary: skip edges outside scope
                     if scope is not None:
                         edge_scope = data.get("scope", "global")
@@ -472,7 +476,7 @@ class MemoryGraph:
         """
         # Count relationships
         relationship_counts: dict[str, int] = {}
-        for _, _, data in self._graph.edges(data=True):
+        for _, _, key, data in self._graph.edges(data=True, keys=True):
             rel = data.get("relationship", "UNKNOWN")
             relationship_counts[rel] = relationship_counts.get(rel, 0) + 1
 
@@ -508,8 +512,11 @@ class MemoryGraph:
         """Check if a node exists in the graph."""
         return node_id in self._graph
 
-    def has_edge(self, from_id: str, to_id: str) -> bool:
-        """Check if an edge exists between two nodes."""
+    def has_edge(self, from_id: str, to_id: str,
+                 relationship: Optional[str] = None) -> bool:
+        """Check if an edge exists between two nodes (optionally for a specific relationship)."""
+        if relationship:
+            return self._graph.has_edge(from_id, to_id, key=relationship)
         return self._graph.has_edge(from_id, to_id)
 
     async def clear(self) -> None:

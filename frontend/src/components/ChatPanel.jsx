@@ -2,19 +2,46 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
 import { OrbCanvas } from './OrbCanvas';
 import { useOrbState } from '../hooks/useOrbState';
+import ApertureDial from '../eclissi/components/ApertureDial';
 import { VoiceTuningPanel } from './VoiceTuningPanel';
 import { OrbSettingsPanel } from './OrbSettingsPanel';
 import { FallbackChainPanel } from './FallbackChainPanel';
 import { ServerMonitorPanel } from './ServerMonitorPanel';
 import AnnotatedText from './AnnotatedText';
+import GroundingOverlay, { VerificationToggle, HelpToggle } from './GroundingOverlay';
 import { useNavigation } from '../hooks/useNavigation';
 import { GridProvider } from '../contexts/GridContext';
 import GridLayer from './GridLayer';
 import GridDebug from './GridDebug';
 import KnowledgeBar from '../eclissi/knowledge/KnowledgeBar';
+import WidgetAnchor from './WidgetAnchor';
 import TPanels from '../eclissi/knowledge/TPanels';
 import VoiceModeBar from '../eclissi/components/VoiceModeBar';
 import { useWindowedMessages } from '../hooks/useWindowedMessages';
+
+// LunaScript feedback (thumbs up/down)
+function LunaScriptFeedback({ messageId, lunascript }) {
+  const [sent, setSent] = useState(null); // 'up' | 'down' | null
+  if (!lunascript) return null;
+  const send = async (score) => {
+    const label = score > 0.5 ? 'up' : 'down';
+    try {
+      await fetch('/api/lunascript/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: messageId, score }),
+      });
+      setSent(label);
+    } catch {}
+  };
+  if (sent) return <span className="text-[10px] text-kozmo-muted ml-1">{sent === 'up' ? 'thanks!' : 'noted'}</span>;
+  return (
+    <span className="ml-1 opacity-40 hover:opacity-100 transition-opacity flex items-center gap-1">
+      <button onClick={() => send(1.0)} className="text-[10px] text-emerald-400 hover:text-emerald-300" title="Good response">+</button>
+      <button onClick={() => send(0.0)} className="text-[10px] text-red-400 hover:text-red-300" title="Bad response">-</button>
+    </span>
+  );
+}
 
 // Highlight keywords in text for debug mode
 const highlightKeywords = (text, keywords) => {
@@ -58,6 +85,7 @@ const SLASH_COMMANDS = [
   { command: '/reset-performance', description: 'Reset to auto-detect', icon: '🔄' },
   { command: '/restart-backend', description: 'Restart Luna backend server', icon: '🔃' },
   { command: '/restart-frontend', description: 'Reload frontend UI', icon: '🔄' },
+  { command: '/options-test', description: 'Test interactive options widget', icon: '◇' },
   { command: '/help', description: 'List all commands', icon: '❓' },
   { command: '/vk', description: 'Run Voight-Kampff identity test', icon: '🧠' },
   { command: '/voight-kampff', description: 'Run full identity verification', icon: '🧠' },
@@ -65,7 +93,7 @@ const SLASH_COMMANDS = [
   { command: '/faceid', description: 'FaceID: status, set-pin, or reset', icon: '🔐', placeholder: '[set-pin <pin> | reset <pin>]' },
 ];
 
-const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null, extractions = [], extractionEntities = [], extractionRelationships = [], voice = null }) => {
+const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null, extractions = [], extractionEntities = [], extractionRelationships = [], voice = null, activeProjectSlug = null }) => {
   const [input, setInput] = useState('');
   const [showCommands, setShowCommands] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -74,12 +102,85 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
   const [activePanel, setActivePanel] = useState(null); // 'voice-tuning' | 'orb-settings' | null
   const [panelData, setPanelData] = useState(null);
   const [activeTPanel, setActiveTPanel] = useState(null); // index of message with open T-panels
+  const [verificationMode, setVerificationMode] = useState(false); // GroundingLink verification UI
+  const [helpMode, setHelpMode] = useState(false); // Luna system knowledge help mode
   const chatContainerRef = useRef(null);
+  const gridContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const animationTimeoutRef = useRef(null);
+  const orbCanvasRef = useRef(null);
+  const hideApertureTimeout = useRef(null);
   const { orbState, isConnected } = useOrbState();
   const { navigate } = useNavigation();
+
+  // Aperture state
+  const [apertureAngle, setApertureAngle] = useState(55);
+  const [apertureVisible, setApertureVisible] = useState(false);
+  const [orbCenter, setOrbCenter] = useState(null);
+
+  // Fetch aperture on mount
+  useEffect(() => {
+    fetch('/api/aperture').then(r => r.json()).then(d => {
+      if (d.angle) setApertureAngle(d.angle);
+    }).catch(() => {});
+  }, []);
+
+  // Proximity listener — tracks orb center + auto-hides aperture after 1s away
+  useEffect(() => {
+    const UPDATE_RADIUS = 160;
+    const HIDE_DELAY = 1000;
+    const onMove = (e) => {
+      if (!orbCanvasRef.current) return;
+      const rect = orbCanvasRef.current.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+      if (dist < UPDATE_RADIUS) {
+        setOrbCenter({ x: cx, y: cy });
+        clearTimeout(hideApertureTimeout.current);
+      } else if (apertureVisible) {
+        if (!hideApertureTimeout.current) {
+          hideApertureTimeout.current = setTimeout(() => {
+            setApertureVisible(false);
+            hideApertureTimeout.current = null;
+          }, HIDE_DELAY);
+        }
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      clearTimeout(hideApertureTimeout.current);
+    };
+  }, [apertureVisible]);
+
+  // Aperture toggle — shift+left-click on orb
+  const handleOrbClick = useCallback((e) => {
+    if (e.shiftKey) {
+      e.preventDefault();
+      if (!orbCanvasRef.current) return;
+      const rect = orbCanvasRef.current.getBoundingClientRect();
+      setOrbCenter({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      setApertureVisible(v => !v);
+    }
+    // Normal clicks on orb do nothing — use /orb-settings command instead
+  }, []);
+
+  const handleApertureChange = useCallback((angle) => {
+    setApertureAngle(angle);
+    const presets = { tunnel: 15, narrow: 35, balanced: 55, wide: 75, open: 95 };
+    let nearest = 'balanced';
+    let minDist = Infinity;
+    for (const [name, a] of Object.entries(presets)) {
+      if (Math.abs(a - angle) < minDist) { minDist = Math.abs(a - angle); nearest = name; }
+    }
+    fetch('/api/aperture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preset: nearest, angle }),
+    }).catch(() => {});
+  }, []);
 
   // Windowed message rendering (Guardian pattern)
   const {
@@ -116,6 +217,16 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
 
   // Open panel commands
   const openPanel = async (panelType) => {
+    if (panelType === 'orb-settings') {
+      // Physics sliders are client-side; backend data is optional
+      try {
+        const res = await fetch('/slash/orb-settings');
+        const data = await res.json();
+        if (data.success !== false) setPanelData(data.data);
+      } catch { /* panel works without backend data */ }
+      setActivePanel('orb-settings');
+      return;
+    }
     const endpoint = panelType === 'voice-tuning' ? '/slash/voice-tuning' : '/slash/orb-settings';
     const res = await fetch(endpoint);
     const data = await res.json();
@@ -278,26 +389,22 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
         <div className="flex items-center gap-3">
           <div className="w-1 h-6 bg-kozmo-accent rounded-full" style={{ boxShadow: '0 0 12px rgba(192,132,252,0.5), 0 0 4px rgba(192,132,252,0.8)' }} />
           <h2 className="text-lg font-display font-semibold tracking-tight text-white/90">Chat</h2>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            <HelpToggle enabled={helpMode} onChange={setHelpMode} />
+            <VerificationToggle enabled={verificationMode} onChange={setVerificationMode} />
+          </div>
         </div>
       </div>
 
       {/* Messages container with floating orb + grid */}
-      <GridProvider containerRef={chatContainerRef}>
-      <div ref={mergeScrollRefs} onScroll={handleWindowScroll} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 relative">
-        {/* Grid debug overlay (toggle with backtick key) */}
+      <GridProvider containerRef={gridContainerRef}>
+      <div ref={gridContainerRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        {/* Grid canvas — spatial index for orb navigation (fixed layer) */}
         <GridLayer />
         <GridDebug />
 
-        {/* Luna Orb — Canvas 2D ring renderer with spring physics */}
-        <OrbCanvas
-          state={animationOverride || (!isConnected ? 'disconnected' : (isLoading ? 'processing' : orbState.animation))}
-          colorOverride={!isConnected ? null : orbState.color}
-          brightness={!isConnected ? 0.7 : orbState.brightness}
-          size={56}
-          chatContainerRef={chatContainerRef}
-          messagesEndRef={messagesEndRef}
-          rendererState={orbState.renderer}
-        />
+        {/* Scrollable message list */}
+        <div ref={mergeScrollRefs} onScroll={handleWindowScroll} className="overflow-y-auto p-4 space-y-4" style={{ flex: 1, minHeight: 0 }}>
 
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-kozmo-muted text-sm">
@@ -327,16 +434,24 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                         : 'bg-kozmo-surface border border-kozmo-border text-white/80'
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">
+                    <div className="text-sm whitespace-pre-wrap">
                       {debugKeywords.length > 0
-                        ? highlightKeywords(msg.content, debugKeywords)
+                        ? <p>{highlightKeywords(msg.content, debugKeywords)}</p>
+                        : msg.role === 'assistant'
+                        ? <GroundingOverlay
+                            text={msg.content}
+                            groundingMetadata={msg.groundingMetadata}
+                            verificationMode={verificationMode}
+                            entities={entities}
+                            onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
+                          />
                         : <AnnotatedText
                             text={msg.content}
                             entities={entities}
                             onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
                           />}
-                    </p>
-                    {(msg.model || msg.delegated || msg.local || msg.fallback || msg.accessDeniedCount > 0) && (
+                    </div>
+                    {(msg.model || msg.delegated || msg.local || msg.fallback || msg.accessDeniedCount > 0 || msg.lunascript) && (
                       <div className="mt-2 flex items-center gap-3 text-xs">
                         {/* Model indicator */}
                         {msg.delegated ? (
@@ -369,9 +484,38 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                             <span>{msg.accessDeniedCount} filtered</span>
                           </span>
                         )}
+                        {msg.lunascript && (
+                          <>
+                            {msg.lunascript.glyph && (
+                              <span className="text-violet-400" title={msg.lunascript.position || ''}>
+                                {msg.lunascript.glyph}
+                              </span>
+                            )}
+                            {msg.lunascript.classification && (
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                msg.lunascript.classification === 'RESONANCE' ? 'bg-emerald-500/15 text-emerald-400' :
+                                msg.lunascript.classification === 'DRIFT' ? 'bg-red-500/15 text-red-400' :
+                                msg.lunascript.classification === 'EXPANSION' ? 'bg-blue-500/15 text-blue-400' :
+                                msg.lunascript.classification === 'COMPRESSION' ? 'bg-amber-500/15 text-amber-400' :
+                                'bg-gray-500/15 text-gray-400'
+                              }`}>
+                                {msg.lunascript.classification}
+                              </span>
+                            )}
+                          </>
+                        )}
                       </div>
                     )}
+                    {msg.lunascript && !msg.streaming && msg.role === 'assistant' && (
+                      <LunaScriptFeedback messageId={msg.id} lunascript={msg.lunascript} />
+                    )}
                   </div>
+                  {msg.widget && !msg.streaming && (
+                    <WidgetAnchor
+                      widget={msg.widget}
+                      onSelect={(value) => onSend(value)}
+                    />
+                  )}
                 </div>
 
                 {/* Knowledge Bar — shown after the last assistant message if extractions exist */}
@@ -402,8 +546,29 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
         )}
 
         <div ref={messagesEndRef} />
+        </div>
+        {/* END scroll div */}
 
-        {/* T-Shape Knowledge Panels overlay */}
+        {/* Fixed overlay layer — orb, aperture, and T-panels stay pinned to wrapper */}
+        <OrbCanvas
+          ref={orbCanvasRef}
+          state={animationOverride || (!isConnected ? 'disconnected' : (isLoading ? 'processing' : orbState.animation))}
+          colorOverride={!isConnected ? null : orbState.color}
+          brightness={!isConnected ? 0.7 : orbState.brightness}
+          size={56}
+          chatContainerRef={gridContainerRef}
+          messagesEndRef={messagesEndRef}
+          rendererState={orbState.renderer}
+          onClick={handleOrbClick}
+        />
+
+        <ApertureDial
+          angle={apertureAngle}
+          onChange={handleApertureChange}
+          visible={apertureVisible}
+          orbCenter={orbCenter}
+        />
+
         {activeTPanel !== null && (
           <TPanels
             extractions={extractions}
@@ -472,7 +637,9 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={identityName ? `Message Luna... (as ${identityName})` : "Message Luna... (type / for commands)"}
+            placeholder={activeProjectSlug
+              ? (identityName ? `Message Luna about ${activeProjectSlug}... (as ${identityName})` : `Message Luna about ${activeProjectSlug}...`)
+              : (identityName ? `Message Luna... (as ${identityName})` : "Message Luna... (type / for commands)")}
             disabled={isLoading}
             className="flex-1 font-mono bg-kozmo-surface border border-kozmo-border rounded px-4 py-3 text-sm text-white/90 placeholder-white/30 focus:outline-none focus:border-kozmo-accent/50 transition-all disabled:opacity-50"
             style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03), 0 2px 8px rgba(0,0,0,0.3)' }}
@@ -561,9 +728,8 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
       {activePanel === 'orb-settings' && (
         <div style={{
           position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
+          top: 16,
+          left: 16,
           zIndex: 1000
         }}>
           <OrbSettingsPanel

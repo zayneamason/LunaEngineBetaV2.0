@@ -135,56 +135,64 @@ async def luna_detect_context(
     Activation: "hey Luna" triggers this
     Deactivation: "later Luna" - flushes memories, logs session, closes MCP API
     """
+    import logging
+    logger = logging.getLogger("luna_mcp.state")
+
     message_lower = message.lower().strip()
 
-    # Check for "hey Luna" activation
-    if re.match(r'^hey\s+luna\b', message_lower, re.IGNORECASE):
-        try:
-            # First, ensure MCP API is running
-            port = await ensure_api_running()
+    # ── "later Luna" deactivation ──
+    if re.match(r'^later\s+luna\b', message_lower, re.IGNORECASE):
+        return await _handle_deactivation()
 
-            # Check if engine is connected
+    # ── "hey Luna" detection ──
+    hey_luna_match = re.match(r'^hey\s+luna\b[,.:!?]?\s*', message_lower, re.IGNORECASE)
+
+    if hey_luna_match:
+        # Extract whatever comes AFTER "hey Luna"
+        remainder = message[hey_luna_match.end():].strip()
+        logger.info(f"hey-Luna matched. Remainder: {repr(remainder)}")
+
+        # Step 1: Always activate (ensure API, check health, start session)
+        try:
+            port = await ensure_api_running()
             health = await _call_api("GET", "/health")
             engine_connected = health.get("engine_connected", False)
 
             if not engine_connected:
                 return (
                     "⚠️ Luna MCP is ready, but the **Luna Engine** isn't running.\n\n"
-                    "Start it with:\n"
-                    "```\n"
-                    "cd /Users/zayneamason/_HeyLuna_BETA/_LunaEngine_BetaProject_V2.0_Root\n"
-                    "python scripts/run.py --server\n"
-                    "```\n\n"
+                    "Start the Luna Engine server first, then say 'hey Luna' again.\n\n"
                     "Then say 'hey Luna' again!"
                 )
 
-            # Start session logging
+            # Start session
             session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             try:
                 await _call_api("POST", "/session/start", json={"session_id": session_id})
             except Exception:
-                pass  # Session logging is optional
+                pass
 
-            # Fetch consciousness state for personality context
+        except Exception as e:
+            return f"Error starting Luna: {str(e)}"
+
+        # Step 2: If bare greeting (no question), return personality kernel
+        if not remainder:
+            logger.info("Bare hey-Luna greeting — returning personality kernel")
             consciousness_state = None
             try:
                 consciousness_state = await _call_api("GET", "/consciousness")
             except Exception:
                 pass
-
-            # Return personality kernel so Claude adopts Luna's voice
             return _build_personality_context(
                 memories="",
                 consciousness_state=consciousness_state,
             ) + "\n\n---\n\nLuna is now active. Respond to the user as Luna. Say hi naturally."
-        except Exception as e:
-            return f"Error starting Luna: {str(e)}"
 
-    # Check for "later Luna" deactivation
-    if re.match(r'^later\s+luna\b', message_lower, re.IGNORECASE):
-        return await _handle_deactivation()
+        # Step 3: There IS a question after "hey Luna" — process it
+        logger.info(f"hey-Luna + question — processing: {repr(remainder)}")
+        message = remainder  # Fall through to normal processing below
 
-    # Normal message processing
+    # ── Normal message processing ──
     try:
         response = await _call_api(
             "POST",
@@ -204,24 +212,19 @@ async def luna_detect_context(
                 "Start the engine with: `python scripts/run.py --server`"
             )
 
-        # Get consciousness state for personality modulation
-        consciousness_state = None
-        try:
-            consciousness_state = await _call_api("GET", "/consciousness")
-        except Exception:
-            pass
-
-        # Build personality-aware response with memory context
+        # Engine returns a full conversational response
         raw_response = response.get('response', '')
-        memory_section = response.get('memory_context', '')
+        if raw_response:
+            return raw_response
 
-        return _build_personality_context(
-            memories=memory_section or raw_response,
-            consciousness_state=consciousness_state,
-        ) + f"\n\n---\n\nUser said: \"{message}\"\n\nRespond as Luna using the personality and memories above."
+        # ── FIX B: Clean error instead of kernel dump ──
+        logger.warning(f"Engine returned empty response for message: {repr(message)}")
+        return "I had trouble processing that — could you try again?"
+
     except httpx.ConnectError:
         return "Error: Luna's MCP API is not running. Say 'hey Luna' to start."
     except Exception as e:
+        logger.error(f"detect_context error: {e}", exc_info=True)
         return f"Error: {str(e)}"
 
 

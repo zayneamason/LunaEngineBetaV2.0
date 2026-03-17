@@ -14,11 +14,10 @@ Endpoints:
 # Load .env before any other imports (providers check env at import time)
 import os
 from pathlib import Path
+from luna.core.paths import project_root, config_dir, data_dir, tools_dir, scripts_dir, frontend_dir, user_dir, local_dir
 try:
     from dotenv import load_dotenv
-    # Find project root (src/luna/api/server.py -> project root)
-    _project_root = Path(__file__).parent.parent.parent.parent
-    _env_path = _project_root / ".env"
+    _env_path = project_root() / ".env"
     if _env_path.exists():
         load_dotenv(_env_path)
 except ImportError:
@@ -45,10 +44,16 @@ from luna.engine import LunaEngine, EngineConfig
 from luna.core.events import InputEvent, EventType
 from luna.actors.base import Message
 from luna.agentic.router import ExecutionPath
-from luna.diagnostics import run_startup_check, start_watchdog
+from luna.diagnostics import run_startup_check
 from luna.services.kozmo.routes import router as kozmo_router
 from luna.services.guardian.routes import router as guardian_router
+from luna.utils.options_parser import extract_options, build_options_widget
+from luna.services.settings.routes import router as settings_router
 from luna.services.guardian.memory_bridge import GuardianMemoryBridge
+from luna.compiler import KnowledgeCompiler
+from luna.compiler.conversation_extractor import ConversationExtractor, ExtractResult
+from luna.compiler.markdown_export import MarkdownExporter, ExportResult
+from luna.grounding import GroundingLink
 
 # QA System imports
 try:
@@ -60,6 +65,38 @@ except ImportError:
     QA_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Background Task Registry — track all fire-and-forget tasks
+# =============================================================================
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _track_task(coro, *, name: str = None) -> asyncio.Task:
+    """Create a tracked background task with error logging."""
+    task = asyncio.create_task(coro, name=name)
+    _background_tasks.add(task)
+
+    def _on_done(t: asyncio.Task):
+        _background_tasks.discard(t)
+        if not t.cancelled() and t.exception():
+            logger.error("Background task %s failed: %s", t.get_name(), t.exception())
+
+    task.add_done_callback(_on_done)
+    return task
+
+
+async def _cancel_all_background_tasks() -> None:
+    """Cancel and await all tracked background tasks."""
+    if not _background_tasks:
+        return
+    logger.info("Cancelling %d background tasks...", len(_background_tasks))
+    for task in list(_background_tasks):
+        task.cancel()
+    await asyncio.gather(*_background_tasks, return_exceptions=True)
+    _background_tasks.clear()
 
 
 # =============================================================================
@@ -164,6 +201,8 @@ _engine: Optional[LunaEngine] = None
 
 # Guardian memory bridge
 _guardian_bridge: Optional[GuardianMemoryBridge] = None
+_knowledge_compiler: Optional[KnowledgeCompiler] = None
+_grounding_link: Optional[GroundingLink] = GroundingLink()
 
 # Global orb state manager and WebSocket connections
 _orb_state_manager: Optional[OrbStateManager] = None
@@ -292,6 +331,8 @@ class MessageResponse(BaseModel):
     delegated: bool = False
     local: bool = False
     fallback: bool = False
+    # GroundingLink traceability (Phase 2)
+    groundingMetadata: Optional[dict] = None
 
 
 class AgenticStats(BaseModel):
@@ -370,6 +411,14 @@ async def lifespan(app: FastAPI):
     # disconnected brain. This gate prevents silent failures
     # that cause confabulation.
     # =========================================================
+    # Load secrets.json into env before anything else
+    try:
+        from luna.services.settings.routes import _inject_secrets_to_env
+        _inject_secrets_to_env()
+        logger.info("Loaded config/secrets.json into environment")
+    except Exception as e:
+        logger.debug(f"No secrets.json to load: {e}")
+
     logger.info("Running critical systems check...")
     run_startup_check(strict=True)  # Exits if checks fail
 
@@ -377,7 +426,7 @@ async def lifespan(app: FastAPI):
 
     # Create and start engine
     config = EngineConfig(
-        faceid_enabled=True,  # Always enable — IdentityActor handles init failures gracefully
+        faceid_enabled=os.getenv('LUNA_FACEID_ENABLED', 'false').lower() == 'true',
     )
     _engine = LunaEngine(config)
 
@@ -392,7 +441,7 @@ async def lifespan(app: FastAPI):
     try:
         import json
         from pathlib import Path
-        config_path = Path(__file__).parent.parent.parent.parent / "config" / "personality.json"
+        config_path = config_dir() / "personality.json"
         if config_path.exists():
             with open(config_path) as f:
                 config = json.load(f)
@@ -416,7 +465,7 @@ async def lifespan(app: FastAPI):
     identity_actor = _engine.get_actor("identity")
     if identity_actor and hasattr(identity_actor, "on_change"):
         def _on_identity_change(current):
-            asyncio.create_task(_broadcast_identity_state())
+            _track_task(_broadcast_identity_state(), name="identity-broadcast")
         identity_actor.on_change(_on_identity_change)
         logger.info("Identity WebSocket broadcast wired")
 
@@ -436,12 +485,28 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Failed to wire dataroom tools: {_e}")
 
     # Start runtime watchdog for continuous health monitoring
-    watchdog_task = await start_watchdog(check_interval=60, engine=_engine)
-    logger.info("Runtime watchdog started")
+    # Wire alerts into QA event store
+    def _watchdog_to_qa(alert):
+        try:
+            sev = {"critical": "critical", "warning": "medium"}.get(alert.level, "medium")
+            source = "health" if alert.system.startswith("health:") else "watchdog"
+            component = alert.system.removeprefix("health:")
+            get_qa_validator()._db.store_event(
+                source=source, severity=sev,
+                component=component, message=alert.message,
+            )
+        except Exception as e:
+            logger.error(f"[QA] Failed to store watchdog alert: {e}")
+
+    from luna.diagnostics.watchdog import get_watchdog
+    wd = get_watchdog(check_interval=60, engine=_engine)
+    wd._alert_callback = _watchdog_to_qa
+    watchdog_task = await wd.start_background()
+    logger.info("Runtime watchdog started (wired to QA events)")
 
     # Auto-restore identity bypass if sentinel file exists
     # Runs as a background task so engine actor loop is fully running first
-    _bypass_sentinel = Path(__file__).parent.parent.parent.parent / "config" / "identity_bypass.json"
+    _bypass_sentinel = config_dir() / "identity_bypass.json"
     if _bypass_sentinel.exists():
         async def _auto_restore_bypass():
             await asyncio.sleep(2)  # Let engine actor loop fully start
@@ -452,8 +517,8 @@ async def lifespan(app: FastAPI):
                     logger.warning("[BYPASS] Auto-restore skipped — identity actor not found")
                     return
                 _bypass_data = _json.loads(_bypass_sentinel.read_text())
-                _ia.current.entity_id = _bypass_data.get("entity_id", "ahab")
-                _ia.current.entity_name = _bypass_data.get("entity_name", "Ahab")
+                _ia.current.entity_id = _bypass_data.get("entity_id", "")
+                _ia.current.entity_name = _bypass_data.get("entity_name", "")
                 _ia.current.confidence = 1.0
                 _ia.current.luna_tier = _bypass_data.get("luna_tier", "admin")
                 _ia.current.dataroom_tier = _bypass_data.get("dataroom_tier", 1)
@@ -465,11 +530,11 @@ async def lifespan(app: FastAPI):
                     while getattr(_ia, '_bypass_active', False):
                         _ia.current.last_seen = _time.time()
                         await asyncio.sleep(5)
-                asyncio.create_task(_bypass_keepalive_startup())
+                _track_task(_bypass_keepalive_startup(), name="bypass-keepalive")
                 logger.info("[BYPASS] Auto-restored identity bypass from sentinel file")
             except Exception as _e:
                 logger.warning(f"[BYPASS] Failed to restore bypass from sentinel: {_e}")
-        asyncio.create_task(_auto_restore_bypass())
+        _track_task(_auto_restore_bypass(), name="auto-restore-bypass")
 
     logger.info("Luna Engine ready")
 
@@ -478,7 +543,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Stopping Luna Engine...")
 
-    # Stop the watchdog first
+    # Cancel all tracked background tasks first
+    await _cancel_all_background_tasks()
+
+    # Stop the watchdog
     if watchdog_task and not watchdog_task.done():
         watchdog_task.cancel()
         logger.info("Runtime watchdog stopped")
@@ -517,6 +585,27 @@ app.add_middleware(
 )
 
 @app.middleware("http")
+async def qa_error_capture(request: Request, call_next):
+    """Catch unhandled 500 errors and store them in QA events."""
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        if QA_AVAILABLE:
+            try:
+                import traceback as _tb
+                get_qa_validator()._db.store_event(
+                    source="api_error",
+                    severity="high",
+                    component=f"{request.method} {request.url.path}",
+                    message=str(exc),
+                    details={"traceback": _tb.format_exc()[-2000:]},
+                )
+            except Exception:
+                pass
+        raise
+
+
+@app.middleware("http")
 async def guardian_project_scope(request: Request, call_next):
     """Auto-activate guardian project scope and sync memory bridge."""
     global _guardian_bridge
@@ -524,14 +613,9 @@ async def guardian_project_scope(request: Request, call_next):
     # Skip sync/clear/status endpoints — they manage the bridge directly
     _bridge_paths = ("/guardian/api/sync", "/guardian/api/clear")
     if path.startswith("/guardian/") and not any(path.startswith(p) for p in _bridge_paths) and _engine is not None:
-        # Activate project scope (mirrors /project/activate pattern)
-        if _engine.active_project != "guardian-kinoni":
-            _engine.set_active_project("guardian-kinoni")
-            # Notify Librarian for thread-aware context
-            librarian = _engine.get_actor("librarian")
-            if librarian:
-                msg = Message(type="set_project_context", payload={"slug": "guardian-kinoni"})
-                await librarian.handle(msg)
+        # Auto-sync guardian bridge if a project is active (no forced project)
+        if _engine.active_project is not None:
+            pass  # Project already active — let it stay
 
         # Auto-sync on first request (lazy init)
         if _guardian_bridge is None:
@@ -552,6 +636,9 @@ app.include_router(kozmo_router)
 
 # Mount GUARDIAN service router
 app.include_router(guardian_router)
+
+# Mount SETTINGS service router
+app.include_router(settings_router)
 
 
 # ============================================
@@ -591,11 +678,188 @@ async def guardian_sync_status():
     return {"synced": _guardian_bridge.is_synced}
 
 
+# ============================================
+# KNOWLEDGE COMPILER ENDPOINTS
+# ============================================
+
+@app.post("/compiler/run")
+async def compiler_run(data_root: str = "data/guardian"):
+    """Run the Knowledge Compiler on Guardian source data."""
+    global _knowledge_compiler
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    from pathlib import Path
+    _knowledge_compiler = KnowledgeCompiler(
+        engine=_engine,
+        data_root=Path(data_root),
+    )
+    stats = await _knowledge_compiler.compile_all()
+    return {"status": "compiled", **stats.to_dict()}
+
+
+@app.post("/compiler/clear")
+async def compiler_clear():
+    """Clear all compiler-produced nodes from the Memory Matrix."""
+    global _knowledge_compiler
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    if _knowledge_compiler is None:
+        _knowledge_compiler = KnowledgeCompiler(
+            engine=_engine,
+            data_root=local_dir() / "guardian",
+        )
+
+    removed = await _knowledge_compiler.clear()
+    return {"status": "cleared", "removed": removed}
+
+
+@app.post("/compiler/conversations")
+async def compiler_conversations(
+    threads_dir: str = "data/guardian/conversations",
+    data_root: str = "data/guardian",
+):
+    """Phase 1b: Extract knowledge from conversation threads."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix or not matrix.is_ready:
+        raise HTTPException(status_code=503, detail="Matrix not ready")
+
+    from luna.compiler.entity_index import EntityIndex
+    entity_index = EntityIndex()
+    entities_path = Path(data_root) / "entities" / "entities_updated.json"
+    if entities_path.exists():
+        entity_index.load_entities(entities_path)
+
+    # Build existing node_map from the compiler if available
+    node_map = {}
+    if _knowledge_compiler:
+        node_map = _knowledge_compiler.node_map
+
+    extractor = ConversationExtractor(entity_index, node_map)
+    scope = _engine.active_scope if _engine else "global"
+    result = await extractor.extract_all(Path(threads_dir), matrix, scope=scope)
+    return {"status": "extracted", **result.to_dict()}
+
+
+@app.post("/compiler/export")
+async def compiler_export(
+    scope: str = None,
+    output_dir: str = "data/archive",
+    format: str = "markdown",
+):
+    """Phase 1c: Export compiled memory nodes as Markdown archive."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    scope = scope or (_engine.active_scope if _engine else "global")
+
+    matrix = _engine.get_actor("matrix")
+    if not matrix or not matrix.is_ready:
+        raise HTTPException(status_code=503, detail="Matrix not ready")
+
+    entity_index = None
+    if _knowledge_compiler:
+        entity_index = _knowledge_compiler.entity_index
+
+    exporter = MarkdownExporter(matrix, entity_index)
+    result = await exporter.export_scope(scope, Path(output_dir) / scope.replace(":", "-"))
+    return {"status": "exported", **result.to_dict()}
+
+
+@app.post("/compiler/suggest_study_update")
+async def compiler_suggest_study_update(scope: str = ""):
+    """
+    Read completed study_update quests for a project, compare against
+    current study context, and return structured suggestions.
+
+    Does NOT auto-apply — returns suggestions for human review.
+    """
+    if not scope:
+        raise HTTPException(status_code=400, detail="scope (project slug) required")
+
+    from luna.context.study_context import load_raw_config, flatten_to_text
+    config = load_raw_config(scope)
+    if not config:
+        raise HTTPException(status_code=404, detail=f"No project config for '{scope}'")
+
+    study = config.get("study_context", {})
+
+    # Read completed study_update quests for this project
+    try:
+        from luna_mcp.observatory.tools import tool_observatory_quest_board
+        quest_result = await tool_observatory_quest_board(
+            action="list", status="complete", quest_type="contract", project=scope,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Observatory unavailable: {e}")
+
+    quests = quest_result.get("quests", [])
+    study_quests = [q for q in quests if q.get("source") == "study_update"]
+
+    if not study_quests:
+        return {"scope": scope, "suggestions": [], "message": "No completed study_update quests"}
+
+    import re as _re
+    metadata_keys = {"version", "token_budget", "enabled", "changelog", "auto_quest"}
+    full_text = flatten_to_text(study).lower()
+
+    suggestions = []
+    for quest in study_quests:
+        objective = quest.get("objective", "")
+        quest_id = quest.get("id", "")
+
+        items = _re.findall(r'-\s*\[(DECISION|FACT)\]\s*(.+?)(?:\n|$)', objective)
+        for ext_type, content in items:
+            content_stripped = content.strip()
+            content_lower = content_stripped.lower()
+
+            # Match to best section by word overlap
+            best_section = "active_work"
+            best_score = 0
+            content_words = set(content_lower.split())
+
+            for sname, sdata in study.items():
+                if sname in metadata_keys:
+                    continue
+                section_words = set(flatten_to_text(sdata).lower().split())
+                overlap = len(content_words & section_words)
+                score = overlap / len(content_words) if content_words else 0
+                if score > best_score:
+                    best_score = score
+                    best_section = sname
+
+            if best_score <= 0.2:
+                best_section = "active_work"
+
+            # Check if already covered
+            found = sum(1 for w in content_words if w in full_text)
+            already_covered = (found / len(content_words)) > 0.6 if content_words else True
+
+            suggestions.append({
+                "quest_id": quest_id,
+                "extraction_type": ext_type,
+                "content": content_stripped,
+                "suggested_section": best_section,
+                "action": "skip" if already_covered else "append",
+                "already_covered": already_covered,
+            })
+
+    return {
+        "scope": scope,
+        "quest_count": len(study_quests),
+        "suggestions": suggestions,
+        "current_version": study.get("version", "unknown"),
+    }
+
+
 # Serve KOZMO project assets (generated reference images, etc.)
 try:
-    from pathlib import Path as _Path
     from fastapi.staticfiles import StaticFiles
-    _kozmo_assets = _Path("data/kozmo_projects")
+    _kozmo_assets = user_dir() / "kozmo_projects"
     _kozmo_assets.mkdir(parents=True, exist_ok=True)
     app.mount("/kozmo-assets", StaticFiles(directory=str(_kozmo_assets)), name="kozmo-assets")
 except Exception:
@@ -603,9 +867,9 @@ except Exception:
 
 # Serve GUARDIAN frontend
 try:
-    _guardian_frontend = _Path(__file__).resolve().parent.parent.parent.parent.parent / "Eclissi-Guardian" / "frontend"
+    _guardian_frontend = project_root().parent / "Eclissi-Guardian" / "frontend"
     if not _guardian_frontend.exists():
-        _guardian_frontend = _Path("frontend/guardian")
+        _guardian_frontend = Path("frontend/guardian")
     if _guardian_frontend.exists():
         from starlette.responses import RedirectResponse as _RedirectResponse
 
@@ -620,7 +884,7 @@ except Exception as e:
 
 # Serve LUNAR STUDIO frontend (Expression Pipeline Diagnostic)
 try:
-    _studio_frontend = _Path(__file__).resolve().parent.parent.parent.parent / "Tools" / "Luna-Expression-Pipeline" / "diagnostic" / "dist"
+    _studio_frontend = tools_dir() / "Luna-Expression-Pipeline" / "diagnostic" / "dist"
     if _studio_frontend.exists():
         from starlette.responses import RedirectResponse
 
@@ -677,7 +941,7 @@ async def orb_websocket(websocket: WebSocket):
     # Subscribe to state changes
     if _orb_state_manager:
         def on_state_change(state):
-            asyncio.create_task(_broadcast_orb_state())
+            _track_task(_broadcast_orb_state(), name="orb-broadcast")
         unsubscribe = _orb_state_manager.subscribe(on_state_change)
     else:
         unsubscribe = lambda: None
@@ -783,7 +1047,7 @@ async def identity_websocket(websocket: WebSocket):
         "data": {
             "is_present": true,
             "entity_id": "entity_2ca6b7c7",
-            "entity_name": "Ahab",
+            "entity_name": "User",
             "confidence": 0.987,
             "luna_tier": "admin",
             "dataroom_tier": 1,
@@ -871,7 +1135,7 @@ async def reset_identity(data: dict):
 @app.post("/identity/bypass")
 async def bypass_identity():
     """
-    Manually grant identity as Ahab (admin) without FaceID camera.
+    Manually grant identity as owner (admin) without FaceID camera.
     Starts a keepalive that refreshes last_seen every 5s.
     """
     if _engine is None:
@@ -882,11 +1146,12 @@ async def bypass_identity():
         raise HTTPException(status_code=503, detail="Identity actor not found")
 
     import time as _time, sqlite3 as _sqlite3
+    from luna.core.owner import get_owner
 
-    # Use 'ahab' as entity_id — must match the engine's access_bridge table
-    # (faces.db uses 'entity_ceb382cb' but the engine DB has 'ahab')
-    entity_id = "ahab"
-    entity_name = "Ahab"
+    # Read identity from owner config — falls back to empty for unconfigured installs
+    _owner = get_owner()
+    entity_id = _owner.entity_id or "admin"
+    entity_name = _owner.display_name or "Admin"
     luna_tier = "admin"
     dataroom_tier = 1
     dataroom_categories = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -908,12 +1173,12 @@ async def bypass_identity():
             await asyncio.sleep(5)
 
     identity_actor._bypass_active = True
-    asyncio.create_task(_bypass_keepalive())
+    _track_task(_bypass_keepalive(), name="bypass-keepalive")
     await _broadcast_identity_state()
 
     # Persist bypass so it survives restarts
     import json as _json
-    _sentinel = Path(__file__).parent.parent.parent.parent / "config" / "identity_bypass.json"
+    _sentinel = config_dir() / "identity_bypass.json"
     _sentinel.parent.mkdir(parents=True, exist_ok=True)
     _sentinel.write_text(_json.dumps({
         "entity_id": entity_id,
@@ -948,7 +1213,7 @@ async def bypass_off():
     await _broadcast_identity_state()
 
     # Remove sentinel so bypass doesn't auto-restore on next restart
-    _sentinel = Path(__file__).parent.parent.parent.parent / "config" / "identity_bypass.json"
+    _sentinel = config_dir() / "identity_bypass.json"
     if _sentinel.exists():
         _sentinel.unlink()
     logger.info("[BYPASS] Identity bypass revoked — sentinel removed")
@@ -987,30 +1252,46 @@ async def send_message(request: MessageRequest):
         )
 
         # Fire-and-forget QA validation (non-blocking)
-        asyncio.create_task(
-            _run_qa_validation_background(request.message, text, data)
+        _track_task(
+            _run_qa_validation_background(request.message, text, data),
+            name="qa-validation",
         )
 
         # Process text for gesture detection + stripping (before broadcast so all paths get clean text)
         if _orb_state_manager:
             text = _orb_state_manager.process_text_chunk(text)
 
+        # GroundingLink: trace each sentence back to injected memory nodes
+        grounding_metadata = None
+        if _grounding_link and _engine:
+            try:
+                director = _engine.get_actor("director")
+                injected = getattr(director, "_last_injected_memories", None) or []
+                if injected:
+                    grounding_result = _grounding_link.ground(text, injected)
+                    grounding_metadata = grounding_result.to_dict()
+            except Exception as e:
+                logger.debug(f"[GROUNDING] Non-fatal error: {e}")
+
         # BROADCAST DEDUPLICATION: Suppress chat broadcast when source is
         # "mcp" to prevent shadow conversations in Eclissi. MCP calls still
         # trigger Scribe extraction (cache updates) but don't echo to the UI.
         if request.source != "mcp":
-            asyncio.create_task(_broadcast_chat_message("user", {
+            _track_task(_broadcast_chat_message("user", {
                 "content": request.message,
                 "source": request.source,
-            }))
-            asyncio.create_task(_broadcast_chat_message("assistant", {
+            }), name="chat-broadcast-user")
+            broadcast_data = {
                 "content": text,
                 "model": data.get("model", "unknown"),
                 "delegated": data.get("delegated", False),
                 "local": data.get("local", False),
                 "latency_ms": data.get("latency_ms", 0),
                 "source": request.source,
-            }))
+            }
+            if grounding_metadata:
+                broadcast_data["groundingMetadata"] = grounding_metadata
+            _track_task(_broadcast_chat_message("assistant", broadcast_data), name="chat-broadcast-assistant")
 
         return MessageResponse(
             text=text,
@@ -1021,6 +1302,7 @@ async def send_message(request: MessageRequest):
             delegated=data.get("delegated", False),
             local=data.get("local", False),
             fallback=data.get("fallback", False),
+            groundingMetadata=grounding_metadata,
         )
 
     except asyncio.TimeoutError:
@@ -1148,10 +1430,156 @@ async def health_check():
         pipeline["scribe_extractions"] = scribe.get_stats().get("extractions_count", 0)
         pipeline["librarian_filings"] = librarian.get_stats().get("filings_count", 0)
 
+    # Pipeline staleness flag: true if user turns went in but nothing came out
+    triggers = getattr(_engine.metrics, "extraction_triggers", 0)
+    extractions = pipeline.get("scribe_extractions") or 0
+    pipeline["stale"] = triggers >= 5 and extractions == 0
+    pipeline["user_turns_triggered"] = triggers
+
     return {
         "status": "healthy",
         "state": _engine.state.name,
         "pipeline": pipeline,
+    }
+
+
+# ── First-Run Detection + Onboarding ────────────────────────────────────────
+
+def _check_api_keys_configured() -> bool:
+    """Check if at least one LLM provider has an API key."""
+    return any([
+        os.environ.get("ANTHROPIC_API_KEY"),
+        os.environ.get("GROQ_API_KEY"),
+        os.environ.get("GOOGLE_API_KEY"),
+    ])
+
+
+@app.get("/api/status/first-run")
+async def check_first_run():
+    """Check if this is a first-run (unconfigured) instance."""
+    from luna.core.owner import owner_configured, get_owner
+
+    owner = get_owner()
+    db_path = user_dir() / "luna_engine.db"
+
+    turn_count = 0
+    if db_path.exists():
+        try:
+            import aiosqlite
+            async with aiosqlite.connect(str(db_path)) as db:
+                row = await db.execute_fetchall(
+                    "SELECT COUNT(*) FROM conversation_turns"
+                )
+                turn_count = row[0][0] if row else 0
+        except Exception:
+            # DB may exist but schema not yet initialized (fresh compiled build)
+            turn_count = 0
+
+    is_first_run = not owner_configured() and turn_count == 0
+
+    return {
+        "is_first_run": is_first_run,
+        "owner_configured": owner_configured(),
+        "owner_name": owner.display_name or None,
+        "conversation_count": turn_count,
+        "has_api_keys": _check_api_keys_configured(),
+    }
+
+
+@app.post("/api/onboarding/owner")
+async def set_owner(data: dict):
+    """Set the owner identity during first-run wizard."""
+    import yaml
+    import aiosqlite
+    from luna.core.owner import get_owner
+
+    name = data.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+
+    entity_id = name.lower().replace(" ", "-")
+
+    # Write config/owner.yaml
+    owner_data = {
+        "owner": {
+            "entity_id": entity_id,
+            "display_name": name,
+            "aliases": [],
+            "admin_contacts": [name],
+        }
+    }
+    (config_dir() / "owner.yaml").write_text(
+        yaml.dump(owner_data, default_flow_style=False)
+    )
+
+    # Write config/identity_bypass.json
+    bypass = {
+        "entity_id": entity_id,
+        "entity_name": name,
+        "luna_tier": "admin",
+        "dataroom_tier": 1,
+        "dataroom_categories": [],
+    }
+    (config_dir() / "identity_bypass.json").write_text(
+        json.dumps(bypass, indent=2)
+    )
+
+    # Clear cached owner config
+    get_owner.cache_clear()
+
+    # Create owner entity in database (non-fatal — files above are sufficient)
+    db_path = user_dir() / "luna_engine.db"
+    try:
+        if db_path.exists():
+            async with aiosqlite.connect(str(db_path)) as db:
+                await db.execute(
+                    """INSERT OR IGNORE INTO entities
+                       (id, name, entity_type, core_facts, aliases, created_at, updated_at)
+                       VALUES (?, ?, 'person', ?, '[]', datetime('now'), datetime('now'))""",
+                    (entity_id, name,
+                     json.dumps({"relationship": "owner", "trust_level": "absolute"})),
+                )
+                await db.execute(
+                    """INSERT OR IGNORE INTO entity_versions
+                       (entity_id, version, changed_by, change_type, change_summary, created_at)
+                       VALUES (?, 1, 'onboarding', 'create', ?, datetime('now'))""",
+                    (entity_id,
+                     json.dumps({"source": "welcome_wizard", "initial_setup": True})),
+                )
+                await db.commit()
+    except Exception as e:
+        logger.warning(f"Owner entity DB insert skipped: {e}")
+
+    # Trigger personality bootstrap
+    try:
+        from luna.entities.bootstrap import bootstrap_personality, check_bootstrap_needed
+        from luna.entities.storage import PersonalityPatchManager
+        from luna.substrate.database import MemoryDatabase
+
+        mdb = MemoryDatabase(db_path)
+        await mdb.connect()
+        pm = PersonalityPatchManager(mdb)
+        if await check_bootstrap_needed(pm):
+            await bootstrap_personality(pm)
+        await mdb.close()
+    except Exception as e:
+        logger.warning(f"Personality bootstrap skipped: {e}")
+
+    return {"status": "ok", "entity_id": entity_id, "name": name}
+
+
+@app.get("/api/frontend-config")
+async def get_frontend_config():
+    """Serve frontend configuration (pages, widgets, remaps) from build profile."""
+    base = Path(os.environ.get("LUNA_BASE_DIR", "."))
+    config_path = base / "config" / "frontend_config.json"
+    if config_path.exists():
+        return json.loads(config_path.read_text())
+    # Default: everything enabled
+    return {
+        "pages": {t: True for t in ["eclissi", "studio", "kozmo", "guardian", "observatory", "settings"]},
+        "widgets": {w: True for w in ["engine", "voice", "memory", "qa", "prompt", "debug", "vk", "cache", "thought", "lunascript"]},
+        "remap": {},
     }
 
 
@@ -1265,7 +1693,7 @@ async def get_active_project():
 async def get_projects():
     """List all defined projects with active state."""
     import yaml as _yaml
-    registry_path = Path(__file__).parent.parent.parent.parent / "config" / "projects" / "projects.yaml"
+    registry_path = config_dir() / "projects" / "projects.yaml"
     if not registry_path.exists():
         return {"projects": [], "active": _engine.active_project if _engine else None}
     with open(registry_path) as f:
@@ -1299,11 +1727,7 @@ async def relaunch_system(background_tasks: BackgroundTasks):
     import os
     from pathlib import Path
 
-    # Find project root by looking for scripts directory
-    # server.py is at: src/luna/api/server.py (4 levels deep)
-    current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.parent.parent  # Go up 4 levels
-    script_path = project_root / "scripts" / "relaunch.sh"
+    script_path = scripts_dir() / "relaunch.sh"
 
     logger.info(f"[RELAUNCH] Looking for script at: {script_path}")
 
@@ -1372,7 +1796,7 @@ async def get_ring_status():
     if ring is None:
         return RingBufferStatus(
             current_turns=0,
-            max_turns=6,
+            max_turns=20,
             topics=[],
             recent_messages=[],
         )
@@ -1609,7 +2033,35 @@ async def stream_message(request: MessageRequest):
             memory_context = ""
             matrix = _engine.get_actor("matrix")
             if matrix and matrix.is_ready:
+                # Constellation prefetch before general search
+                _constellation_ctx = ""
+                try:
+                    from luna.compiler.constellation_prefetch import ConstellationPrefetch as _CPF2
+                    from luna.compiler.entity_index import EntityIndex as _EI2
+                    from pathlib import Path as _PP2
+                    _ep2 = _PP2("data/guardian/entities/entities_updated.json")
+                    if _ep2.exists():
+                        _idx2 = _EI2()
+                        _idx2.load_entities(_ep2)
+                        _cpf2 = _CPF2(matrix, _idx2)
+                        _scopes2 = getattr(_engine, 'active_scopes', None) or ["global"]
+                        _sc2 = next((s for s in _scopes2 if s.startswith("project:")), None)
+                        _pf2 = await _cpf2.prefetch(request.message, scope=_sc2)
+                        if _pf2 and _pf2.nodes:
+                            _pts2 = []
+                            for _nn in _pf2.nodes:
+                                _pts2.append(
+                                    f"<memory type=\"{_nn.node_type}\" "
+                                    f"lock_in=\"{getattr(_nn, 'lock_in', 0.8):.2f}\" "
+                                    f"source=\"compiled\">\n{_nn.content}\n</memory>"
+                                )
+                            _constellation_ctx = "\n\n".join(_pts2)
+                except Exception:
+                    pass
+
                 memory_context = await matrix.get_context(request.message, max_tokens=1500)
+                if _constellation_ctx:
+                    memory_context = _constellation_ctx + ("\n\n" + memory_context if memory_context else "")
 
             # Record user turn through unified API (extraction + history + matrix)
             await _engine.record_conversation_turn(
@@ -1731,6 +2183,36 @@ async def persona_stream(request: MessageRequest):
 
         try:
             # --- PHASE 1: Send context first ---
+
+            # Constellation prefetch: inject PERSON_BRIEFING etc. before search chain
+            constellation_prefix = ""
+            try:
+                from luna.compiler.constellation_prefetch import ConstellationPrefetch
+                from luna.compiler.entity_index import EntityIndex
+                _entities_path = local_dir() / "guardian" / "entities" / "entities_updated.json"
+                if _entities_path.exists() and matrix and matrix.is_ready:
+                    _eidx = EntityIndex()
+                    _eidx.load_entities(_entities_path)
+                    _cpf = ConstellationPrefetch(matrix, _eidx)
+                    _active_scopes = getattr(_engine, 'active_scopes', None) or ["global"]
+                    _scope = next((s for s in _active_scopes if s.startswith("project:")), None)
+                    _pfr = await _cpf.prefetch(request.message, scope=_scope)
+                    if _pfr and _pfr.nodes:
+                        _parts = []
+                        for _n in _pfr.nodes:
+                            _parts.append(
+                                f"<memory type=\"{_n.node_type}\" "
+                                f"lock_in=\"{getattr(_n, 'lock_in', 0.8):.2f}\" "
+                                f"source=\"compiled\">\n{_n.content}\n</memory>"
+                            )
+                        constellation_prefix = "\n\n".join(_parts)
+                        logger.info(
+                            f"[STREAM] Constellation prefetch: {len(_pfr.nodes)} nodes, "
+                            f"~{_pfr.tokens_used} tokens"
+                        )
+            except Exception as _cpf_err:
+                logger.warning(f"[STREAM] Constellation prefetch failed: {_cpf_err}")
+
             # Use the configurable search chain (matrix + dataroom + optional sources)
             from luna.tools.search_chain import SearchChainConfig, run_search_chain
             _search_cfg = getattr(_engine, "_search_chain_config", None) or SearchChainConfig.default()
@@ -1740,6 +2222,10 @@ async def persona_stream(request: MessageRequest):
                 logger.info(f"[STREAM] Search chain returned {len(chain_results)} results, {len(memory_context)} chars")
             else:
                 logger.info("[STREAM] Search chain returned no results")
+
+            # Prepend constellations before general search results
+            if constellation_prefix:
+                memory_context = constellation_prefix + ("\n\n" + memory_context if memory_context else "")
 
             # Get recent memories for frontend display
             if matrix and matrix.is_ready:
@@ -1807,7 +2293,12 @@ async def persona_stream(request: MessageRequest):
                     _plan_cfg = getattr(_engine, "_search_chain_config", None) or SearchChainConfig.default()
                     plan_results = await run_search_chain(_plan_cfg, request.message, _engine)
                     if plan_results:
-                        memory_context = "\n\n".join(r.get("content", "") for r in plan_results if r.get("content"))
+                        _plan_ctx = "\n\n".join(r.get("content", "") for r in plan_results if r.get("content"))
+                        # Preserve constellation prefix from earlier prefetch
+                        if constellation_prefix:
+                            memory_context = constellation_prefix + "\n\n" + _plan_ctx
+                        else:
+                            memory_context = _plan_ctx
                         sources = list(set(r.get("source", "?") for r in plan_results))
                         await _engine._emit_progress(
                             f"[OK] Retrieved {len(memory_context)} chars from {sources}"
@@ -1894,11 +2385,31 @@ async def persona_stream(request: MessageRequest):
                 if _orb_state_manager.expression_config.should_strip_gestures():
                     final_text = _orb_state_manager._strip_gestures(final_text)
 
+            # GroundingLink: trace response sentences to injected memories
+            grounding_meta = None
+            if _grounding_link and _engine:
+                try:
+                    director = _engine.get_actor("director")
+                    injected = getattr(director, "_last_injected_memories", None) or []
+                    if injected:
+                        grounding_result = _grounding_link.ground(final_text, injected)
+                        grounding_meta = grounding_result.to_dict()
+                except Exception:
+                    pass
+
+            # Extract interactive options from response
+            final_text, parsed_options = extract_options(final_text)
+            if parsed_options:
+                final_metadata["widget"] = build_options_widget(parsed_options)
+                logger.info(f"[OPTIONS] Extracted {len(parsed_options)} options, widget attached to done event")
+
             done_event = {
                 "type": "done",
                 "response": final_text,
                 "metadata": final_metadata,
             }
+            if grounding_meta:
+                done_event["groundingMetadata"] = grounding_meta
             yield f"data: {json.dumps(done_event)}\n\n"
 
             # Notify orb state manager that response is complete
@@ -3811,7 +4322,7 @@ async def stop_listening():
         }
 
     # Trigger response generation (non-blocking)
-    asyncio.create_task(_voice_backend.process_and_respond(transcription))
+    _track_task(_voice_backend.process_and_respond(transcription), name="voice-respond")
 
     return {
         "status": "processing",
@@ -4014,7 +4525,7 @@ def _get_voice_orchestrator():
     try:
         from luna.voice.orchestrator import VoiceSystemOrchestrator
         from luna.voice.models import VoiceSystemConfig
-        voice_config_path = Path(__file__).parent.parent / "voice" / "data" / "voice_config.yaml"
+        voice_config_path = project_root() / "src" / "luna" / "voice" / "data" / "voice_config.yaml"
         if voice_config_path.exists():
             config = VoiceSystemConfig.from_yaml(str(voice_config_path))
         else:
@@ -5294,10 +5805,9 @@ async def slash_stats():
     /stats - Database statistics.
     """
     try:
-        from pathlib import Path
         from luna.substrate.database import MemoryDatabase
 
-        db_path = Path("data/luna_engine.db")
+        db_path = user_dir() / "luna_engine.db"
         db = MemoryDatabase(db_path)
         await db.connect()
 
@@ -5465,11 +5975,10 @@ async def slash_extraction():
     /extraction - Extraction pipeline status.
     """
     try:
-        from pathlib import Path
         from luna.substrate.database import MemoryDatabase
         from datetime import datetime, timedelta
 
-        db_path = Path("data/luna_engine.db")
+        db_path = user_dir() / "luna_engine.db"
         db = MemoryDatabase(db_path)
         await db.connect()
 
@@ -5580,7 +6089,7 @@ def _get_face_db():
     """
     import importlib.util
     from pathlib import Path
-    faceid_root = Path(__file__).parent.parent.parent.parent / "Tools" / "FaceID"
+    faceid_root = tools_dir() / "FaceID"
     db_module_path = faceid_root / "src" / "database.py"
     spec = importlib.util.spec_from_file_location("faceid_database", str(db_module_path))
     mod = importlib.util.module_from_spec(spec)
@@ -5658,7 +6167,7 @@ async def slash_faceid_action(action: str):
                         command="/faceid set-pin",
                         success=False,
                         data={},
-                        formatted="PIN already set. To change it, use the CLI: `python cli/reset.py --name Ahab --set-pin`",
+                        formatted="PIN already set. To change it, use the CLI: `python cli/reset.py --name <your-name> --set-pin`",
                     )
 
                 db.set_pin(pin)
@@ -5707,7 +6216,7 @@ async def slash_faceid_action(action: str):
                     command="/faceid reset",
                     success=True,
                     data={"deleted": total_deleted},
-                    formatted=f"FaceID reset complete. Deleted **{total_deleted}** embeddings.\n\nRe-enroll via CLI: `python cli/enroll.py --name Ahab --captures 10`",
+                    formatted=f"FaceID reset complete. Deleted **{total_deleted}** embeddings.\n\nRe-enroll via CLI: `python cli/enroll.py --name <your-name> --captures 10`",
                 )
 
             return SlashCommandResponse(
@@ -5750,7 +6259,7 @@ async def slash_restart_backend(background_tasks: BackgroundTasks):
         time.sleep(1)
 
         # Get the current script and arguments
-        script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "scripts", "run.py")
+        script_path = str(scripts_dir() / "run.py")
         python_exe = sys.executable
 
         # Log the restart
@@ -6493,15 +7002,14 @@ async def slash_voight_kampff(layer: int = None):
     import sys
 
     # Add scripts/utils path for import
-    scripts_path = Path(__file__).parent.parent.parent.parent / "scripts" / "utils"
+    scripts_path = scripts_dir() / "utils"
     if str(scripts_path) not in sys.path:
         sys.path.insert(0, str(scripts_path))
 
     try:
         from voight_kampff import VoightKampff
 
-        luna_root = Path(__file__).parent.parent.parent.parent
-        vk = VoightKampff(luna_root)
+        vk = VoightKampff(project_root())
 
         if layer:
             # Single layer
@@ -6602,6 +7110,7 @@ class QAHealthResponse(BaseModel):
     failing_bugs: int
     recent_failures: list[str]
     top_failures: list[dict] = []
+    system_events_24h: int = 0
 
 
 class QAReportResponse(BaseModel):
@@ -6663,6 +7172,7 @@ async def qa_get_health():
 
     validator = get_qa_validator()
     health = validator.get_health()
+    health["system_events_24h"] = validator._db.count_events(hours=24)
     return QAHealthResponse(**health)
 
 
@@ -7096,9 +7606,13 @@ async def qa_simulate(request: SimulateRequest):
 
         latency_ms = (time.time() - start_time) * 1000
 
-        # Use the QA report the background validator just wrote (fire-and-forget)
-        # Give it a brief moment to complete
-        await asyncio.sleep(0.2)
+        # Fire background QA validation (same as /message endpoint)
+        _track_task(
+            _run_qa_validation_background(request.query, response_text, response_data),
+            name="qa-validation-sim",
+        )
+        # Give the background validator time to read engine state and write report
+        await asyncio.sleep(0.5)
 
         validator = get_qa_validator()
 
@@ -7108,6 +7622,37 @@ async def qa_simulate(request: SimulateRequest):
             report = validator._last_report
         else:
             from luna.qa import InferenceContext
+
+            # Read live engine state for accurate fallback
+            _sys_prompt = ""
+            _personality_len = 0
+            _personality_injected = False
+            _memory_stats = {}
+            _voice_injected = False
+            _narration_applied = response_data.get("narration_applied", False)
+
+            if _engine:
+                _dir = _engine.get_actor("director")
+                if _dir:
+                    _pinfo = _dir.get_last_system_prompt()
+                    if _pinfo.get("available"):
+                        _sys_prompt = _pinfo.get("full_prompt", "")
+                        _personality_len = _pinfo.get("length", 0)
+                        _personality_injected = _personality_len > 1000
+                    # Check assembler metadata for voice
+                    _last_meta = getattr(_dir, "_last_prompt_meta", None)
+                    if _last_meta:
+                        _voice_injected = _last_meta.get("voice_injected", False)
+
+                _mat = _engine.get_actor("matrix")
+                if _mat:
+                    _mem = getattr(_mat, "_matrix", None)
+                    if _mem:
+                        try:
+                            _memory_stats = await _mem.get_stats()
+                        except Exception:
+                            pass
+
             ctx = InferenceContext(
                 inference_id=inference_id,
                 session_id="simulation",
@@ -7116,9 +7661,12 @@ async def qa_simulate(request: SimulateRequest):
                 route=response_data.get("route_decision", "SIMULATION"),
                 provider_used=response_data.get("provider_used", "unknown"),
                 latency_ms=latency_ms,
-                personality_injected=True,
-                personality_length=5000,
-                virtues_loaded=True,
+                personality_injected=_personality_injected,
+                personality_length=_personality_len,
+                system_prompt=_sys_prompt,
+                virtues_loaded=_personality_injected,
+                narration_applied=_narration_applied,
+                memory_stats=_memory_stats,
                 raw_response=response_text,
                 final_response=response_text,
             )
@@ -7179,6 +7727,33 @@ async def qa_simulate(request: SimulateRequest):
             "diagnosis": f"Simulation failed with exception: {e}",
             "assertions": [],
         }
+
+
+# ═══════════════════════════════════════════════════════════
+# QA DIAGNOSTIC EVENTS
+# ═══════════════════════════════════════════════════════════
+
+
+@app.get("/qa/events")
+async def qa_get_events(
+    source: Optional[str] = None,
+    severity: Optional[str] = None,
+    limit: int = 50,
+):
+    """Get diagnostic events (watchdog alerts, health failures, API errors)."""
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+    validator = get_qa_validator()
+    return validator._db.get_events(source=source, severity=severity, limit=limit)
+
+
+@app.get("/qa/events/summary")
+async def qa_get_event_summary(hours: int = 24):
+    """Get event counts grouped by source and severity."""
+    if not QA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="QA system not available")
+    validator = get_qa_validator()
+    return validator._db.get_event_summary(hours=hours)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -7291,6 +7866,41 @@ async def slash_qa_last():
 
 
 # ═══════════════════════════════════════════════════════════
+# SKILL SLASH ENDPOINTS
+# ═══════════════════════════════════════════════════════════
+
+
+@app.post("/slash/skill/{name}", response_model=SlashCommandResponse)
+async def slash_skill(name: str, body: dict = None):
+    """Directly invoke a skill by name. Body: {"query": "..."}"""
+    if not _engine:
+        return SlashCommandResponse(
+            command=f"/skill/{name}", success=False, data={},
+            formatted="Engine not running",
+        )
+    director = _engine.get_actor("director")
+    registry = getattr(director, "_skill_registry", None) if director else None
+    if not registry or not registry.get(name):
+        return SlashCommandResponse(
+            command=f"/skill/{name}", success=False, data={},
+            formatted=f"Skill '{name}' not found or not registered",
+        )
+    query = (body or {}).get("query", "")
+    result = await registry.execute(name, query, context={})
+    formatted = ""
+    if result.data:
+        formatted = result.data.get("formatted", str(result.data))
+    elif result.error:
+        formatted = result.error
+    return SlashCommandResponse(
+        command=f"/skill/{name}",
+        success=result.success,
+        data=result.data or {},
+        formatted=formatted,
+    )
+
+
+# ═══════════════════════════════════════════════════════════
 # VOIGHT-KAMPFF ENDPOINTS
 # ═══════════════════════════════════════════════════════════
 
@@ -7305,7 +7915,7 @@ async def get_vk_voice_memory_results():
     import json
     from pathlib import Path
 
-    results_path = Path(__file__).parent.parent.parent.parent / "Docs" / "Handoffs" / "VoightKampffResults" / "voice_memory_results.json"
+    results_path = project_root() / "Docs" / "Handoffs" / "VoightKampffResults" / "voice_memory_results.json"
 
     if not results_path.exists():
         raise HTTPException(status_code=404, detail="No test results found. Run the test suite first.")
@@ -7325,7 +7935,7 @@ async def get_vk_latest_results():
     import json
     from pathlib import Path
 
-    results_dir = Path(__file__).parent.parent.parent.parent / "Docs" / "Handoffs" / "VoightKampffResults"
+    results_dir = project_root() / "Docs" / "Handoffs" / "VoightKampffResults"
 
     if not results_dir.exists():
         raise HTTPException(status_code=404, detail="No test results directory found")
@@ -7450,10 +8060,9 @@ async def _get_aibrarian_engine():
 
     # Fallback: standalone init (server started without full Engine boot)
     from luna.substrate.aibrarian_engine import AiBrarianEngine
-    _project = Path(__file__).parent.parent.parent.parent
     _aibrarian_engine = AiBrarianEngine(
-        _project / "config" / "aibrarian_registry.yaml",
-        project_root=_project,
+        config_dir() / "aibrarian_registry.yaml",
+        project_root=project_root(),
     )
     await _aibrarian_engine.initialize()
     logger.warning("AiBrarianEngine fallback: standalone init in server.py")
@@ -7829,7 +8438,7 @@ async def api_collections_lock_in():
     try:
         import yaml
         from pathlib import Path as _Path
-        _reg_path = _Path(__file__).parent.parent.parent / "config" / "aibrarian_registry.yaml"
+        _reg_path = config_dir() / "aibrarian_registry.yaml"
         _registry = yaml.safe_load(_reg_path.read_text()) if _reg_path.exists() else {}
         _col_configs = _registry.get("collections", {})
     except Exception:
@@ -8355,9 +8964,127 @@ async def api_diagnostics_revalidate(request: RevalidateRequest):
 
 
 # ═══════════════════════════════════════════════════════════
+# LunaScript diagnostic endpoints
+# ═══════════════════════════════════════════════════════════
+
+
+@app.get("/api/lunascript/state")
+async def lunascript_state():
+    """LunaScript cognitive signature diagnostics."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    director = _engine.get_actor("director")
+    ls = getattr(director, '_lunascript', None) if director else None
+    if not ls or not ls._initialized:
+        return {"enabled": False}
+
+    trait_values = {}
+    if ls._last_measurement:
+        trait_values = {
+            name: round(score.value, 3)
+            for name, score in ls._last_measurement.traits.items()
+        }
+
+    try:
+        from luna.lunascript.signature import derive_glyph, DEFAULT_TRAIT_WEIGHTS
+        glyph = derive_glyph({
+            "position": ls._prev_position,
+            "trait_vector": trait_values,
+        }) if trait_values else "○"
+    except Exception:
+        glyph = "○"
+
+    trends = ls._evolution.get_trait_trends()
+    correlations = ls._evolution.get_trait_correlations()
+
+    try:
+        patterns = await ls.list_patterns()
+    except Exception:
+        patterns = []
+
+    return {
+        "enabled": True,
+        "position": ls._prev_position,
+        "glyph": glyph,
+        "traits": trait_values,
+        "trait_weights": {k: round(v, 3) for k, v in ls._trait_weights.items()},
+        "default_weights": {k: round(v, 3) for k, v in DEFAULT_TRAIT_WEIGHTS.items()},
+        "epsilon": round(ls._evolution.epsilon, 4),
+        "iteration": ls._evolution._iteration,
+        "drift_baseline": {
+            "mean": round(ls._drift_baseline_mean, 3),
+            "stddev": round(ls._drift_baseline_stddev, 3),
+        },
+        "trait_trends": {k: round(v, 4) for k, v in trends.items()},
+        "trait_correlations": {k: round(v, 4) for k, v in correlations.items()},
+        "patterns": patterns,
+        "last_classification": ls._last_classification,
+    }
+
+
+@app.post("/api/lunascript/feedback")
+async def lunascript_feedback(request: Request):
+    """Record user feedback on response quality for LunaScript evolution."""
+    import json, time
+    body = await request.json()
+    message_id = body.get("message_id", "")
+    score = float(body.get("score", 0.5))
+
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    director = _engine.get_actor("director")
+    ls = getattr(director, '_lunascript', None) if director else None
+    if not ls or not ls._initialized:
+        return {"ok": False, "reason": "lunascript not initialized"}
+
+    # Record feedback to dedicated table
+    trait_vector_str = ""
+    if ls._last_measurement:
+        trait_vector_str = json.dumps({
+            n: round(s.value, 3) for n, s in ls._last_measurement.traits.items()
+        })
+
+    try:
+        await ls.db.execute(
+            "INSERT INTO lunascript_feedback "
+            "(message_id, score, trait_vector_at_time, classification_at_time, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (message_id, score, trait_vector_str, ls._last_classification, time.time()),
+        )
+    except Exception:
+        pass
+
+    # Feed into evolution if we have cached delegation data
+    if ls._last_outbound_sig and ls._last_delta:
+        try:
+            ls._evolution.record_delegation(
+                outbound=ls._last_outbound_sig,
+                delta=ls._last_delta,
+                classification=ls._last_classification,
+                quality_score=score,
+            )
+            ls._trait_weights = ls._evolution.iterate_weights(ls._trait_weights)
+            await ls._evolution.save_state(ls.db)
+        except Exception:
+            pass
+
+    # Update last delegation_log entry's success_score
+    try:
+        await ls.db.execute(
+            "UPDATE lunascript_delegation_log SET success_score = ? "
+            "WHERE id = (SELECT MAX(id) FROM lunascript_delegation_log)",
+            (score,),
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "epsilon": round(ls._evolution.epsilon, 4)}
+
+
+# ═══════════════════════════════════════════════════════════
 # Serve main Eclissi frontend at / (MUST be last — catch-all mount)
 try:
-    _eclissi_frontend = _Path("frontend/dist")
+    _eclissi_frontend = Path("frontend/dist")
     if _eclissi_frontend.exists():
         app.mount("/", StaticFiles(directory=str(_eclissi_frontend), html=True), name="eclissi-frontend")
         logger.info(f"Eclissi frontend mounted at / from {_eclissi_frontend}")

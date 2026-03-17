@@ -14,10 +14,10 @@ const IDLE_TIMEOUT = 2000;
 /**
  * Hook for managing Luna Orb state via WebSocket
  *
- * @param {string} wsUrl - WebSocket URL (default: ws://127.0.0.1:8000/ws/orb)
+ * @param {string} wsUrl - WebSocket URL (default: ws://<host>/ws/orb)
  * @returns {Object} { orbState, isConnected, error }
  */
-export function useOrbState(wsUrl = 'ws://127.0.0.1:8000/ws/orb') {
+export function useOrbState(wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/orb`) {
   const [orbState, setOrbState] = useState(DEFAULT_STATE);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState(null);

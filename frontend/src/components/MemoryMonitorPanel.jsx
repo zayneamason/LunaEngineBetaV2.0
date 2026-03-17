@@ -9,7 +9,7 @@ import AnnotatedText from './AnnotatedText';
  * Data comes from 4 existing API endpoints (no backend changes needed).
  */
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = '';
 
 // --- Tabs ---
 const TABS = [

@@ -22,6 +22,7 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..substrate.database import MemoryDatabase
 
+from luna.core.paths import system_dir, user_dir
 from .models import Entity, EntityType, EntityVersion
 
 logger = logging.getLogger(__name__)
@@ -63,8 +64,8 @@ _HARDCODED_STOPLIST = {
     "conversation flow", "owls", "raccoon",
 }
 
-_STOPLIST_PATH = Path(__file__).parent.parent.parent.parent / "data" / "entity_stoplist.json"
-_REVIEW_QUEUE_PATH = Path(__file__).parent.parent.parent.parent / "data" / "entity_review_queue.json"
+_STOPLIST_PATH = system_dir() / "entity_stoplist.json"
+_REVIEW_QUEUE_PATH = user_dir() / "entity_review_queue.json"
 
 # Minimum name length for entity creation (also used by detect_mentions)
 MIN_ENTITY_NAME_LENGTH = 2

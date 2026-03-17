@@ -32,6 +32,7 @@ from .router import (
     QueryRouter,
     ExecutionPath,
 )
+from .directives import DirectiveEngine
 
 __all__ = [
     # Agent Loop
@@ -49,4 +50,6 @@ __all__ = [
     # Router
     "QueryRouter",
     "ExecutionPath",
+    # Intent Layer
+    "DirectiveEngine",
 ]

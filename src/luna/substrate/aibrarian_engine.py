@@ -263,6 +263,8 @@ class AiBrarianRegistry:
             # Remove keys that are not AiBrarianConfig fields
             valid_keys = {f.name for f in AiBrarianConfig.__dataclass_fields__.values()}
             filtered = {k: v for k, v in merged.items() if k in valid_keys}
+            if "name" not in filtered:
+                filtered["name"] = key
             self.collections[key] = AiBrarianConfig(key=key, **filtered)
 
     def get(self, key: str) -> Optional[AiBrarianConfig]:
@@ -422,6 +424,70 @@ class AiBrarianEngine:
                 logger.info("AiBrarian connected: %s (%s)", config.key, config.name)
             except Exception as e:
                 logger.warning("Failed to connect AiBrarian collection %s: %s", config.key, e)
+
+        # Discover plugin collections from collections/ directory
+        await self._discover_plugin_collections()
+
+    async def _discover_plugin_collections(self) -> None:
+        """Scan collections/ directory for plugin collection manifests."""
+        collections_dir = self.project_root / "collections"
+        if not collections_dir.exists():
+            return
+
+        for entry in sorted(collections_dir.iterdir()):
+            if not entry.is_dir() or entry.name.startswith(("_", ".")):
+                continue
+
+            manifest_path = entry / "manifest.yaml"
+            if not manifest_path.exists():
+                continue
+
+            try:
+                with open(manifest_path) as f:
+                    manifest = yaml.safe_load(f) or {}
+
+                coll_cfg = manifest.get("collection", {})
+                key = coll_cfg.get("key", entry.name)
+
+                # Registry-defined collections take precedence
+                if key in self.connections:
+                    logger.debug("[NEXUS] Plugin '%s' overridden by registry", key)
+                    continue
+
+                # Resolve db_path relative to plugin directory
+                db_file = coll_cfg.get("db_file", f"{key}.db")
+                db_path = entry / db_file
+
+                if not db_path.exists():
+                    logger.warning("[NEXUS] Plugin '%s': db not found at %s", key, db_path)
+                    continue
+
+                # Build AiBrarianConfig from manifest
+                config = AiBrarianConfig(
+                    key=key,
+                    name=manifest.get("name", key),
+                    description=manifest.get("description", ""),
+                    db_path=str(db_path),
+                    enabled=True,
+                    read_only=coll_cfg.get("read_only", False),
+                    create_if_missing=False,
+                    schema_type=coll_cfg.get("schema_type", "standard"),
+                    chunk_size=coll_cfg.get("chunk_size", self.registry.defaults.get("chunk_size", 500)),
+                    chunk_overlap=coll_cfg.get("chunk_overlap", self.registry.defaults.get("chunk_overlap", 50)),
+                    embedding_model=coll_cfg.get("embedding_model", self.registry.defaults.get("embedding_model", "local-minilm")),
+                    embedding_dim=coll_cfg.get("embedding_dim", self.registry.defaults.get("embedding_dim", 384)),
+                    tags=coll_cfg.get("tags", []),
+                    metadata={"plugin": True, "plugin_dir": str(entry)},
+                )
+
+                conn = AiBrarianConnection(config, db_path)
+                await conn.connect()
+                self.connections[key] = conn
+                # Also register in the registry for list_enabled() consistency
+                self.registry.collections[key] = config
+                logger.info("[NEXUS] Plugin collection loaded: %s (%s)", key, db_path)
+            except Exception as e:
+                logger.warning("[NEXUS] Failed to load plugin %s: %s", entry.name, e)
 
     async def reload_registry(self) -> None:
         """Hot-reload registry — connect new, disconnect removed."""
@@ -912,6 +978,11 @@ class AiBrarianEngine:
         await self._embed_chunks(conn, doc_id, chunks)
 
         conn.conn.commit()
+
+        # 6. Run extraction if enabled for this collection
+        if conn.config.extract_on_ingest:
+            await self.extract(collection, doc_id)
+
         logger.info(
             "Ingested %s → %s (%d words, %d chunks)",
             file_path.name,

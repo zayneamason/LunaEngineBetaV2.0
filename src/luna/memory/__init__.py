@@ -6,13 +6,13 @@ from .cluster_manager import (
     Cluster,
     ClusterEdge,
     get_state_from_lock_in,
-    STATE_THRESHOLDS,
 )
-from .lock_in import (
-    LockInCalculator,
-    WEIGHTS as LOCK_IN_WEIGHTS,
-    DECAY_LAMBDAS,
+from .config_loader import (
+    get_state_thresholds,
+    get_weights,
+    get_decay_lambdas,
 )
+from .lock_in import LockInCalculator
 from .clustering_engine import ClusteringEngine
 from .constellation import (
     ConstellationAssembler,
@@ -29,11 +29,11 @@ __all__ = [
     "Cluster",
     "ClusterEdge",
     "get_state_from_lock_in",
-    "STATE_THRESHOLDS",
+    "get_state_thresholds",
+    "get_weights",
+    "get_decay_lambdas",
     # Lock-in Dynamics
     "LockInCalculator",
-    "LOCK_IN_WEIGHTS",
-    "DECAY_LAMBDAS",
     # Clustering
     "ClusteringEngine",
     # Context Assembly

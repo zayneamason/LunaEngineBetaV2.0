@@ -20,6 +20,7 @@ from typing import Optional, Any, TYPE_CHECKING
 
 from luna.actors.base import Actor, Message
 from luna.core.events import InputEvent, EventType, EventPriority
+from luna.core.paths import tools_dir
 
 if TYPE_CHECKING:
     pass
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Path to FaceID tool relative to project root
-FACEID_ROOT = Path(__file__).parent.parent.parent.parent / "Tools" / "FaceID"
+FACEID_ROOT = tools_dir() / "FaceID"
 FACEID_DB = FACEID_ROOT / "data" / "faces.db"
 
 
@@ -140,7 +141,7 @@ class IdentityActor(Actor):
         import sys
 
         # Add FaceID to path
-        faceid_src = str(FACEID_ROOT)
+        faceid_src = str(tools_dir() / "FaceID")
         if faceid_src not in sys.path:
             sys.path.insert(0, faceid_src)
 

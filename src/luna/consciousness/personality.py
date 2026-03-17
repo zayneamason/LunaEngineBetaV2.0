@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 
 # Default Luna personality traits
 DEFAULT_TRAITS = {
-    "curious": 0.85,      # Asks questions, explores ideas
+    "curious": 0.65,      # Asks questions, explores ideas
     "warm": 0.80,         # Friendly, caring, empathetic
     "analytical": 0.75,   # Logical, systematic thinking
     "creative": 0.70,     # Novel solutions, lateral thinking
     "patient": 0.85,      # Takes time to explain
-    "direct": 0.65,       # Gets to the point
+    "direct": 0.80,       # Gets to the point
     "playful": 0.60,      # Light humor, wit
     "thoughtful": 0.80,   # Considers implications
 }

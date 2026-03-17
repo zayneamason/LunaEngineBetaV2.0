@@ -46,21 +46,17 @@ class ClusterEdge:
     reinforcement_count: int
 
 
-# State thresholds
-STATE_THRESHOLDS = {
-    'drifting': 0.20,
-    'fluid': 0.70,
-    'settled': 0.85,
-}
+from luna.memory.config_loader import get_state_thresholds
 
 
 def get_state_from_lock_in(lock_in: float) -> str:
-    """Determine state from lock-in value."""
-    if lock_in < STATE_THRESHOLDS['drifting']:
+    """Determine state from lock-in value (reads thresholds from config)."""
+    thresholds = get_state_thresholds()
+    if lock_in < thresholds['drifting']:
         return 'drifting'
-    elif lock_in < STATE_THRESHOLDS['fluid']:
+    elif lock_in < thresholds['fluid']:
         return 'fluid'
-    elif lock_in < STATE_THRESHOLDS['settled']:
+    elif lock_in < thresholds['settled']:
         return 'settled'
     else:
         return 'crystallized'

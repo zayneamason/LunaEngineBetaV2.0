@@ -27,6 +27,8 @@ export const OrbCanvas = forwardRef(function OrbCanvas({
   chatContainerRef = null,
   messagesEndRef = null,
   rendererState = null,
+  onClick = null,
+  onContextMenu = null,
 }, externalRef) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -467,17 +469,19 @@ export const OrbCanvas = forwardRef(function OrbCanvas({
   }, []);
 
   // ── Container style for follow behavior ──
+  const canvasSize = Math.max(size * 4, C.baseRadius * 5);
+
   const containerStyle = followEnabled ? {
     position: 'absolute',
     top: 0,
     left: 0,
+    width: canvasSize,
+    height: canvasSize,
     willChange: 'transform',
     pointerEvents: 'none',
     zIndex: 100,
     transition: 'none',
   } : {};
-
-  const canvasSize = Math.max(size * 4, C.baseRadius * 5);
 
   return (
     <div
@@ -487,13 +491,13 @@ export const OrbCanvas = forwardRef(function OrbCanvas({
     >
       <canvas
         ref={canvasRef}
+        onClick={onClick}
+        onContextMenu={onContextMenu}
         style={{
           width: canvasSize,
           height: canvasSize,
-          // Center the canvas around the orb position
-          marginLeft: -canvasSize / 2 + size / 2,
-          marginTop: -canvasSize / 2 + size / 2,
           pointerEvents: 'auto',
+          cursor: onClick ? 'pointer' : 'default',
         }}
         role="img"
         aria-label={`Luna is ${state}`}

@@ -49,7 +49,7 @@ class ChangeType(Enum):
 ENTITY_COLUMNS = [
     "id", "entity_type", "name", "aliases", "core_facts",
     "full_profile", "voice_config", "current_version",
-    "metadata", "created_at", "updated_at"
+    "metadata", "created_at", "updated_at", "origin"
 ]
 
 # Column order for entity_versions table
@@ -505,7 +505,7 @@ class PersonalityPatch:
     related_to: list[str] = field(default_factory=list)
 
     # Context
-    user_context: str = "ahab"                    # Who this evolved with
+    user_context: str = ""                          # Who this evolved with
     scope: str = "global"                         # "global" | "user-specific"
     active: bool = True
 
@@ -651,7 +651,7 @@ class PersonalityPatch:
             supersedes=meta.get("supersedes"),
             conflicts_with=meta.get("conflicts_with", []),
             related_to=meta.get("related_to", []),
-            user_context=meta.get("user_context", "ahab"),
+            user_context=meta.get("user_context", ""),
             scope=meta.get("scope", "global"),
             active=meta.get("active", True),
             metadata=node.get("metadata", {}),

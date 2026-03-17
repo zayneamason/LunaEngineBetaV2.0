@@ -88,6 +88,7 @@ class QAValidator:
         self._assertions: list[Assertion] = []
         self._db = QADatabase(db_path)
         self._last_report: Optional[QAReport] = None
+        self._recalibrated_at: Optional[datetime] = None
 
         # Load built-in assertions
         self._assertions = get_default_assertions()
@@ -170,24 +171,25 @@ class QAValidator:
 
         diagnoses = []
 
-        # Check for narration failure
-        narration_failed = any(r.id == "P3" and not r.passed for r in results)
-        if narration_failed:
+        # Check for voice injection failure (P3)
+        voice_failed = any(r.id == "P3" and not r.passed for r in results)
+        if voice_failed:
             diagnoses.append(
-                "Narration layer not applied. FULL_DELEGATION returned raw provider "
-                "output without voice transformation. Check _narrate_response() in Director."
+                "Voice injection missing from system prompt. Luna's voice is injected "
+                "via PromptAssembler, not post-hoc narration. Check that <luna_voice> "
+                "block or tone directives are present in the assembled prompt."
             )
 
         # Check for Claude-isms
         claude_isms_failed = any(r.id == "V1" and not r.passed for r in results)
-        if claude_isms_failed and not narration_failed:
+        if claude_isms_failed and not voice_failed:
             diagnoses.append(
-                "Claude-isms detected despite narration. Voice transformation may be "
-                "too weak or personality prompt insufficient."
+                "Claude-isms detected despite voice injection. Personality prompt "
+                "may be insufficient or provider is overriding voice directives."
             )
-        elif claude_isms_failed and narration_failed:
+        elif claude_isms_failed and voice_failed:
             diagnoses.append(
-                "Claude-isms detected because narration was skipped."
+                "Claude-isms detected because voice injection is missing."
             )
 
         # Check for structural issues
@@ -380,6 +382,61 @@ class QAValidator:
     def get_stats(self, time_range: str = "24h") -> dict:
         """Get statistics for a time range."""
         return self._db.get_stats(time_range)
+
+    def check_single(self, assertion_id: str, ctx: InferenceContext) -> Optional[dict]:
+        """Run a single assertion by ID against a given context."""
+        for a in self._assertions:
+            if a.id == assertion_id and a.enabled:
+                result = a.check(ctx)
+                return {
+                    "id": result.id,
+                    "name": result.name,
+                    "passed": result.passed,
+                    "severity": result.severity,
+                    "expected": result.expected,
+                    "actual": result.actual,
+                    "details": result.details,
+                }
+        return None
+
+    def revalidate_last(self) -> Optional["QAReport"]:
+        """Re-run all assertions against the stored context of the last inference."""
+        if not self._last_report:
+            return None
+        ctx = self._last_report.context
+        return self.validate(ctx)
+
+    def revalidate_assertions(self, assertion_ids: list) -> list:
+        """Re-run specific assertions against the last inference context."""
+        if not self._last_report:
+            return []
+        ctx = self._last_report.context
+        results = []
+        for a in self._assertions:
+            if a.id in assertion_ids and a.enabled:
+                try:
+                    r = a.check(ctx)
+                    results.append({
+                        "id": r.id,
+                        "name": r.name,
+                        "passed": r.passed,
+                        "severity": r.severity,
+                        "expected": r.expected,
+                        "actual": r.actual,
+                    })
+                except Exception as e:
+                    results.append({"id": a.id, "name": a.name, "passed": False, "error": str(e)})
+        return results
+
+    def mark_recalibration(self) -> datetime:
+        """Mark a recalibration point. Stats context will note 'since recalibration'."""
+        self._recalibrated_at = datetime.now()
+        logger.info(f"QA recalibrated at {self._recalibrated_at.isoformat()}")
+        return self._recalibrated_at
+
+    @property
+    def recalibrated_at(self) -> Optional[datetime]:
+        return self._recalibrated_at
 
     def get_history(self, limit: int = 100) -> list[dict]:
         """Get report history."""

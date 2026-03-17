@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Optional
 import httpx
 
+from luna.core.paths import project_root
+
 # Configuration
 DEFAULT_PORT = 8742  # Unique port to avoid conflicts
 MAX_PORT_ATTEMPTS = 5
@@ -69,7 +71,7 @@ async def check_api_health(port: int, timeout: float = HEALTH_CHECK_TIMEOUT) -> 
 
 def start_api_server(port: int) -> subprocess.Popen:
     """Start the MCP API server as a subprocess."""
-    src_path = Path(__file__).parent.parent.resolve()
+    src_path = project_root() / "src"
 
     process = subprocess.Popen(
         [sys.executable, "-m", "luna_mcp.api", "--port", str(port)],

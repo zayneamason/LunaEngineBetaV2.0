@@ -1,0 +1,82 @@
+name: "Tarcila Build"
+description: "Clean instance for first external user"
+version: "0.1.0"
+
+platform: "auto"
+
+database:
+  mode: "seed"
+
+collections:
+  luna_system:
+    enabled: true
+    mode: "compiled"
+    source: "data/system/aibrarian/luna_system.db"
+
+skills:
+  math:
+    mode: "plugin"
+    packages: ["sympy"]
+  logic:
+    mode: "plugin"
+    packages: ["sympy"]
+
+config:
+  personality:
+    bootstrap_patches:
+      - bootstrap_001_sovereignty
+      - bootstrap_003_honesty
+    first_meeting_directive: true
+  llm_providers:
+    mode: "template"
+  fallback_chain:
+    chain: ["claude", "groq"]
+
+secrets:
+  mode: "template"
+
+frontend:
+  build: true
+  pages:
+    eclissi: true
+    studio: false
+    kozmo: false
+    guardian: false
+    observatory: false
+    settings: true
+  remap:
+    nexus:
+      from: "studio"
+      to: "eclissi"
+      position: "header"
+  widgets:
+    engine: true
+    voice: true
+    memory: true
+    qa: false
+    prompt: false
+    debug: false
+    vk: false
+    cache: false
+    thought: true
+    lunascript: false
+
+nuitka:
+  standalone: true
+  exclude_packages:
+    - torch
+    - torchvision
+    - torchaudio
+    - transformers
+    - tensorflow
+    - keras
+    - scipy
+    - sklearn
+    - matplotlib
+    - PIL
+    - cv2
+    - spacy
+    - llama_cpp
+
+post_build:
+  create_launcher: true

@@ -3,7 +3,7 @@ import GlassCard from './GlassCard';
 import AnnotatedText from './AnnotatedText';
 import { useNavigation } from '../hooks/useNavigation';
 
-const ThoughtStream = ({ apiUrl = 'http://127.0.0.1:8000', entities = [] }) => {
+const ThoughtStream = ({ apiUrl = '', entities = [] }) => {
   const [thoughts, setThoughts] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);

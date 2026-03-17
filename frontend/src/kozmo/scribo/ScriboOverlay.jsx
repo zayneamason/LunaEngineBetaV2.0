@@ -309,7 +309,7 @@ function AnnotationCreator({ onAdd, onCancel, selectionRange }) {
     if (!text.trim()) return;
     onAdd({
       type,
-      author: type === 'luna' ? 'Luna' : 'Ahab',
+      author: type === 'luna' ? 'Luna' : 'User',
       text: text.trim(),
       ...(selectionRange ? { highlight: selectionRange } : {}),
       ...(type === 'action' ? {

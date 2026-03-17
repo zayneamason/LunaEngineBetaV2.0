@@ -14,11 +14,10 @@ import os
 from pathlib import Path
 from typing import Set
 
+from luna.core.paths import project_root
+
 # Configuration - resolve to project root
-LUNA_BASE_PATH = os.environ.get(
-    "LUNA_BASE_PATH",
-    str(Path(__file__).parent.parent.parent.resolve())
-)
+LUNA_BASE_PATH = str(project_root())
 
 ALLOWED_EXTENSIONS: Set[str] = {
     # Documentation

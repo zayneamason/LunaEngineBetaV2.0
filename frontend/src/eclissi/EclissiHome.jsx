@@ -8,7 +8,7 @@ import { useExtractions } from '../hooks/useExtractions';
 
 const CHAT_STORAGE_KEY = 'luna_chat_messages';
 
-const EclissiHome = () => {
+const EclissiHome = ({ activeProjectSlug }) => {
   const {
     status,
     consciousness,
@@ -46,8 +46,9 @@ const EclissiHome = () => {
 
     const fetchEntities = async (attempt = 0) => {
       if (cancelled) return;
+      const projectParam = activeProjectSlug ? `?project=${activeProjectSlug}` : '';
       try {
-        const res = await fetch('/api/entities');
+        const res = await fetch(`/api/entities${projectParam}`);
         if (res.ok) {
           const data = await res.json();
           if (data?.entities?.length > 0) {
@@ -57,7 +58,7 @@ const EclissiHome = () => {
         }
       } catch {}
       try {
-        const res = await fetch('/observatory/api/entities');
+        const res = await fetch(`/observatory/api/entities${projectParam}`);
         if (res.ok) {
           const data = await res.json();
           if (data?.entities?.length > 0) {
@@ -74,7 +75,7 @@ const EclissiHome = () => {
 
     fetchEntities();
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
-  }, []);
+  }, [activeProjectSlug]);
 
   // Persist messages to localStorage
   useEffect(() => {
@@ -141,7 +142,7 @@ const EclissiHome = () => {
   const error = chatError || apiError;
 
   return (
-    <div className="relative h-full overflow-hidden" style={{ background: 'var(--ec-bg)' }}>
+    <div className="relative h-full" style={{ background: 'var(--ec-bg)' }}>
       {/* Ambient glow layers */}
       <div
         style={{
@@ -211,6 +212,7 @@ const EclissiHome = () => {
             extractionEntities={extractionData.entities}
             extractionRelationships={extractionData.relationships}
             voice={voice}
+            activeProjectSlug={activeProjectSlug}
           />
         </div>
       </div>

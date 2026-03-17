@@ -40,10 +40,10 @@ class ConversationRing:
     Both local and delegated paths read from this buffer.
     """
 
-    def __init__(self, max_turns: int = 6):
+    def __init__(self, max_turns: int = 20):
         """
         Args:
-            max_turns: Maximum turns to retain (default 6 = 3 exchanges)
+            max_turns: Maximum turns to retain (default 20 = 10 exchanges)
         """
         self._buffer: deque = deque(maxlen=max_turns)
         self._max_turns = max_turns
@@ -104,7 +104,7 @@ class ConversationRing:
 
     def format_for_prompt(
         self,
-        user_name: str = "Ahab",
+        user_name: str = "User",
         assistant_name: str = "Luna"
     ) -> str:
         """

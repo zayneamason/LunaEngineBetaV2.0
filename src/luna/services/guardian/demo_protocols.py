@@ -180,30 +180,47 @@ WASSWA_PROTOCOL = {
     }
 }
 
-DEMO_PROTOCOLS = {
+_KINONI_PROTOCOLS = {
     "amara_kato": AMARA_PROTOCOL,
     "elder_musoke": MUSOKE_PROTOCOL,
     "treasurer_wasswa": WASSWA_PROTOCOL,
 }
 
 
+def get_demo_protocols(active_project: Optional[str] = None) -> dict:
+    """Return demo protocols for the active project, or empty dict if none match."""
+    if active_project == "kinoni-ict-hub":
+        return _KINONI_PROTOCOLS
+    # No protocols for other projects or when no project is active
+    return {}
+
+
+# Keep backwards-compatible alias
+DEMO_PROTOCOLS = _KINONI_PROTOCOLS
+
+
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
 
-async def load_demo_protocols(db: MemoryDatabase) -> dict:
+async def load_demo_protocols(db: MemoryDatabase, active_project: Optional[str] = None) -> dict:
     """
-    Load all demo ambassador protocols into the database.
+    Load demo ambassador protocols into the database.
 
+    Only loads protocols that match the currently active project.
     Called on Guardian project activation (alongside memory bridge sync).
 
     Returns:
-        Stats dict: {"loaded": 3, "skipped": 0}
+        Stats dict: {"loaded": N, "skipped": N}
     """
+    protocols = get_demo_protocols(active_project)
+    if not protocols:
+        return {"loaded": 0, "skipped": 0, "reason": "no_matching_project"}
+
     proxy = AmbassadorProxy(db)
     stats = {"loaded": 0, "skipped": 0}
 
-    for entity_id, protocol_data in DEMO_PROTOCOLS.items():
+    for entity_id, protocol_data in protocols.items():
         # Check if already loaded
         existing = await proxy.load_protocol(entity_id)
         if existing:

@@ -175,7 +175,7 @@ def _build_continuity_hint(
         if gap_category == "multi_day":
             sections.append(
                 "\nDon't dump thread context unprompted. "
-                "Let Ahab lead — surface these only if relevant."
+                "Let the user lead — surface these only if relevant."
             )
 
         return "\n".join(sections)
@@ -189,7 +189,7 @@ def _build_continuity_hint(
                 f"({with_tasks} with open tasks)."
             )
         sections.append(
-            "Don't info-dump. Let Ahab set the pace. "
+            "Don't info-dump. Let the user set the pace. "
             "Surface threads only when directly relevant."
         )
         return "\n".join(sections)

@@ -17,9 +17,11 @@ import time
 
 import yaml
 
+from luna.core.paths import user_dir
+
 logger = logging.getLogger(__name__)
 
-SHARED_TURN_CACHE_PATH = Path("data/cache/shared_turn.yaml")
+SHARED_TURN_CACHE_PATH = user_dir() / "cache" / "shared_turn.yaml"
 
 
 @dataclass

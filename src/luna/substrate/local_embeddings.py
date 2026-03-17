@@ -20,6 +20,8 @@ import os
 from typing import Optional
 import threading
 
+from luna.core.gpu_lock import gpu_lock
+
 logger = logging.getLogger(__name__)
 
 # Model configuration
@@ -114,11 +116,12 @@ class LocalEmbeddings:
             # Return zero vector for empty text
             return [0.0] * self.dim
 
-        embedding = self.model.encode(
-            text,
-            normalize_embeddings=normalize,
-            show_progress_bar=False,
-        )
+        with gpu_lock:
+            embedding = self.model.encode(
+                text,
+                normalize_embeddings=normalize,
+                show_progress_bar=False,
+            )
         return embedding.tolist()
 
     def encode_batch(
@@ -155,12 +158,13 @@ class LocalEmbeddings:
         results = [[0.0] * self.dim for _ in texts]
 
         if non_empty_texts:
-            embeddings = self.model.encode(
-                non_empty_texts,
-                normalize_embeddings=normalize,
-                batch_size=batch_size,
-                show_progress_bar=show_progress,
-            )
+            with gpu_lock:
+                embeddings = self.model.encode(
+                    non_empty_texts,
+                    normalize_embeddings=normalize,
+                    batch_size=batch_size,
+                    show_progress_bar=show_progress,
+                )
 
             # Place embeddings back in correct positions
             for idx, embedding in zip(non_empty_indices, embeddings):

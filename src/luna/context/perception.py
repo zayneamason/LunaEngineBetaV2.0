@@ -91,7 +91,7 @@ class PerceptionField:
             "## User Observation (this session)\n\n"
             + "\n".join(f"- {line}" for line in lines)
             + "\n\nThese are observations, not conclusions. "
-            "Interpret them in context of what you know about Ahab."
+            "Interpret them in context of what you know about this user."
         )
 
     def reset(self) -> None:

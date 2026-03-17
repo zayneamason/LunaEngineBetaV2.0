@@ -4,7 +4,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
 
-CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "data" / "observatory_config.json"
+from luna.core.paths import user_dir
+
+CONFIG_PATH = user_dir() / "observatory_config.json"
 
 
 @dataclass

@@ -28,6 +28,7 @@ except ImportError:
     logger.warning("NumPy not available - centroid calculation disabled")
 
 from luna.memory.cluster_manager import ClusterManager, Cluster
+from luna.memory.config_loader import get_clustering_params
 
 
 class ClusteringEngine:
@@ -43,12 +44,13 @@ class ClusteringEngine:
         self.db_path = db_path
         self.cluster_mgr = ClusterManager(db_path)
 
-        # Clustering parameters
-        self.similarity_threshold = 0.82
-        self.min_cluster_size = 3
-        self.max_cluster_size = 50
-        self.min_keyword_overlap = 0.4  # Jaccard similarity threshold
-        self.max_generic_frequency = 100  # Skip keywords appearing in >100 nodes
+        # Clustering parameters — loaded from config/memory_economy_config.json
+        params = get_clustering_params()
+        self.similarity_threshold = params['similarity_threshold']
+        self.min_cluster_size = params['min_cluster_size']
+        self.max_cluster_size = params['max_cluster_size']
+        self.min_keyword_overlap = params['min_keyword_overlap']
+        self.max_generic_frequency = params['max_generic_frequency']
 
         # Stopwords - common words to exclude from clustering
         self.stopwords = {
@@ -492,7 +494,8 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-    db_path = Path(__file__).parent.parent.parent.parent / "data" / "luna_engine.db"
+    from luna.core.paths import user_dir
+    db_path = user_dir() / "luna_engine.db"
     engine = ClusteringEngine(str(db_path))
 
     # Run clustering

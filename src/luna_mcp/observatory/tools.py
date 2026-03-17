@@ -14,11 +14,13 @@ from pathlib import Path
 
 import aiosqlite
 
+from luna.core.paths import user_dir
+from luna.core.owner import get_owner
 from .config import RetrievalParams
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "luna_engine.db"
+DB_PATH = user_dir() / "luna_engine.db"
 
 LUNA_API = "http://localhost:8000"
 
@@ -574,6 +576,7 @@ async def tool_observatory_quest_board(
     journal_text: str = "",
     status: str = "",
     quest_type: str = "",
+    project: str = "",
 ) -> dict:
     """Unified quest management: list, accept, complete, create."""
     if not DB_PATH.exists():
@@ -590,6 +593,9 @@ async def tool_observatory_quest_board(
             if quest_type:
                 conditions.append("type = ?")
                 params.append(quest_type)
+            if project:
+                conditions.append("project = ?")
+                params.append(project)
 
             where = " AND ".join(conditions) if conditions else "1=1"
             cursor = await db.execute(
@@ -686,6 +692,112 @@ async def tool_observatory_quest_board(
             return {"action": "create", "created": len(created), "quest_ids": created,
                     "entity_review": review_result}
 
+        # =================================================================
+        # Intent Layer actions (directives & skills)
+        # =================================================================
+
+        elif action == "create_directive" and quest_id:
+            # quest_id repurposed as JSON config string for directives
+            import json as _j
+            try:
+                cfg = _j.loads(quest_id)
+            except (json.JSONDecodeError, TypeError):
+                return {"error": "create_directive requires quest_id as JSON config"}
+
+            title_d = cfg.get("title", "")
+            objective_d = cfg.get("objective", title_d)
+            if not title_d:
+                return {"error": "directive requires 'title'"}
+
+            qid = f"dir-{uuid.uuid4().hex[:8]}"
+            now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            authored = cfg.get("authored_by", "luna")
+            approved = cfg.get("approved_by")
+            initial_status = "armed" if approved else "available"
+
+            await db.execute(
+                "INSERT INTO quests (id, type, status, priority, title, objective, "
+                "trigger_type, trigger_config, action, trust_tier, authored_by, "
+                "approved_by, cooldown_minutes, source, created_at, updated_at) "
+                "VALUES (?, 'directive', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'observatory', ?, ?)",
+                (qid, initial_status, cfg.get("priority", "medium"),
+                 title_d, objective_d,
+                 cfg.get("trigger_type", "keyword"),
+                 json.dumps(cfg.get("trigger_config", {})),
+                 cfg.get("action", ""),
+                 cfg.get("trust_tier", "confirm"),
+                 authored, approved,
+                 cfg.get("cooldown_minutes"),
+                 now_str, now_str),
+            )
+            return {"action": "create_directive", "quest_id": qid,
+                    "status": initial_status, "title": title_d}
+
+        elif action == "create_skill" and quest_id:
+            import json as _j
+            try:
+                cfg = _j.loads(quest_id)
+            except (json.JSONDecodeError, TypeError):
+                return {"error": "create_skill requires quest_id as JSON config"}
+
+            title_s = cfg.get("title", "")
+            if not title_s:
+                return {"error": "skill requires 'title'"}
+
+            qid = f"skill-{uuid.uuid4().hex[:8]}"
+            now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+            await db.execute(
+                "INSERT INTO quests (id, type, status, priority, title, objective, "
+                "steps, tags_json, authored_by, source, created_at, updated_at) "
+                "VALUES (?, 'skill', 'available', ?, ?, ?, ?, ?, ?, 'observatory', ?, ?)",
+                (qid, cfg.get("priority", "medium"),
+                 title_s, cfg.get("objective", title_s),
+                 json.dumps(cfg.get("steps", [])),
+                 json.dumps(cfg.get("tags", [])),
+                 cfg.get("authored_by", "luna"),
+                 now_str, now_str),
+            )
+            return {"action": "create_skill", "quest_id": qid,
+                    "status": "available", "title": title_s}
+
+        elif action == "arm" and quest_id:
+            await db.execute(
+                "UPDATE quests SET status = 'armed', approved_by = ?, "
+                "updated_at = datetime('now') "
+                "WHERE id = ? AND type = 'directive'",
+                (get_owner().entity_id or "system", quest_id,),
+            )
+            return {"action": "arm", "quest_id": quest_id, "status": "armed"}
+
+        elif action == "disarm" and quest_id:
+            await db.execute(
+                "UPDATE quests SET status = 'disabled', updated_at = datetime('now') "
+                "WHERE id = ? AND type IN ('directive', 'skill')",
+                (quest_id,),
+            )
+            return {"action": "disarm", "quest_id": quest_id, "status": "disabled"}
+
+        elif action == "disable_all_directives":
+            cursor = await db.execute(
+                "UPDATE quests SET status = 'disabled', updated_at = datetime('now') "
+                "WHERE type = 'directive' AND status IN ('armed', 'fired')"
+            )
+            return {"action": "disable_all_directives",
+                    "disabled": cursor.rowcount}
+
+        elif action == "fire_history" and quest_id:
+            cursor = await db.execute(
+                "SELECT id, title, fire_count, last_fired_at, invocation_count, "
+                "last_invoked_at, status FROM quests WHERE id = ?",
+                (quest_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                r = dict(row)
+                return {"action": "fire_history", "quest_id": quest_id, **r}
+            return {"error": f"Quest {quest_id} not found"}
+
     return {"error": f"Unknown action '{action}' or missing quest_id"}
 
 
@@ -704,8 +816,9 @@ async def tool_observatory_quest_create(
     journal_prompt: str = "",
     target_entity_ids: str = "[]",
     target_node_ids: str = "[]",
+    project: str = "",
 ) -> dict:
-    """Create a quest manually."""
+    """Create a quest manually. Optionally scope to a project slug."""
     if not DB_PATH.exists():
         return {"error": f"Database not found at {DB_PATH}"}
 
@@ -713,12 +826,20 @@ async def tool_observatory_quest_create(
     now_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     async with _readwrite_db() as db:
+        # Ensure project column exists (idempotent migration)
+        try:
+            await db.execute(
+                "ALTER TABLE quests ADD COLUMN project TEXT DEFAULT NULL"
+            )
+        except Exception:
+            pass  # Column already exists
+
         await db.execute(
             "INSERT INTO quests (id, type, status, priority, title, subtitle, "
-            "objective, source, journal_prompt, created_at, updated_at) "
-            "VALUES (?, ?, 'available', ?, ?, ?, ?, ?, ?, ?, ?)",
+            "objective, source, journal_prompt, project, created_at, updated_at) "
+            "VALUES (?, ?, 'available', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (qid, quest_type, priority, title, subtitle, objective, source,
-             journal_prompt or None, now_str, now_str),
+             journal_prompt or None, project or None, now_str, now_str),
         )
 
         for eid in json.loads(target_entity_ids):
@@ -734,7 +855,7 @@ async def tool_observatory_quest_create(
                 (qid, nid),
             )
 
-    return {"quest_id": qid, "title": title, "status": "available"}
+    return {"quest_id": qid, "title": title, "status": "available", "project": project or None}
 
 
 # ==============================================================================

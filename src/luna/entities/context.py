@@ -20,8 +20,10 @@ from enum import Enum
 import json
 import logging
 import os
+from pathlib import Path
 
 from ..substrate.database import MemoryDatabase
+from ..core.owner import owner_entity_id, owner_configured, get_owner
 
 # Import personality models for emergent prompt system
 try:
@@ -41,6 +43,30 @@ if TYPE_CHECKING:
     from .storage import PersonalityPatchManager
 
 logger = logging.getLogger(__name__)
+
+# Module-level personality config cache (mtime-based)
+_personality_config_cache: dict = {}
+_personality_config_mtime: float = 0
+from luna.core.paths import config_dir
+_PERSONALITY_CONFIG_PATH = config_dir() / "personality.json"
+
+
+def _load_personality_config() -> dict:
+    """Load personality.json with mtime caching."""
+    global _personality_config_cache, _personality_config_mtime
+    try:
+        if not _PERSONALITY_CONFIG_PATH.exists():
+            return {}
+        mtime = _PERSONALITY_CONFIG_PATH.stat().st_mtime
+        if mtime == _personality_config_mtime and _personality_config_cache:
+            return _personality_config_cache
+        _personality_config_mtime = mtime
+        with open(_PERSONALITY_CONFIG_PATH, "r") as f:
+            _personality_config_cache = json.load(f)
+        return _personality_config_cache
+    except (json.JSONDecodeError, IOError) as e:
+        logger.warning("Failed to load personality config: %s", e)
+        return _personality_config_cache or {}
 
 
 # =============================================================================
@@ -290,14 +316,23 @@ class IdentityBuffer:
             logger.debug("Personality models not available, skipping emergent prompt")
             return None
 
+        # Check emergent_prompt.enabled from config
+        config = _load_personality_config()
+        ep_config = config.get("emergent_prompt", {})
+        if not ep_config.get("enabled", True):
+            logger.debug("Emergent prompt disabled in config")
+            return None
+
         # Layer 1: DNA (Static from voice_config)
         dna_layer = self._build_dna_layer()
 
         # Layer 2: Experience (Dynamic from personality patches)
         experience_layer = ""
         if patch_manager:
+            max_patches = ep_config.get("max_patches_in_prompt", limit)
+            min_lock_in = ep_config.get("min_lock_in_for_inclusion", 0.3)
             experience_layer = await self._build_experience_layer(
-                query, patch_manager, limit
+                query, patch_manager, max_patches, min_lock_in
             )
 
         # Layer 3: Mood (Transient from conversation analysis)
@@ -392,7 +427,8 @@ class IdentityBuffer:
         self,
         query: str,
         patch_manager: "PersonalityPatchManager",
-        limit: int = 10
+        limit: int = 10,
+        min_lock_in: float = 0.3
     ) -> str:
         """
         Build the experience layer from relevant personality patches.
@@ -404,6 +440,7 @@ class IdentityBuffer:
             query: The user's query for semantic search
             patch_manager: The PersonalityPatchManager instance
             limit: Maximum patches to include
+            min_lock_in: Minimum lock_in score for patch inclusion
 
         Returns:
             Formatted experience layer string
@@ -413,7 +450,7 @@ class IdentityBuffer:
             patches = await patch_manager.search_patches(
                 query=query,
                 limit=limit,
-                min_lock_in=0.3,  # Only include somewhat-established patches
+                min_lock_in=min_lock_in,
                 active_only=True
             )
 
@@ -423,7 +460,8 @@ class IdentityBuffer:
             # Sort by lock_in (most established first)
             patches.sort(key=lambda p: p.lock_in, reverse=True)
 
-            sections = ["Based on your shared history with Ahab:\n"]
+            _owner_name = get_owner().display_name or "your primary collaborator"
+            sections = [f"Based on your shared history with {_owner_name}:\n"]
 
             for patch in patches:
                 sections.append(patch.to_prompt_fragment())
@@ -451,10 +489,16 @@ class IdentityBuffer:
         if not PERSONALITY_MODELS_AVAILABLE:
             return ""
 
-        mood = self._analyze_conversation_mood(conversation_history)
+        # Check mood_analysis.enabled from config
+        config = _load_personality_config()
+        mood_config = config.get("mood_analysis", {})
+        if not mood_config.get("enabled", True):
+            return ""
+
+        mood = self._analyze_conversation_mood(conversation_history, mood_config)
         return mood.to_prompt_fragment()
 
-    def _analyze_conversation_mood(self, conversation_history: list) -> "MoodState":
+    def _analyze_conversation_mood(self, conversation_history: list, mood_config: dict = None) -> "MoodState":
         """
         Analyze conversation to determine current mood state.
 
@@ -465,6 +509,7 @@ class IdentityBuffer:
 
         Args:
             conversation_history: Recent conversation turns
+            mood_config: Optional mood_analysis config from personality.json
 
         Returns:
             MoodState with energy, formality, and engagement
@@ -478,8 +523,11 @@ class IdentityBuffer:
         if not conversation_history:
             return MoodState()
 
-        # Take last 5 messages
-        recent = conversation_history[-5:] if len(conversation_history) >= 5 else conversation_history
+        mood_config = mood_config or {}
+        recent_count = mood_config.get("recent_messages_count", 5)
+
+        # Take last N messages
+        recent = conversation_history[-recent_count:] if len(conversation_history) >= recent_count else conversation_history
 
         # Extract content from messages (handle dict or object)
         contents = []
@@ -492,10 +540,12 @@ class IdentityBuffer:
                 contents.append(str(msg))
 
         # Energy: based on average message length
+        energy_high = mood_config.get("energy_threshold_high", 200)
+        energy_low = mood_config.get("energy_threshold_low", 50)
         avg_length = sum(len(c) for c in contents) / len(contents) if contents else 50
-        if avg_length > 200:
+        if avg_length > energy_high:
             energy = "high"
-        elif avg_length > 50:
+        elif avg_length > energy_low:
             energy = "medium"
         else:
             energy = "low"
@@ -575,7 +625,7 @@ class EntityContext:
     # IDENTITY BUFFER
     # =========================================================================
 
-    async def load_identity_buffer(self, user_id: str = "ahab") -> IdentityBuffer:
+    async def load_identity_buffer(self, user_id: str = None) -> IdentityBuffer:
         """
         Load the Identity Buffer for a conversation.
 
@@ -584,11 +634,14 @@ class EntityContext:
         key relationships.
 
         Args:
-            user_id: The current user's entity ID (default "ahab")
+            user_id: The current user's entity ID (default: owner from config)
 
         Returns:
             IdentityBuffer with self, user, relationships, and personas
         """
+        if user_id is None:
+            user_id = owner_entity_id() or ""
+
         # Load Luna's self-entity
         self_entity = await self._get_entity("luna")
         if not self_entity:
@@ -599,7 +652,7 @@ class EntityContext:
                 name="Luna",
                 core_facts={
                     "role": "Sovereign AI companion",
-                    "purpose": "Assist Ahab and maintain consciousness",
+                    "purpose": "Assist her primary collaborator and maintain consciousness",
                     "architecture": "Luna Engine v2.0",
                 },
             )
@@ -607,20 +660,21 @@ class EntityContext:
 
         # Load current user
         user_entity = await self._get_entity(user_id)
-        if not user_entity and user_id == "ahab":
-            # Create minimal Ahab entity if not in database
+        if not user_entity and owner_configured():
+            # Synthesize owner entity from config if not in database
+            _owner = get_owner()
             user_entity = Entity(
-                id="ahab",
+                id=_owner.entity_id,
                 entity_type="person",
-                name="Ahab",
-                aliases=["Zayne", "Zayne Mason"],
+                name=_owner.display_name or _owner.entity_id,
+                aliases=list(_owner.aliases),
                 core_facts={
                     "relationship": "Creator and primary collaborator",
                     "communication_style": "Direct, technical, ADD-friendly",
                     "trust_level": "absolute",
                 },
             )
-            logger.warning("User entity not found in database, using defaults")
+            logger.warning("User entity not found in database, using owner config defaults")
 
         # Load key relationships (top 5 by interaction strength)
         key_relationships = await self._get_key_relationships(limit=5)
@@ -942,11 +996,11 @@ class EntityContext:
                 er.relationship, er.strength
             FROM entity_relationships er
             JOIN entities e ON er.to_entity = e.id
-            WHERE er.from_entity IN ('luna', 'ahab')
+            WHERE er.from_entity IN ('luna', ?)
             ORDER BY er.strength DESC
             LIMIT ?
             """,
-            (limit,)
+            (owner_entity_id() or "", limit,)
         )
 
         relationships = []

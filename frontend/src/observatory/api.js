@@ -32,10 +32,12 @@ export const api = {
     }),
 
   // Entity endpoints
-  entities: (typeFilter = null) => {
-    let url = '/api/entities'
-    if (typeFilter) url += `?type=${typeFilter}`
-    return fetchJSON(url)
+  entities: (typeFilter = null, project = null) => {
+    const params = new URLSearchParams()
+    if (typeFilter) params.append('type', typeFilter)
+    if (project) params.append('project', project)
+    const q = params.toString()
+    return fetchJSON(`/api/entities${q ? '?' + q : ''}`)
   },
 
   entityDetail: (entityId) => fetchJSON(`/api/entities/${entityId}`),
@@ -45,6 +47,7 @@ export const api = {
     const params = new URLSearchParams()
     if (filters.status) params.append('status', filters.status)
     if (filters.type) params.append('type', filters.type)
+    if (filters.project) params.append('project', filters.project)
     const query = params.toString()
     return fetchJSON(`/api/quests${query ? '?' + query : ''}`)
   },
@@ -77,10 +80,12 @@ export const api = {
     fetchJSON('/api/layout/recompute', { method: 'POST' }),
 
   // Thread endpoints
-  threads: (status = null) => {
-    let url = '/api/threads'
-    if (status) url += `?status=${status}`
-    return fetchJSON(url)
+  threads: (status = null, project = null) => {
+    const params = new URLSearchParams()
+    if (status) params.append('status', status)
+    if (project) params.append('project', project)
+    const q = params.toString()
+    return fetchJSON(`/api/threads${q ? '?' + q : ''}`)
   },
 
   // Journal entries (from data/journal/ markdown files)

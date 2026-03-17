@@ -13,6 +13,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 from .models import PersonalityPatch, PatchTopic, PatchTrigger
@@ -39,15 +40,34 @@ class PersonalityPatchManager:
     LOCK_IN_DECAY_THRESHOLD = 0.3      # Deactivate if below this
     LOCK_IN_ESTABLISHED = 0.7          # Considered established above this
 
-    def __init__(self, db: MemoryDatabase):
+    def __init__(self, db: MemoryDatabase, config_path: str = "config/personality.json"):
         """
         Initialize the PersonalityPatchManager.
 
         Args:
             db: The underlying MemoryDatabase instance
+            config_path: Path to personality config JSON (default: config/personality.json)
         """
         self.db = db
+        self._load_config(config_path)
         logger.info("PersonalityPatchManager initialized")
+
+    def _load_config(self, config_path: str):
+        """Load lock-in settings from personality config, falling back to class defaults."""
+        config_file = Path(config_path)
+        if config_file.exists():
+            try:
+                with open(config_file, "r") as f:
+                    config = json.load(f)
+                settings = config.get("personality_patch_storage", {}).get("settings", {})
+                self.DEFAULT_LOCK_IN = settings.get("initial_lock_in", self.__class__.DEFAULT_LOCK_IN)
+                self.LOCK_IN_DECAY_THRESHOLD = settings.get("lock_in_deactivation_threshold", self.__class__.LOCK_IN_DECAY_THRESHOLD)
+                logger.debug(f"Loaded patch storage config: lock_in={self.DEFAULT_LOCK_IN}, decay_threshold={self.LOCK_IN_DECAY_THRESHOLD}")
+                return
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Failed to load config from {config_path}: {e}")
+        self.DEFAULT_LOCK_IN = self.__class__.DEFAULT_LOCK_IN
+        self.LOCK_IN_DECAY_THRESHOLD = self.__class__.LOCK_IN_DECAY_THRESHOLD
 
     # =========================================================================
     # CRUD OPERATIONS

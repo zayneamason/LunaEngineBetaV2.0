@@ -16,6 +16,7 @@ Usage:
 import asyncio
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -144,10 +145,34 @@ async def run_single_message(engine: LunaEngine, message: str) -> None:
         await engine_task
 
 
+def _kill_stale_server(port: int) -> None:
+    """Kill any stale process holding the given port (prevents Errno 48)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = result.stdout.strip().split()
+        if pids:
+            my_pid = str(os.getpid())
+            stale = [p for p in pids if p != my_pid]
+            if stale:
+                print(f"  [port guard] Killing stale process(es) on :{port}: {', '.join(stale)}")
+                subprocess.run(["kill", "-9"] + stale, timeout=5)
+                import time
+                time.sleep(0.5)  # Let OS release the socket
+    except Exception as e:
+        print(f"  [port guard] Could not check port {port}: {e}")
+
+
 def run_server(host: str, port: int) -> None:
     """Run the HTTP API server."""
     import uvicorn
     from luna.api.server import app
+
+    # Kill any stale process holding our port
+    _kill_stale_server(port)
 
     print("\n" + "="*60)
     print("  Luna Engine v2.0 - HTTP API Server")

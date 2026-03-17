@@ -9,14 +9,14 @@ const QUEST_TYPES = {
   scavenger: { color: '#34d399', icon: '\u25C7', label: 'Scavenger' },
 }
 
-export default function QuestsView({ navigateTab }) {
+export default function QuestsView({ navigateTab, activeProjectSlug }) {
   const { quests, selectedQuestId, selectQuest, fetchQuests, acceptQuest, runMaintenanceSweep } = useObservatoryStore()
   const [statusFilter, setStatusFilter] = useState('available')
   const [showCompleteForm, setShowCompleteForm] = useState(false)
 
   useEffect(() => {
-    fetchQuests(statusFilter)
-  }, [statusFilter])
+    fetchQuests(statusFilter, null, activeProjectSlug)
+  }, [statusFilter, activeProjectSlug])
 
   const filtered = quests.filter(q => !statusFilter || q.status === statusFilter)
   const selectedQuest = filtered.find(q => q.id === selectedQuestId)
@@ -94,6 +94,18 @@ export default function QuestsView({ navigateTab }) {
                       }}>{quest.status}</span>
                       <span style={{ color: '#555' }}>·</span>
                       <span style={{ color: '#666' }}>{quest.priority}</span>
+                      {quest.project && (
+                        <>
+                          <span style={{ color: '#555' }}>·</span>
+                          <span style={{
+                            background: '#1a1a2e', color: '#888',
+                            padding: '2px 6px', borderRadius: 3,
+                            fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.5,
+                          }}>
+                            {quest.project}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

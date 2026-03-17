@@ -112,7 +112,7 @@ class FaceDatabase:
     
     def connect(self):
         """Open database and initialize schema."""
-        self._conn = sqlite3.connect(str(self.db_path))
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()

@@ -7,7 +7,7 @@
  * - Previous mode tracking for back navigation
  * - localStorage persistence
  *
- * See: /Users/zayneamason/.claude/plans/dreamy-bubbling-trinket.md
+ * See: navigation state machine design doc
  */
 
 import { setup, assign } from 'xstate';

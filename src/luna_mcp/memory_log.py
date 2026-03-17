@@ -22,10 +22,12 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import threading
 
+from luna.core.paths import project_root
+
 # Configuration
 LOGS_DIR = Path(os.environ.get(
     "LUNA_LOGS_DIR",
-    Path(__file__).parent.parent.parent / "logs"
+    project_root() / "logs"
 ))
 MEMORY_LOG_FILE = LOGS_DIR / "memory_matrix.log"
 SESSION_LOG_FILE = LOGS_DIR / "sessions.jsonl"

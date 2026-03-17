@@ -13,6 +13,8 @@ from typing import Any, Optional, Sequence
 
 import aiosqlite
 
+from luna.core.paths import project_root, data_dir, user_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +42,7 @@ class MemoryDatabase:
 
     # Use project's data directory, not ~/.luna (which caused memory wipe)
     # See: Docs/LUNA ENGINE Bible/Handoffs/HANDOFF-MEMORY-WIPE-INVESTIGATION.md
-    DEFAULT_DB_DIR = Path(__file__).parent.parent.parent.parent / "data"
+    DEFAULT_DB_DIR = user_dir()
     DEFAULT_DB_NAME = "luna_engine.db"
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
@@ -56,7 +58,14 @@ class MemoryDatabase:
 
         self.db_path = db_path
         self._connection: Optional[aiosqlite.Connection] = None
-        self._schema_path = Path(__file__).parent / "schema.sql"
+        # Resolve schema.sql — check multiple locations for dev vs compiled mode.
+        _candidates = [
+            project_root() / "data" / "schema.sql",                        # compiled binary
+            project_root() / "data" / "user" / "schema.sql",              # Forge build layout
+            project_root() / "src" / "luna" / "substrate" / "schema.sql",  # dev mode
+            Path(__file__).parent / "schema.sql",                          # fallback
+        ]
+        self._schema_path = next((c for c in _candidates if c.exists()), _candidates[-1])
 
     @property
     def is_connected(self) -> bool:
@@ -110,10 +119,24 @@ class MemoryDatabase:
 
         # Run migrations for existing databases
         await self._migrate_scope_columns()
+        await self._migrate_origin_columns()
         await self._migrate_ambassador_tables()
         await self._migrate_aperture_tables()
+        await self._migrate_lunascript_tables()
 
         logger.debug("Schema loaded successfully")
+
+    async def _migrate_lunascript_tables(self) -> None:
+        """Create LunaScript cognitive signature tables if missing (v2.4 migration)."""
+        try:
+            from luna.lunascript.schema import apply_lunascript_schema
+            await apply_lunascript_schema(self)
+            await self._connection.commit()
+            logger.debug("LunaScript tables ready")
+        except ImportError:
+            logger.debug("LunaScript module not available, skipping migration")
+        except Exception as e:
+            logger.debug(f"LunaScript migration skip: {e}")
 
     async def _migrate_scope_columns(self) -> None:
         """Add scope columns to existing tables if missing (v2.1 migration)."""
@@ -149,9 +172,53 @@ class MemoryDatabase:
 
         await self._connection.commit()
 
+    async def _migrate_origin_columns(self) -> None:
+        """Add origin columns to entities and graph_edges if missing (v2.5 migration)."""
+        migrations = [
+            ("entities", "origin", "ALTER TABLE entities ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"),
+            ("graph_edges", "origin", "ALTER TABLE graph_edges ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"),
+        ]
+
+        for table, column, alter_sql in migrations:
+            try:
+                cursor = await self._connection.execute(f"PRAGMA table_info({table})")
+                columns = await cursor.fetchall()
+                col_names = [col[1] for col in columns]
+
+                if column not in col_names:
+                    await self._connection.execute(alter_sql)
+                    logger.info(f"Migration: added '{column}' column to {table}")
+            except Exception as e:
+                logger.debug(f"Migration skip for {table}.{column}: {e}")
+
+        # Backfill entities: personas are system, seed_loader entries are seed
+        try:
+            await self._connection.execute(
+                "UPDATE entities SET origin = 'system' WHERE entity_type = 'persona' AND origin = 'user'"
+            )
+            await self._connection.execute(
+                "UPDATE entities SET origin = 'seed' "
+                "WHERE id IN (SELECT DISTINCT entity_id FROM entity_versions WHERE changed_by = 'seed_loader') "
+                "AND origin = 'user'"
+            )
+        except Exception as e:
+            logger.debug(f"Origin backfill skip: {e}")
+
+        # Create indexes
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_entities_origin ON entities(origin)",
+            "CREATE INDEX IF NOT EXISTS idx_edges_origin ON graph_edges(origin)",
+        ]:
+            try:
+                await self._connection.execute(idx_sql)
+            except Exception as e:
+                logger.debug(f"Origin index skip: {e}")
+
+        await self._connection.commit()
+
     async def _migrate_ambassador_tables(self) -> None:
         """Create ambassador protocol tables if missing (v2.2 migration)."""
-        migration_path = Path(__file__).parent.parent.parent.parent / "migrations" / "004_ambassador_protocol.sql"
+        migration_path = project_root() / "migrations" / "004_ambassador_protocol.sql"
         if not migration_path.exists():
             logger.debug("Ambassador migration file not found, skipping")
             return

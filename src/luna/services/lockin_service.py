@@ -28,6 +28,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+from luna.core.paths import user_dir
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -247,7 +249,7 @@ def main():
         db_path = Path(args.db)
     else:
         # Default: project_root/data/luna_engine.db
-        db_path = Path(__file__).parent.parent.parent.parent / "data" / "luna_engine.db"
+        db_path = user_dir() / "luna_engine.db"
 
     if not db_path.exists():
         logger.error(f"Database not found: {db_path}")

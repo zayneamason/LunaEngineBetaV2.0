@@ -98,6 +98,12 @@ class Assertion:
             passed = match is not None
             expected = f"Matches regex '{pc.pattern}'"
             actual = f"Match: {match.group()}" if match else "No match"
+        elif pc.match_type == "regex_not_match":
+            flags = 0 if pc.case_sensitive else re.IGNORECASE
+            match = re.search(pc.pattern, target_value, flags)
+            passed = match is None
+            expected = f"Does not match regex '{pc.pattern}'"
+            actual = "No match (good)" if match is None else f"Match: {match.group()}"
         elif pc.match_type == "length_gt":
             length = len(target_value)
             threshold = int(pc.pattern)
@@ -164,20 +170,20 @@ def check_virtues_loaded(ctx: InferenceContext, a: Assertion) -> AssertionResult
     )
 
 
-def check_narration_applied(ctx: InferenceContext, a: Assertion) -> AssertionResult:
-    """Check that narration was applied for FULL_DELEGATION routes."""
-    # Only required for FULL_DELEGATION
-    if ctx.route != "FULL_DELEGATION":
-        return AssertionResult(
-            id=a.id, name=a.name, passed=True, severity=a.severity,
-            expected="N/A for non-delegation",
-            actual="N/A",
-        )
+def check_voice_injection(ctx: InferenceContext, a: Assertion) -> AssertionResult:
+    """Check that Luna's voice is injected via system prompt (replaces narration check)."""
+    prompt = ctx.system_prompt or ""
+
+    has_luna_voice = "<luna_voice" in prompt or "luna_voice" in prompt.lower()
+    has_tone_hints = "tone hints" in prompt.lower() or "style mechanics" in prompt.lower()
+    has_avoid_block = "<avoid>" in prompt or "<never>" in prompt
+
+    voice_present = has_luna_voice or (has_tone_hints and has_avoid_block)
+
     return AssertionResult(
-        id=a.id, name=a.name, passed=ctx.narration_applied, severity=a.severity,
-        expected="Narration applied for FULL_DELEGATION",
-        actual="Applied" if ctx.narration_applied else "SKIPPED",
-        details="FULL_DELEGATION requires voice transformation" if not ctx.narration_applied else None,
+        id=a.id, name=a.name, passed=voice_present, severity=a.severity,
+        expected="Voice injection in system prompt (<luna_voice> block or tone directives)",
+        actual=f"luna_voice: {has_luna_voice}, tone_hints: {has_tone_hints}, avoid_block: {has_avoid_block}",
     )
 
 
@@ -429,10 +435,10 @@ def get_default_assertions() -> list[Assertion]:
             check_type="builtin", builtin_fn=check_virtues_loaded,
         ),
         Assertion(
-            id="P3", name="Narration applied",
-            description="FULL_DELEGATION responses go through voice transform",
+            id="P3", name="Voice injected",
+            description="System prompt contains Luna's voice directives (via PromptAssembler)",
             category="personality", severity="high",
-            check_type="builtin", builtin_fn=check_narration_applied,
+            check_type="builtin", builtin_fn=check_voice_injection,
         ),
 
         # Structural

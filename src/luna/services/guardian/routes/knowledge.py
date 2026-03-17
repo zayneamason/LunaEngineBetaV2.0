@@ -1,12 +1,13 @@
 """Knowledge node routes — serve knowledge JSON fixtures."""
 
 import json
-from pathlib import Path
 from fastapi import APIRouter, HTTPException
+
+from luna.core.paths import local_dir
 
 router = APIRouter()
 
-KNOWLEDGE_DIR = Path("data/guardian/knowledge_nodes")
+KNOWLEDGE_DIR = local_dir() / "guardian" / "knowledge_nodes"
 
 # Node type → filename mapping
 NODE_FILES = {

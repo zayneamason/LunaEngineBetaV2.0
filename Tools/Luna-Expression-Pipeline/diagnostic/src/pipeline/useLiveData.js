@@ -2,15 +2,45 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 const POLL_INTERVAL = 2000;
 const ENDPOINTS = {
-  status:       '/api/status',
-  health:       '/api/health',
-  context:      '/api/debug/context',
-  memoryStats:  '/api/memory/stats',
-  voice:        '/api/voice/status',
-  extraction:   '/api/extraction/stats',
-  consciousness:'/api/consciousness',
-  ring:         '/api/ring/status',
-  cache:        '/api/cache/shared-turn',
+  status:       '/status',
+  health:       '/health',
+  context:      '/debug/context',
+  memoryStats:  '/memory/stats',
+  voice:        '/voice/status',
+  extraction:   '/extraction/stats',
+  consciousness:'/consciousness',
+  ring:         '/ring/status',
+  cache:        '/cache/shared-turn',
+  qaLast:       '/qa/last',
+  qaHealth:     '/qa/health',
+  qaBugs:       '/qa/bugs',
+};
+
+export const ASSERTION_NODE_MAP = {
+  'P1': ['sysprompt'],
+  'P2': ['sysprompt'],
+  'P3': ['director'],
+  'S1': ['director', 'textout'],
+  'S2': ['director', 'textout'],
+  'S3': ['director', 'textout'],
+  'S4': ['director', 'textout'],
+  'S5': ['textout'],
+  'V1': ['director', 'scout'],
+  'F1': ['mem_ret', 'matrix_actor'],
+  'F2': ['context'],
+  'F3': ['hist_load', 'hist_mgr'],
+  'I1': ['router'],
+  'I2': ['agent_loop'],
+  'I3': ['scribe'],
+  'I4': ['cache'],
+  'I5': ['overdrive'],
+  'I6': ['reconcile'],
+  'R1': ['sysprompt', 'director'],
+  'R2': ['mem_ret', 'director'],
+  'R3': ['mem_ret'],
+  'R4': ['director'],
+  'R5': ['director'],
+  'R6': ['director'],
 };
 
 async function safeFetch(url) {
@@ -78,7 +108,7 @@ function countMemoryItems(liveData) {
 
 export function applyLiveData(nodes, liveData) {
   if (!liveData) return nodes;
-  const { status, health, context, memoryStats, voice, extraction, consciousness, ring, cache } = liveData;
+  const { status, health, context, memoryStats, voice, extraction, consciousness, ring, cache, qaLast } = liveData;
   const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
   const memoryItemCount = countMemoryItems(liveData);
   const memoryWorking = memoryItemCount > 0;
@@ -177,6 +207,29 @@ export function applyLiveData(nodes, liveData) {
   patch('persona', { status: 'warn' });
   patch('textout', { status: 'live' });
   patch('subtasks', { status: 'live' });
+
+  // QA assertion overlay
+  if (qaLast && qaLast.assertions) {
+    const nodeFailures = {};
+    for (const a of qaLast.assertions) {
+      if (a.passed) continue;
+      const nodeIds = ASSERTION_NODE_MAP[a.id] || [];
+      for (const nid of nodeIds) {
+        if (!nodeFailures[nid]) nodeFailures[nid] = [];
+        nodeFailures[nid].push(a);
+      }
+    }
+    for (const [nodeId, failures] of Object.entries(nodeFailures)) {
+      const hasCritical = failures.some(f => f.severity === 'high');
+      patch(nodeId, {
+        qaStatus: hasCritical ? 'failing' : 'warning',
+        qaFailures: failures,
+        qaDiagnosis: qaLast.diagnosis,
+      });
+    }
+  }
+
+
   return Object.values(nodeMap);
 }
 
@@ -192,4 +245,12 @@ export function applyLiveEdges(edges, liveData) {
     }
     return e;
   });
+}
+
+export async function fetchLastInference() {
+  return safeFetch('/debug/last-inference');
+}
+
+export async function fetchPromptInfo() {
+  return safeFetch('/slash/prompt');
 }

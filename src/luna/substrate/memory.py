@@ -213,6 +213,14 @@ class Turn:
 # MEMORY MATRIX
 # =============================================================================
 
+# Node types excluded from retrieval results.
+# These are metadata or echo nodes — not knowledge. They remain in the DB
+# for extraction, graph edges, and history, but never enter Luna's context window.
+RETRIEVAL_EXCLUDED_TYPES = frozenset({
+    'CONVERSATION_TURN', 'SESSION', 'THREAD', 'PARENT', 'CATEGORY',
+})
+
+
 class MemoryMatrix:
     """
     High-level memory operations layer.
@@ -609,6 +617,14 @@ class MemoryMatrix:
         conditions = ["(content LIKE ? OR summary LIKE ?)"]
         params: list = [search_pattern, search_pattern]
 
+        # Exclude noise node types from retrieval results
+        _excl_placeholders = ",".join("?" for _ in RETRIEVAL_EXCLUDED_TYPES)
+        conditions.append(f"node_type NOT IN ({_excl_placeholders})")
+        params.extend(RETRIEVAL_EXCLUDED_TYPES)
+
+        # Exclude bare entity stubs (< 20 chars content)
+        conditions.append("LENGTH(content) > 20")
+
         if node_type:
             conditions.append("node_type = ?")
             params.append(node_type)
@@ -689,6 +705,14 @@ class MemoryMatrix:
 
         conditions = ["memory_nodes_fts MATCH ?"]
         params: list = [safe_query]
+
+        # Exclude noise node types from retrieval results
+        _excl_placeholders = ",".join("?" for _ in RETRIEVAL_EXCLUDED_TYPES)
+        conditions.append(f"m.node_type NOT IN ({_excl_placeholders})")
+        params.extend(RETRIEVAL_EXCLUDED_TYPES)
+
+        # Exclude bare entity stubs (< 20 chars content)
+        conditions.append("LENGTH(m.content) > 20")
 
         if node_type:
             conditions.append("m.node_type = ?")
@@ -787,6 +811,8 @@ class MemoryMatrix:
         for node_id, similarity in similar:
             node = await self.get_node(node_id)
             if node is None:
+                continue
+            if node.node_type in RETRIEVAL_EXCLUDED_TYPES:
                 continue
             if node_type and node.node_type != node_type:
                 continue
@@ -1215,12 +1241,12 @@ class MemoryMatrix:
         Record that a node was accessed.
 
         Increments access_count, updates last_accessed timestamp,
-        and recalculates lock-in coefficient.
+        and recalculates lock-in coefficient (including network effects).
 
         Args:
             node_id: The node's unique identifier
         """
-        from .lock_in import compute_lock_in, classify_state
+        from .lock_in import compute_lock_in_for_node
 
         # First increment access count
         await self.db.execute(
@@ -1241,14 +1267,13 @@ class MemoryMatrix:
 
         if row:
             access_count, reinforcement_count = row
-            # TODO: Add network effects (locked neighbors) when graph is wired
-            lock_in = compute_lock_in(
+            lock_in, state = await compute_lock_in_for_node(
+                node_id=node_id,
                 retrieval_count=access_count,
                 reinforcement_count=reinforcement_count,
-                locked_neighbor_count=0,
-                locked_tag_sibling_count=0,
+                graph=self.graph,
+                db=self.db,
             )
-            state = classify_state(lock_in)
 
             await self.db.execute(
                 "UPDATE memory_nodes SET lock_in = ?, lock_in_state = ? WHERE id = ?",
@@ -1288,7 +1313,7 @@ class MemoryMatrix:
         Returns:
             True if node was reinforced, False if not found
         """
-        from .lock_in import compute_lock_in, classify_state
+        from .lock_in import compute_lock_in_for_node
 
         # Increment reinforcement count
         result = await self.db.execute(
@@ -1307,13 +1332,13 @@ class MemoryMatrix:
 
         if row:
             access_count, reinforcement_count = row
-            lock_in = compute_lock_in(
+            lock_in, state = await compute_lock_in_for_node(
+                node_id=node_id,
                 retrieval_count=access_count,
                 reinforcement_count=reinforcement_count,
-                locked_neighbor_count=0,
-                locked_tag_sibling_count=0,
+                graph=self.graph,
+                db=self.db,
             )
-            state = classify_state(lock_in)
 
             await self.db.execute(
                 "UPDATE memory_nodes SET lock_in = ?, lock_in_state = ? WHERE id = ?",

@@ -361,6 +361,20 @@ def qa_check_personality() -> dict:
     }
 
 
+def qa_diagnostics_summary() -> dict:
+    """
+    Get a summary of all diagnostic events (watchdog, health, API errors).
+
+    Returns counts by source and severity for the last 24 hours,
+    plus the 5 most recent critical and high-severity events.
+    """
+    v = _get_validator()
+    summary = v._db.get_event_summary(hours=24)
+    summary["recent_critical"] = v._db.get_events(severity="critical", limit=5)
+    summary["recent_high"] = v._db.get_events(severity="high", limit=5)
+    return summary
+
+
 # ═══════════════════════════════════════════════════════════
 # TOOL REGISTRATION
 # ═══════════════════════════════════════════════════════════
@@ -387,4 +401,5 @@ def get_qa_tools() -> list:
         # Diagnostics
         ("qa_diagnose_last", qa_diagnose_last),
         ("qa_check_personality", qa_check_personality),
+        ("qa_diagnostics_summary", qa_diagnostics_summary),
     ]

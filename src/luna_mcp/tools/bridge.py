@@ -22,6 +22,8 @@ from typing import Optional, List, Dict, Any
 
 import yaml
 
+from luna.core.paths import project_root as _project_root, user_dir
+
 try:
     import httpx
     HAS_HTTPX = True
@@ -31,11 +33,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Paths
-PROJECT_ROOT = Path(os.environ.get(
-    "LUNA_BASE_PATH",
-    Path(__file__).parent.parent.parent.parent.resolve()
-))
-CACHE_DIR = PROJECT_ROOT / "data" / "cache"
+PROJECT_ROOT = _project_root()
+CACHE_DIR = user_dir() / "cache"
 TASK_QUEUE_PATH = CACHE_DIR / "task_queue.yaml"
 HANDOFF_SNAPSHOT_PATH = CACHE_DIR / "handoff_snapshot.yaml"
 SHARED_TURN_PATH = CACHE_DIR / "shared_turn.yaml"

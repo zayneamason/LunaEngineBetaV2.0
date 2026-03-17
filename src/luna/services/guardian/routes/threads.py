@@ -1,29 +1,35 @@
 """Thread routes — serve conversation JSON fixtures."""
 
 import json
-from pathlib import Path
 from fastapi import APIRouter, HTTPException
+
+from luna.core.paths import local_dir
 
 router = APIRouter()
 
-THREADS_DIR = Path("data/guardian/conversations")
+THREADS_DIR = local_dir() / "guardian" / "conversations"
 
-# Thread slug → filename mapping
-THREAD_MAP = {
-    "amara": "amara_thread.json",
-    "musoke": "musoke_thread.json",
-    "wasswa": "wasswa_thread.json",
-    "elder": "elder_thread.json",
-}
+
+def _discover_thread_map() -> dict[str, str]:
+    """Build thread slug -> filename mapping from directory listing."""
+    if not THREADS_DIR.exists():
+        return {}
+    mapping = {}
+    for path in sorted(THREADS_DIR.glob("*_thread.json")):
+        # Derive slug from filename: "amara_thread.json" -> "amara"
+        slug = path.stem.replace("_thread", "")
+        mapping[slug] = path.name
+    return mapping
 
 
 @router.get("/threads")
 async def list_threads():
     """List available threads."""
+    thread_map = _discover_thread_map()
     return {
         "threads": [
             {"id": slug, "name": slug.title()}
-            for slug in THREAD_MAP.keys()
+            for slug in thread_map.keys()
         ]
     }
 
@@ -31,7 +37,8 @@ async def list_threads():
 @router.get("/threads/{thread_id}")
 async def get_thread(thread_id: str):
     """Get thread messages by ID."""
-    filename = THREAD_MAP.get(thread_id)
+    thread_map = _discover_thread_map()
+    filename = thread_map.get(thread_id)
     if not filename:
         raise HTTPException(status_code=404, detail=f"Thread not found: {thread_id}")
 

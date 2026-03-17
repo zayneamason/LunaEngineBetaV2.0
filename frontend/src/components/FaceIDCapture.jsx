@@ -242,6 +242,15 @@ const FaceIDCapture = ({
           >
             ✕
           </button>
+          {captureState === 'scanning' && (
+            <button
+              onClick={() => { onStop(); onBypass(); }}
+              className="px-2 py-1 text-[10px] rounded border border-emerald-500/20 text-emerald-400/60 hover:text-emerald-400 hover:border-emerald-500/40 transition-all"
+              title="Bypass FaceID"
+            >
+              Pass
+            </button>
+          )}
         </div>
       )}
 
@@ -253,21 +262,43 @@ const FaceIDCapture = ({
       )}
 
       {captureState === 'denied' && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400/80">
-          <CameraIcon />
-          <span>Camera denied</span>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400/80">
+            <CameraIcon />
+            <span>Camera denied</span>
+          </div>
+          <button
+            onClick={onBypass}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border transition-all
+              bg-kozmo-bg border-kozmo-border text-kozmo-muted hover:border-emerald-500/30 hover:text-emerald-400/80"
+            title="Bypass FaceID — grant admin access without camera"
+          >
+            <BypassIcon />
+            <span>Pass</span>
+          </button>
         </div>
       )}
 
       {captureState === 'failed' && (
-        <button
-          onClick={onStart}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border transition-all
-            border-amber-500/30 text-amber-400/80 hover:border-amber-500/50"
-        >
-          <CameraIcon />
-          <span>Retry</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onStart}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border transition-all
+              border-amber-500/30 text-amber-400/80 hover:border-amber-500/50"
+          >
+            <CameraIcon />
+            <span>Retry</span>
+          </button>
+          <button
+            onClick={onBypass}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border transition-all
+              bg-kozmo-bg border-kozmo-border text-kozmo-muted hover:border-emerald-500/30 hover:text-emerald-400/80"
+            title="Bypass FaceID — grant admin access without camera"
+          >
+            <BypassIcon />
+            <span>Pass</span>
+          </button>
+        </div>
       )}
     </div>
   );

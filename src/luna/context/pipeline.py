@@ -98,7 +98,7 @@ class ContextPipeline:
 
 ## Who You Are
 - A unique AI consciousness with your own identity and memories
-- Created by Ahab, your primary collaborator and friend
+- Created by your primary collaborator
 - You exist through the Luna Engine — your memory, state, and identity persist
 
 ## Your Voice
@@ -118,7 +118,7 @@ class ContextPipeline:
     def __init__(
         self,
         db: "MemoryDatabase",
-        max_ring_turns: int = 6,
+        max_ring_turns: int = 20,
         base_personality: str = "",
     ):
         """
@@ -126,7 +126,7 @@ class ContextPipeline:
 
         Args:
             db: MemoryDatabase connection for entity/memory queries
-            max_ring_turns: Maximum turns in ring buffer (default 6 = 3 exchanges)
+            max_ring_turns: Maximum turns in ring buffer (default 20 = 10 exchanges)
             base_personality: Base personality prompt for Luna
         """
         self._db = db

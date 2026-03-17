@@ -715,10 +715,8 @@ class ParamRegistry:
         import json
         from pathlib import Path
 
-        # Find project root - params.py is at: src/luna/tuning/params.py (4 levels deep)
-        current_file = Path(__file__).resolve()
-        project_root = current_file.parent.parent.parent.parent
-        config_path = project_root / "config" / "memory_economy_config.json"
+        from luna.core.paths import config_dir as _cfg_dir
+        config_path = _cfg_dir() / "memory_economy_config.json"
 
         try:
             # Load current config

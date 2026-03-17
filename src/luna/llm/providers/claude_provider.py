@@ -16,10 +16,15 @@ from ..config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Model info
+# Model info (updated March 2026 — current Claude 4.x models)
 CLAUDE_MODELS = {
-    "claude-3-haiku-20240307": ModelInfo("claude-3-haiku-20240307", 200000, True),
+    # Claude 4.x (current)
+    "claude-haiku-4-5-20251001": ModelInfo("claude-haiku-4-5-20251001", 200000, True),
+    "claude-sonnet-4-6": ModelInfo("claude-sonnet-4-6", 200000, True),
+    "claude-opus-4-6": ModelInfo("claude-opus-4-6", 200000, True),
+    # Claude 3.x (legacy)
     "claude-3-5-sonnet-20241022": ModelInfo("claude-3-5-sonnet-20241022", 200000, True),
+    "claude-3-haiku-20240307": ModelInfo("claude-3-haiku-20240307", 200000, True),
     "claude-3-opus-20240229": ModelInfo("claude-3-opus-20240229", 200000, True),
 }
 
@@ -68,7 +73,7 @@ class ClaudeProvider:
             config = get_config()
             pconfig = config.get_provider_config("claude")
             model = pconfig.default_model if pconfig else "claude-3-haiku-20240307"
-        return CLAUDE_MODELS.get(model, CLAUDE_MODELS["claude-3-haiku-20240307"])
+        return CLAUDE_MODELS.get(model, CLAUDE_MODELS["claude-haiku-4-5-20251001"])
 
     def list_models(self) -> list[str]:
         """List available models."""

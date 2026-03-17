@@ -1,12 +1,13 @@
 """Entity routes — serve entity JSON fixtures."""
 
 import json
-from pathlib import Path
 from fastapi import APIRouter, HTTPException
+
+from luna.core.paths import local_dir
 
 router = APIRouter()
 
-ENTITIES_DIR = Path("data/guardian/entities")
+ENTITIES_DIR = local_dir() / "guardian" / "entities"
 
 
 @router.get("/entities")

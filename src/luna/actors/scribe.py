@@ -51,6 +51,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ── First-Run Confidence Boost (configurable) ───────────────────────────────
+EARLY_RELATIONSHIP_TURN_THRESHOLD = 50
+EARLY_CONFIDENCE_BOOST = 0.15
+EARLY_OWNER_CONFIDENCE_BOOST = 0.10
+
 
 # =============================================================================
 # EXTRACTION PROMPT
@@ -180,6 +185,9 @@ class ScribeActor(Actor):
 
         # Source tracking for cache actor
         self._current_source: str = "unknown"  # Set per-turn from message payload
+
+        # Auto-quest cooldown (Phase 4a)
+        self._last_auto_quest_at: float = 0.0
 
         logger.info(f"Scribe (Ben) initialized with backend: {self.config.backend}")
 
@@ -333,6 +341,9 @@ class ScribeActor(Actor):
             # empty extractions — so thread management receives the signal.
             if not extraction.is_empty() or extraction.flow_signal is not None:
                 await self._send_to_librarian(extraction)
+
+            # Phase 4a: auto-quest for study context updates
+            await self._maybe_create_study_quest(extraction)
 
             # Send entity updates
             for update in entity_updates:
@@ -508,6 +519,9 @@ class ScribeActor(Actor):
                     f"Ben: Extracted {len(extraction.objects)} objects, "
                     f"{len(extraction.edges)} edges"
                 )
+
+        # Phase 4a: auto-quest for study context updates
+        await self._maybe_create_study_quest(extraction)
 
         # Send entity updates to Librarian
         if entity_updates:
@@ -738,17 +752,25 @@ class ScribeActor(Actor):
         model = backend_config.get("model", "claude-haiku-4-5-20251001")
 
         try:
-            response = self.client.messages.create(
-                model=model,
-                max_tokens=self.config.max_tokens,
-                temperature=self.config.temperature,
-                system=EXTRACTION_SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Extract knowledge from this conversation:\n\n{text}",
-                    }
-                ],
+            # Run sync Anthropic call in executor to avoid blocking the event loop.
+            # The scribe's actor loop runs as an asyncio task — a sync HTTP call
+            # here would deadlock the entire event loop.
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.messages.create(
+                    model=model,
+                    max_tokens=self.config.max_tokens,
+                    temperature=self.config.temperature,
+                    system=EXTRACTION_SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"Extract knowledge from this conversation:\n\n{text}",
+                        }
+                    ],
+                ),
             )
 
             # Parse response
@@ -1067,8 +1089,32 @@ class ScribeActor(Actor):
     # LIBRARIAN INTEGRATION
     # =========================================================================
 
+    async def _is_early_relationship(self) -> bool:
+        """True if < EARLY_RELATIONSHIP_TURN_THRESHOLD conversation turns."""
+        if not self.engine:
+            return False
+        try:
+            matrix = self.engine.actors.get("matrix")
+            if matrix and matrix._matrix:
+                count = await matrix._matrix.db.fetchone(
+                    "SELECT COUNT(*) FROM conversation_turns"
+                )
+                return (count[0] if count else 0) < EARLY_RELATIONSHIP_TURN_THRESHOLD
+        except Exception:
+            return False
+
     async def _send_to_librarian(self, extraction: ExtractionOutput) -> None:
         """Send extraction to Librarian for filing."""
+        # Boost confidence for early conversations (first ~10-15 conversations)
+        if await self._is_early_relationship():
+            from luna.core.owner import get_owner
+            owner_name = (get_owner().display_name or "").lower()
+            for obj in extraction.objects:
+                if obj.type in ("FACT", "PREFERENCE", "MEMORY"):
+                    obj.confidence = min(1.0, obj.confidence + EARLY_CONFIDENCE_BOOST)
+                if owner_name and owner_name in obj.content.lower():
+                    obj.confidence = min(1.0, obj.confidence + EARLY_OWNER_CONFIDENCE_BOOST)
+
         if self.engine:
             librarian = self.engine.get_actor("librarian")
             if librarian:
@@ -1096,6 +1142,97 @@ class ScribeActor(Actor):
                 logger.warning("Ben: Librarian not available, entity update not filed")
         else:
             logger.warning("Ben: No engine reference, can't send entity update to Librarian")
+
+    # =========================================================================
+    # STUDY CONTEXT QUEST GENERATION (Phase 4a)
+    # =========================================================================
+
+    async def _maybe_create_study_quest(self, extraction) -> None:
+        """
+        If extraction contains qualifying objects (DECISION/FACT, high-confidence)
+        and the active project has auto_quest enabled, create a study_update quest.
+        """
+        if extraction.is_empty() or not self.engine:
+            return
+
+        project_slug = getattr(self.engine, 'active_project', None)
+        if not project_slug:
+            return
+
+        # Quick check: any DECISION or FACT objects?
+        from luna.extraction.types import ExtractionType
+        quick_types = {ExtractionType.DECISION, ExtractionType.FACT}
+        if not any(obj.type in quick_types and obj.confidence >= 0.7 for obj in extraction.objects):
+            return
+
+        try:
+            from luna.context.study_context import load_raw_config
+            config = load_raw_config(project_slug)
+            if not config:
+                return
+
+            auto_quest = config.get("study_context", {}).get("auto_quest", {})
+            if not auto_quest.get("enabled", False):
+                return
+
+            # Parse trigger config
+            trigger_type_names = auto_quest.get("trigger_types", ["DECISION", "FACT"])
+            trigger_set = set()
+            for t in trigger_type_names:
+                try:
+                    trigger_set.add(ExtractionType(t))
+                except ValueError:
+                    pass
+
+            min_confidence = auto_quest.get("min_confidence", 0.7)
+            qualifying = [
+                obj for obj in extraction.objects
+                if obj.type in trigger_set and obj.confidence >= min_confidence
+            ]
+            if not qualifying:
+                return
+
+            # Cooldown check
+            import time
+            cooldown_minutes = auto_quest.get("cooldown_minutes", 30)
+            now = time.time()
+            if (now - self._last_auto_quest_at) < (cooldown_minutes * 60):
+                logger.debug(f"Ben: Auto-quest cooldown active ({cooldown_minutes}m)")
+                return
+
+            # Create quest
+            from luna_mcp.observatory.tools import tool_observatory_quest_create
+
+            content_lines = [f"- [{obj.type.value}] {obj.content}" for obj in qualifying]
+            quest_type = auto_quest.get("quest_type", "contract")
+
+            result = await tool_observatory_quest_create(
+                title=f"Study update: {len(qualifying)} new extractions",
+                objective=(
+                    f"New high-confidence extractions for project '{project_slug}' "
+                    f"may warrant a study context update.\n\n"
+                    + "\n".join(content_lines)
+                ),
+                quest_type=quest_type,
+                priority="medium",
+                subtitle="Auto-generated from extraction pipeline",
+                source="study_update",
+                journal_prompt=(
+                    "Which of these extractions should be added to the study context? "
+                    "What section should they go in? Are any already covered?"
+                ),
+                project=project_slug,
+            )
+
+            if result.get("quest_id"):
+                self._last_auto_quest_at = now
+                logger.info(
+                    f"Ben: Created study_update quest {result['quest_id']} "
+                    f"for '{project_slug}' ({len(qualifying)} extractions)"
+                )
+
+        except Exception as e:
+            logger.debug(f"Ben: Auto-quest creation failed: {e}")
 
     # =========================================================================
     # STATS & LIFECYCLE
@@ -1171,7 +1308,6 @@ Compressed:"""
                         result = await local.generate(
                             compression_prompt,
                             max_tokens=80,
-                            temperature=0.3
                         )
                         compressed = result.text.strip()
                         logger.debug(f"Ben: Compressed turn locally ({len(content)} -> {len(compressed)} chars)")
@@ -1181,11 +1317,16 @@ Compressed:"""
             if self.config.backend != "disabled" and self.client:
                 backend_config = EXTRACTION_BACKENDS.get(self.config.backend, {})
                 model = backend_config.get("model", "claude-haiku-4-5-20251001")
-                response = self.client.messages.create(
-                    model=model,
-                    max_tokens=80,
-                    temperature=0.3,
-                    messages=[{"role": "user", "content": compression_prompt}]
+                import asyncio
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.messages.create(
+                        model=model,
+                        max_tokens=80,
+                        temperature=0.3,
+                        messages=[{"role": "user", "content": compression_prompt}]
+                    ),
                 )
                 compressed = response.content[0].text.strip()
                 logger.debug(f"Ben: Compressed turn via {model} ({len(content)} -> {len(compressed)} chars)")

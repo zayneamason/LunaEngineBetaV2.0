@@ -33,11 +33,15 @@ LoRA Adapter:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncGenerator, Callable, Optional
+
+from luna.core.gpu_lock import gpu_lock
+from luna.core.paths import project_root
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +50,7 @@ DEFAULT_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 FALLBACK_MODEL = "mlx-community/Qwen2.5-3B-Instruct-4bit"
 
 # Local model paths (preferred over downloading from HuggingFace)
-_MODELS_DIR = Path(__file__).parent.parent.parent.parent / "models"
+_MODELS_DIR = project_root() / "models"
 LOCAL_MODEL_PATH = _MODELS_DIR / "Qwen2.5-3B-Instruct-MLX-4bit"
 
 # Luna LoRA adapter path (trained personality) - MLX format
@@ -72,6 +76,31 @@ class InferenceConfig:
 
     # LoRA adapter path (Luna's personality layer)
     adapter_path: Optional[Path] = None
+
+    @classmethod
+    def from_config(cls, config_path: str = "config/local_inference.json") -> "InferenceConfig":
+        """Load config from local_inference.json, falling back to defaults."""
+        path = Path(config_path)
+        if path.exists():
+            try:
+                cfg = json.loads(path.read_text())
+                model = cfg.get("model", {})
+                gen = cfg.get("generation", {})
+                perf = cfg.get("performance", {})
+                return cls(
+                    model_id=model.get("model_id", DEFAULT_MODEL),
+                    use_4bit=model.get("use_4bit", True),
+                    cache_prompt=model.get("cache_prompt", True),
+                    adapter_path=Path(model["adapter_path"]) if model.get("adapter_path") else None,
+                    max_tokens=gen.get("max_tokens", 512),
+                    temperature=gen.get("temperature", 0.7),
+                    top_p=gen.get("top_p", 0.9),
+                    repetition_penalty=gen.get("repetition_penalty", 1.1),
+                    hot_path_timeout_ms=perf.get("hot_path_timeout_ms", 200),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to load local inference config: {e}")
+        return cls()
 
 
 @dataclass
@@ -297,17 +326,18 @@ class LocalInference:
             context_size=50  # Look back 50 tokens for repetition
         )
 
-        response = await loop.run_in_executor(
-            None,
-            lambda: generate(
-                self._model,
-                self._tokenizer,
-                prompt=prompt,
-                max_tokens=max_toks,
-                sampler=sampler,
-                logits_processors=[rep_penalty],
-            )
-        )
+        def _locked_generate():
+            with gpu_lock:
+                return generate(
+                    self._model,
+                    self._tokenizer,
+                    prompt=prompt,
+                    max_tokens=max_toks,
+                    sampler=sampler,
+                    logits_processors=[rep_penalty],
+                )
+
+        response = await loop.run_in_executor(None, _locked_generate)
 
         latency_ms = (time.perf_counter() - start) * 1000
 
@@ -367,40 +397,41 @@ class LocalInference:
 
         def generate_tokens():
             """Run generation in thread and push tokens to queue."""
-            try:
-                # Create sampler
-                from mlx_lm.sample_utils import make_sampler, make_repetition_penalty
-                sampler = make_sampler(
-                    temp=self.config.temperature,
-                    top_p=self.config.top_p,
-                )
+            with gpu_lock:
+                try:
+                    # Create sampler
+                    from mlx_lm.sample_utils import make_sampler, make_repetition_penalty
+                    sampler = make_sampler(
+                        temp=self.config.temperature,
+                        top_p=self.config.top_p,
+                    )
 
-                # Create repetition penalty processor to prevent loops
-                rep_penalty = make_repetition_penalty(
-                    penalty=self.config.repetition_penalty,
-                    context_size=50  # Look back 50 tokens for repetition
-                )
+                    # Create repetition penalty processor to prevent loops
+                    rep_penalty = make_repetition_penalty(
+                        penalty=self.config.repetition_penalty,
+                        context_size=50  # Look back 50 tokens for repetition
+                    )
 
-                for response in stream_generate(
-                    self._model,
-                    self._tokenizer,
-                    prompt=prompt,
-                    max_tokens=max_toks,
-                    sampler=sampler,
-                    logits_processors=[rep_penalty],
-                ):
-                    token = response.text
-                    # Put token in queue (thread-safe)
+                    for response in stream_generate(
+                        self._model,
+                        self._tokenizer,
+                        prompt=prompt,
+                        max_tokens=max_toks,
+                        sampler=sampler,
+                        logits_processors=[rep_penalty],
+                    ):
+                        token = response.text
+                        # Put token in queue (thread-safe)
+                        asyncio.run_coroutine_threadsafe(
+                            token_queue.put(token),
+                            loop
+                        )
+                finally:
+                    # Signal completion
                     asyncio.run_coroutine_threadsafe(
-                        token_queue.put(token),
+                        token_queue.put(None),
                         loop
                     )
-            finally:
-                # Signal completion
-                asyncio.run_coroutine_threadsafe(
-                    token_queue.put(None),
-                    loop
-                )
 
         # Start generation in background thread
         import concurrent.futures

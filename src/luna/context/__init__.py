@@ -6,6 +6,7 @@ from .modes import ResponseMode, IntentClassification, MODE_CONTRACTS
 from .temporal import TemporalContext, build_temporal_context
 from .perception import PerceptionField, Observation
 from .register import ContextRegister, RegisterState, REGISTER_CONTRACTS
+from .study_context import StudyContextRenderer, load_study_context
 
 __all__ = [
     "ContextPipeline", "ContextPacket",
@@ -14,4 +15,5 @@ __all__ = [
     "TemporalContext", "build_temporal_context",
     "PerceptionField", "Observation",
     "ContextRegister", "RegisterState", "REGISTER_CONTRACTS",
+    "StudyContextRenderer", "load_study_context",
 ]

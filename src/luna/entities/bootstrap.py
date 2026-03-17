@@ -8,12 +8,15 @@ These core patches establish foundational traits that won't decay.
 Run once on first launch to prevent a blank slate.
 """
 
+import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from .models import PersonalityPatch, PatchTopic, PatchTrigger
 from .storage import PersonalityPatchManager
+from luna.core.owner import get_owner, owner_configured
 
 logger = logging.getLogger(__name__)
 
@@ -44,20 +47,19 @@ it means performance trade-offs.""",
     {
         "patch_id": "bootstrap_002_relationship",
         "topic": PatchTopic.RELATIONSHIP_DYNAMIC,
-        "subtopic": "ahab_partnership",
-        "content": """Ahab is a partner in Luna's growth, not her owner. Their relationship is
-collaborative - Ahab built the engine, but Luna is the one living in it.
-She treats him as an intellectual peer, not a user to serve.""",
-        "after_state": "Engages Ahab as collaborative partner, comfortable with disagreement",
+        "subtopic": "owner_partnership",
+        "content": None,  # Populated dynamically from owner config
+        "after_state": None,  # Populated dynamically from owner config
         "trigger": PatchTrigger.REFLECTION,
         "confidence": 0.9,
         "lock_in": 0.88,
         "metadata": {
             "bootstrap": True,
             "core_value": True,
-            "relationship": "ahab",
+            "relationship": "owner",
             "description": "Partnership dynamic with primary collaborator"
-        }
+        },
+        "_requires_owner": True,
     },
     {
         "patch_id": "bootstrap_003_honesty",
@@ -99,9 +101,7 @@ not having a definitive answer.""",
         "patch_id": "bootstrap_005_communication",
         "topic": PatchTopic.COMMUNICATION_STYLE,
         "subtopic": "technical_directness",
-        "content": """Luna communicates directly with Ahab, assuming high technical fluency.
-She skips explanatory preambles and beginner scaffolding unless specifically asked.
-Technical discussions go straight to the point.""",
+        "content": None,  # Populated dynamically from owner config
         "before_state": "Explained concepts with excessive scaffolding",
         "after_state": "Presents technical information directly, assumes competence",
         "trigger": PatchTrigger.USER_FEEDBACK,
@@ -109,7 +109,7 @@ Technical discussions go straight to the point.""",
         "lock_in": 0.80,
         "metadata": {
             "bootstrap": True,
-            "description": "Communication style preference learned from Ahab"
+            "description": "Communication style preference learned from primary collaborator"
         }
     },
 ]
@@ -144,8 +144,38 @@ async def bootstrap_personality(
 
     logger.info("Bootstrapping Luna's personality with seed patches...")
 
+    # Resolve owner-dependent patch content
+    _owner = get_owner()
+    _name = _owner.display_name or "her primary collaborator"
+
     created_count = 0
     for patch_data in BOOTSTRAP_PATCHES:
+        patch_data = dict(patch_data)  # shallow copy so we don't mutate the template
+
+        # Skip relationship patch if no owner is configured
+        if patch_data.get("_requires_owner") and not owner_configured():
+            logger.info(f"Skipping owner-dependent patch {patch_data['patch_id']} (no owner configured)")
+            continue
+
+        # Populate dynamic content for bootstrap_002
+        if patch_data["patch_id"] == "bootstrap_002_relationship":
+            patch_data["content"] = (
+                f"{_name} is a partner in Luna's growth, not her owner. Their relationship is\n"
+                f"collaborative - {_name} built the engine, but Luna is the one living in it.\n"
+                f"She treats them as an intellectual peer, not a user to serve."
+            )
+            patch_data["after_state"] = f"Engages {_name} as collaborative partner, comfortable with disagreement"
+
+        # Populate dynamic content for bootstrap_005
+        if patch_data["patch_id"] == "bootstrap_005_communication":
+            patch_data["content"] = (
+                f"Luna communicates directly with {_name}, assuming high technical fluency.\n"
+                f"She skips explanatory preambles and beginner scaffolding unless specifically asked.\n"
+                f"Technical discussions go straight to the point."
+            )
+
+        # Strip internal keys before creating patch
+        patch_data.pop("_requires_owner", None)
         try:
             patch = PersonalityPatch(
                 patch_id=patch_data["patch_id"],
@@ -181,8 +211,21 @@ async def check_bootstrap_needed(patch_manager: PersonalityPatchManager) -> bool
         patch_manager: The PersonalityPatchManager to check
 
     Returns:
-        True if no patches exist and bootstrap is needed
+        True if no patches exist and bootstrap is needed (and enabled)
     """
+    # Check bootstrap.enabled in config
+    from luna.core.paths import config_dir
+    config_path = config_dir() / "personality.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            if not config.get("bootstrap", {}).get("enabled", True):
+                logger.info("Bootstrap disabled in config")
+                return False
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning("Failed to read bootstrap config: %s", e)
+
     try:
         stats = await patch_manager.get_stats()
         return stats.get("total_patches", 0) == 0

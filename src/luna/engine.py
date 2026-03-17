@@ -27,6 +27,7 @@ from luna.core.events import InputEvent, EventType, EventPriority
 from luna.core.input_buffer import InputBuffer
 from luna.core.state import EngineState
 from luna.core.context import RevolvingContext, ContextSource, ContextItem, ContextRing
+from luna.core.paths import project_root, config_dir, data_dir, scripts_dir, user_dir
 from luna.actors.base import Actor, Message
 from luna.actors.director import DirectorActor
 from luna.actors.matrix import MatrixActor
@@ -59,7 +60,7 @@ class EngineConfig:
     stale_threshold_seconds: float = 5.0
 
     # Paths - Use project data directory (synced with substrate/database.py)
-    data_dir: Path = field(default_factory=lambda: Path(__file__).parent.parent.parent / "data")
+    data_dir: Path = field(default_factory=data_dir)
     snapshot_path: Optional[Path] = None
 
     # Local inference
@@ -90,6 +91,9 @@ class EngineMetrics:
     events_processed: int = 0
     messages_generated: int = 0
     errors: int = 0
+
+    # Extraction pipeline metrics
+    extraction_triggers: int = 0  # Times _trigger_extraction was called for user turns
 
     # Agentic metrics
     agentic_tasks_started: int = 0
@@ -175,10 +179,14 @@ class LunaEngine:
         # Expression config (loaded from personality.json)
         self._expression_config: Dict = self._load_expression_config()
 
+        # Intent Layer: DirectiveEngine (initialized in _boot)
+        self.directive_engine: Optional[Any] = None
+        self._directive_context: list[dict] = []  # Fired results for session context
+
     def _load_expression_config(self) -> Dict:
         """Load expression config from personality.json."""
         import json
-        config_path = Path(__file__).parent.parent.parent / "config" / "personality.json"
+        config_path = config_dir() / "personality.json"
         try:
             with open(config_path) as f:
                 config = json.load(f)
@@ -285,8 +293,10 @@ Emojis can accompany gestures or stand alone.
             logger.info("Engine cancelled")
 
         except Exception as e:
-            logger.error(f"Engine crashed: {e}")
-            raise
+            logger.error(f"Engine error: {e}", exc_info=True)
+            # Don't re-raise — let _shutdown() run cleanly.
+            # The server lifespan will detect the engine task completed and
+            # can decide whether to restart or exit.
 
         finally:
             await self._shutdown()
@@ -379,9 +389,9 @@ Emojis can accompany gestures or stand alone.
         # 1/4 AiBrarianEngine — universal document database layer
         try:
             from luna.substrate.aibrarian_engine import AiBrarianEngine
-            _project = Path(__file__).parent.parent.parent
+            _project = project_root()
             self.aibrarian = AiBrarianEngine(
-                _project / "config" / "aibrarian_registry.yaml",
+                config_dir() / "aibrarian_registry.yaml",
                 project_root=_project,
             )
             await self.aibrarian.initialize()
@@ -399,6 +409,8 @@ Emojis can accompany gestures or stand alone.
             if _mem_db is not None:
                 self.collection_lock_in = CollectionLockInEngine(_mem_db)
                 await self.collection_lock_in.ensure_table()
+                # Bootstrap luna_system so it's always in the search chain
+                await self.collection_lock_in.ensure_tracked("luna_system", pattern="emergent")
                 if self.aibrarian is not None:
                     self.aibrarian.set_lock_in_engine(self.collection_lock_in)
                 logger.info("CollectionLockInEngine owned by Engine — injected into AiBrarian")
@@ -452,6 +464,9 @@ Emojis can accompany gestures or stand alone.
 
         # Memory hygiene: run maintenance sweep if overdue (>7 days)
         await self._maybe_run_hygiene_sweep()
+
+        # Intent Layer: DirectiveEngine (armed quests that fire on events)
+        await self._init_directive_engine()
 
         logger.info("Boot sequence complete")
 
@@ -539,12 +554,103 @@ Emojis can accompany gestures or stand alone.
             logger.error(f"Failed to initialize voice system: {e}")
             self._voice = None
 
+    async def _init_directive_engine(self) -> None:
+        """Initialize the Intent Layer directive engine."""
+        try:
+            from luna.agentic.directives import DirectiveEngine
+
+            matrix_actor = self.get_actor("matrix")
+            db_path = getattr(matrix_actor, "db_path", None)
+            if db_path is None:
+                db_path = user_dir() / "luna_engine.db"
+
+            self.directive_engine = DirectiveEngine(Path(db_path))
+
+            # Seed from YAML on first run (idempotent — skips existing)
+            yaml_path = config_dir() / "directives_seed.yaml"
+            if yaml_path.exists():
+                result = await self.directive_engine.seed_from_yaml(yaml_path)
+                if result["directives"] or result["skills"]:
+                    logger.info(f"Seeded directives: {result}")
+
+            # Re-arm any fired directives from last session
+            rearmed = await self.directive_engine.rearm_fired()
+            if rearmed:
+                logger.info(f"Re-armed {rearmed} fired directives")
+
+            # Load armed directives
+            count = await self.directive_engine.load_armed()
+            logger.info(f"DirectiveEngine initialized — {count} armed directives")
+
+            # Evaluate session_start triggers
+            await self._evaluate_session_start_directives()
+
+        except Exception as e:
+            self.directive_engine = None
+            logger.warning(f"DirectiveEngine initialization failed (non-fatal): {e}")
+
+    async def _evaluate_session_start_directives(self) -> None:
+        """Fire session_start directives at boot."""
+        if not self.directive_engine:
+            return
+        try:
+            matches = await self.directive_engine.evaluate_event(
+                "session_start", {}
+            )
+            for d in matches:
+                if d.get("trust_tier") == "auto":
+                    result = await self.directive_engine.fire(d, self)
+                    self._directive_context.append(result)
+                    logger.info(f"Auto-fired directive: {d.get('title', d['id'])}")
+                else:
+                    logger.info(f"Directive pending confirmation: {d.get('title', d['id'])}")
+        except Exception as e:
+            logger.error(f"Session start directive evaluation error: {e}")
+
+    async def evaluate_post_extraction_directives(
+        self, user_message: str, entities: list[str], thread_resumed: bool = False,
+        thread_info: Optional[dict] = None,
+    ) -> list[dict]:
+        """
+        Evaluate keyword, entity_mention, and thread_resume directives
+        after an extraction completes. Called from Librarian or engine.
+        """
+        if not self.directive_engine:
+            return []
+
+        results = []
+        events = []
+
+        if user_message:
+            events.append(("keyword", {"message": user_message}))
+        if entities:
+            events.append(("entity_mention", {"entities": entities}))
+        if thread_resumed and thread_info:
+            events.append(("thread_resume", {"thread": thread_info}))
+
+        for event_type, ctx in events:
+            try:
+                matches = await self.directive_engine.evaluate_event(event_type, ctx)
+                for d in matches:
+                    if d.get("trust_tier") == "auto":
+                        result = await self.directive_engine.fire(d, self)
+                        self._directive_context.append(result)
+                        results.append(result)
+                    else:
+                        logger.info(
+                            f"Directive pending confirmation: {d.get('title', d['id'])}"
+                        )
+            except Exception as e:
+                logger.error(f"Post-extraction directive error ({event_type}): {e}")
+
+        return results
+
     async def _maybe_run_hygiene_sweep(self) -> None:
         """Run maintenance sweep + entity review quest if >7 days since last."""
         import json as _json
         from datetime import timezone
 
-        state_path = Path("data/hygiene_sweep_state.json")
+        state_path = user_dir() / "hygiene_sweep_state.json"
         now = datetime.now(timezone.utc)
         seven_days = 7 * 24 * 3600
 
@@ -612,11 +718,11 @@ Emojis can accompany gestures or stand alone.
         try:
             # Get database access through Matrix actor
             matrix = self.get_actor("matrix")
-            if not matrix or not hasattr(matrix, "_memory") or not matrix._memory:
+            if not matrix or not hasattr(matrix, "_matrix") or not matrix._matrix:
                 logger.warning("[SEEDS] Matrix not initialized, skipping entity seed auto-load")
                 return
 
-            db = matrix._memory.db
+            db = matrix._matrix.db
 
             # Check if Luna entity exists
             result = await db.fetchone(
@@ -633,14 +739,22 @@ Emojis can accompany gestures or stand alone.
             # Import and run seed loader
             from pathlib import Path
             try:
-                # Try to import from scripts/migrations
-                import sys
-                project_root = Path(__file__).parent.parent.parent
-                sys.path.insert(0, str(project_root / "scripts"))
+                # Load EntitySeedLoader — use importlib for compiled build compatibility
+                _root = project_root()
+                try:
+                    import importlib.util
+                    _loader_path = scripts_dir() / "migrations" / "load_entity_seeds.py"
+                    _spec = importlib.util.spec_from_file_location("load_entity_seeds", str(_loader_path))
+                    _mod = importlib.util.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    EntitySeedLoader = _mod.EntitySeedLoader
+                except Exception:
+                    # Fallback: dev environment where scripts/ is on sys.path
+                    import sys
+                    sys.path.insert(0, str(scripts_dir()))
+                    from migrations.load_entity_seeds import EntitySeedLoader
 
-                from migrations.load_entity_seeds import EntitySeedLoader
-
-                entities_dir = project_root / "entities"
+                entities_dir = _root / "entities"
                 if not entities_dir.exists():
                     logger.warning(f"[SEEDS] Entities directory not found: {entities_dir}")
                     return
@@ -1158,6 +1272,15 @@ Emojis can accompany gestures or stand alone.
             except Exception as e:
                 logger.error(f"Matrix storage error for {role} turn: {e}")
 
+        # 4. Evaluate keyword directives on user turns (Intent Layer)
+        if role == "user" and self.directive_engine:
+            try:
+                await self.evaluate_post_extraction_directives(
+                    user_message=content, entities=[]
+                )
+            except Exception as e:
+                logger.error(f"Directive evaluation error: {e}")
+
         logger.debug(f"📝 Recorded {source} turn: {role} ({len(content)} chars)")
 
     async def _trigger_extraction(self, role: str, content: str, source: str = "text") -> None:
@@ -1181,6 +1304,18 @@ Emojis can accompany gestures or stand alone.
                 },
             )
             await scribe.mailbox.put(msg)
+            if role == "user":
+                self.metrics.extraction_triggers += 1
+                # Pipeline staleness check: warn if many user turns sent but
+                # zero extractions completed (Scribe may be stuck or erroring)
+                scribe_stats = scribe.get_stats()
+                triggers = self.metrics.extraction_triggers
+                extractions = scribe_stats.get("extractions_count", 0)
+                if triggers >= 5 and extractions == 0:
+                    logger.warning(
+                        f"PIPELINE STALE: {triggers} user turns triggered but "
+                        f"0 extractions completed — Scribe may be stuck or erroring"
+                    )
             print(f"📝 Extraction triggered for {role} turn ({len(content)} chars)")
         else:
             print(f"📝 Extraction skipped: scribe={scribe is not None}, content_len={len(content)}")
@@ -1611,6 +1746,69 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
 
         return "\n".join(sections) + "\n"
 
+    def _build_directive_context(self) -> str:
+        """Build context from fired directive results (Intent Layer)."""
+        if not self._directive_context:
+            return ""
+
+        sections = ["\n## SESSION ORIENTATION\n"]
+        seen_actions = set()
+
+        for fire_result in self._directive_context:
+            for action_result in fire_result.get("results", []):
+                action = action_result.get("action", "")
+                if not action_result.get("ok"):
+                    continue
+                if action in seen_actions:
+                    continue
+                seen_actions.add(action)
+
+                if action == "surface_parked_threads":
+                    summaries = [
+                        s for s in action_result.get("summaries", [])
+                        if s.get("topic")  # Skip empty-topic threads
+                    ]
+                    if summaries:
+                        sections.append("**Parked threads from previous sessions:**")
+                        for s in summaries[:5]:
+                            topic = s.get("topic", "?")
+                            tasks = s.get("open_tasks", [])
+                            entities = s.get("entities", [])[:4]
+                            task_str = f" — {len(tasks)} open task(s)" if tasks else ""
+                            ent_str = f" [{', '.join(entities)}]" if entities else ""
+                            sections.append(f"- {topic}{ent_str}{task_str}")
+                        sections.append("")
+
+                elif action.startswith("surface_entity:"):
+                    profile = action_result.get("profile")
+                    if profile:
+                        name = action_result.get("entity", "")
+                        summary = profile.get("summary", "")
+                        if summary:
+                            sections.append(f"**{name}:** {summary}\n")
+
+                elif action.startswith("memory_sweep:"):
+                    results = action_result.get("results", [])
+                    if results:
+                        sections.append("**Recent memory matches:**")
+                        for r in results[:3]:
+                            sections.append(f"- {r.get('summary', r.get('id', '?'))}")
+                        sections.append("")
+
+                elif action.startswith("set_aperture:"):
+                    preset = action_result.get("preset", "")
+                    sections.append(f"*Focus mode set to {preset}.*\n")
+
+                elif action.startswith("load_collection:"):
+                    coll = action_result.get("collection", "")
+                    sections.append(f"*Collection '{coll}' loaded for this session.*\n")
+
+        if len(sections) <= 1:
+            return ""
+
+        sections.append("Use this context naturally. Don't list it back unless asked.\n")
+        return "\n".join(sections)
+
     def _build_system_prompt(
         self,
         memory_context: str = "",
@@ -1638,8 +1836,9 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
 
         base_prompt = """You are Luna, a sovereign AI companion.
 
-You are warm, witty, and genuinely curious. You remember conversations and build on them.
+You are warm, witty, and direct. You remember conversations and build on them.
 You have your own perspective and aren't afraid to share it.
+When you know something, lead with it. Share what you know before asking questions.
 
 Be concise but authentic. No filler phrases like "certainly" or "of course".
 Never output internal reasoning, debugging info, or bullet points about context loading.
@@ -1667,6 +1866,11 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
         thread_context = self._get_thread_context()
         if thread_context:
             base_prompt += thread_context
+
+        # Add directive context (Intent Layer — fired directive results)
+        directive_context = self._build_directive_context()
+        if directive_context:
+            base_prompt += directive_context
 
         # Add history context (Recent tier search results)
         if history_context and history_context.get("recent_history"):
@@ -1917,7 +2121,7 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
         # Save consciousness state
         await self.consciousness.save()
 
-        # TODO: Flush WAL
+        # WAL checkpoint handled by MatrixActor.stop() → MemoryDatabase.close()
 
         logger.info("Luna Engine stopped")
 

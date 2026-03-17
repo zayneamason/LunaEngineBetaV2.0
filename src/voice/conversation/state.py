@@ -6,6 +6,8 @@ from typing import List, Optional
 from datetime import datetime
 from enum import Enum
 
+from luna.core.owner import get_owner
+
 
 class ConversationPhase(Enum):
     IDLE = "idle"
@@ -133,7 +135,7 @@ class ConversationBuffer:
         """Format as text for system prompt injection."""
         lines = []
         for turn in self.turns[-5:]:  # Last 5 for text format
-            role = "Luna" if turn["role"] == "assistant" else "Ahab"
+            role = "Luna" if turn["role"] == "assistant" else (get_owner().display_name or "User")
             # Truncate very long messages
             content = turn["content"][:200]
             if len(turn["content"]) > 200:

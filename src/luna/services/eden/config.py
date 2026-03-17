@@ -12,6 +12,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from luna.core.paths import config_dir as _config_dir
+
 
 class EdenConfig(BaseModel):
     """Eden API connection configuration."""
@@ -35,7 +37,7 @@ class EdenConfig(BaseModel):
     @classmethod
     def load(cls, config_dir: Optional[Path] = None) -> "EdenConfig":
         """Load config from eden.json with env var overrides."""
-        config_dir = config_dir or Path(__file__).parents[4] / "config"
+        config_dir = config_dir or _config_dir()
         config_path = config_dir / "eden.json"
 
         data = {}

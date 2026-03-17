@@ -25,7 +25,7 @@ export function FallbackChainPanel({ onClose }) {
   const fetchChainData = async () => {
     try {
       setLoading(true);
-      const res = await fetch('http://127.0.0.1:8000/llm/fallback-chain');
+      const res = await fetch('/llm/fallback-chain');
       if (!res.ok) throw new Error('Failed to fetch chain');
       const data = await res.json();
       setChain(data.chain || []);
@@ -40,7 +40,7 @@ export function FallbackChainPanel({ onClose }) {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/llm/fallback-chain/stats');
+      const res = await fetch('/llm/fallback-chain/stats');
       if (res.ok) {
         const data = await res.json();
         setStats(data);
@@ -63,7 +63,7 @@ export function FallbackChainPanel({ onClose }) {
   const saveChain = async () => {
     try {
       setSaving(true);
-      const res = await fetch('http://127.0.0.1:8000/llm/fallback-chain', {
+      const res = await fetch('/llm/fallback-chain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chain }),

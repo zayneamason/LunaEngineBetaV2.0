@@ -5,7 +5,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, RadarChart
 // LUNA AUTO-TUNER - Memory & Cognition Tuning Interface
 // ============================================================================
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = '';
 
 // Tuning profiles - curated presets for different Luna behaviors
 const TUNING_PROFILES = {

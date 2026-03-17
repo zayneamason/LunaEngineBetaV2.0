@@ -10,25 +10,39 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from luna.core.paths import project_root, config_dir
+
 logger = logging.getLogger(__name__)
 
-# Lazy-initialized engine reference (set by server.py or API)
+# Engine-owned instance reference — set by set_engine() from server.py startup
 _engine = None
 
 
+def set_engine(engine_instance):
+    """Attach the Engine-owned AiBrarianEngine. Called once at startup."""
+    global _engine
+    _engine = engine_instance
+
+
 async def _get_engine():
-    """Get or lazily initialize the AiBrarianEngine."""
+    """Get the Engine-owned AiBrarianEngine instance.
+
+    Falls back to standalone initialization only if the Engine hasn't
+    booted yet (e.g. MCP running without full Engine).
+    """
     global _engine
     if _engine is not None:
         return _engine
 
+    # Fallback: standalone init (MCP-only mode without full Engine boot)
     from luna.substrate.aibrarian_engine import AiBrarianEngine
 
-    project_root = Path(__file__).parent.parent.parent.parent.resolve()
-    registry = project_root / "config" / "aibrarian_registry.yaml"
+    _root = project_root()
+    registry = config_dir() / "aibrarian_registry.yaml"
 
-    _engine = AiBrarianEngine(registry, project_root=project_root)
+    _engine = AiBrarianEngine(registry, project_root=_root)
     await _engine.initialize()
+    logger.warning("AiBrarianEngine fallback: standalone init (Engine not booted)")
     return _engine
 
 

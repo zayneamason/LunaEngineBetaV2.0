@@ -134,6 +134,12 @@ class LifecycleManager:
         settings = self.config.get("personality_patch_storage", {}).get("settings", {})
         return settings.get("lock_in_deactivation_threshold", 0.3)
 
+    @property
+    def consolidation_threshold(self) -> int:
+        """Get the minimum active patch count before consolidation runs."""
+        settings = self.config.get("personality_patch_storage", {}).get("settings", {})
+        return settings.get("consolidation_threshold", 50)
+
     async def run_maintenance(self) -> dict:
         """
         Run all maintenance tasks.
@@ -198,6 +204,8 @@ class LifecycleManager:
         """
         Find and merge patches with the same topic+subtopic.
 
+        Only runs when active patch count exceeds consolidation_threshold.
+
         For each group of patches sharing topic+subtopic:
         - Keep the patch with the highest lock_in
         - Combine reinforcement_counts from all merged patches
@@ -207,6 +215,19 @@ class LifecycleManager:
         Returns:
             Number of patches that were consolidated (superseded)
         """
+        # Skip consolidation if below threshold
+        try:
+            stats = await self.patch_manager.get_stats()
+            total = stats.get("total_patches", 0)
+            if total < self.consolidation_threshold:
+                logger.debug(
+                    "Skipping consolidation: %d patches below threshold %d",
+                    total, self.consolidation_threshold
+                )
+                return 0
+        except Exception as e:
+            logger.warning("Failed to check patch count for consolidation: %s", e)
+
         logger.debug("Starting patch consolidation")
         consolidated_count = 0
 

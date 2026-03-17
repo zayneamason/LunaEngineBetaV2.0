@@ -4,13 +4,14 @@ import { IdentityBadge, FaceIDCapture, StatusDot } from '../../components';
 
 const TAB_CONFIG = [
   { id: 'eclissi',     label: 'ECLISSI',     accent: 'var(--ec-accent-luna)' },
-  { id: 'studio',      label: 'LUNAR STUDIO', accent: 'var(--ec-accent-voice)', href: '/studio' },
+  { id: 'studio',      label: 'LUNAR STUDIO', accent: 'var(--ec-accent-voice)' },
   { id: 'kozmo',       label: 'KOZMO',       accent: '#c8ff00' },
-  { id: 'guardian',    label: 'GUARDIAN',     accent: 'var(--ec-accent-guardian)', href: '/guardian' },
+  { id: 'guardian',    label: 'GUARDIAN',     accent: 'var(--ec-accent-guardian)' },
   { id: 'observatory', label: 'OBSERVATORY', accent: 'var(--ec-accent-memory)' },
+  { id: 'settings',    label: 'SETTINGS',     accent: 'var(--ec-text-muted)' },
 ];
 
-export default function ShellHeader({ activeTab, onTabChange, identity, dockOpen, isEclissiTab, onToggleDock }) {
+export default function ShellHeader({ activeTab, onTabChange, identity, dockOpen, isEclissiTab, onToggleDock, enabledPages }) {
   const {
     isPresent, entityName, lunaTier, confidence,
     captureState, startRecognition, stopRecognition,
@@ -100,19 +101,13 @@ export default function ShellHeader({ activeTab, onTabChange, identity, dockOpen
 
       {/* Center: Nav Tabs */}
       <nav style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        {TAB_CONFIG.map((tab) => (
+        {TAB_CONFIG.filter((tab) => !enabledPages || enabledPages[tab.id] !== false).map((tab) => (
           <TabButton
             key={tab.id}
             label={tab.label}
             accent={tab.accent}
             isActive={activeTab === tab.id}
-            onClick={() => {
-              if (tab.href) {
-                window.open(tab.href, '_blank');
-              } else {
-                onTabChange(tab.id);
-              }
-            }}
+            onClick={() => onTabChange(tab.id)}
           />
         ))}
       </nav>
@@ -126,7 +121,7 @@ export default function ShellHeader({ activeTab, onTabChange, identity, dockOpen
             lunaTier={lunaTier}
             dataroomTier={identity.identity?.dataroom_tier}
             confidence={confidence}
-            onReset={(pin) => startEnrollment(entityName || 'Ahab', pin)}
+            onReset={(pin) => startEnrollment(entityName || 'User', pin)}
             isBypassed={isBypassed}
             onRevokeBypass={revokeBypass}
           />
@@ -136,7 +131,7 @@ export default function ShellHeader({ activeTab, onTabChange, identity, dockOpen
             onStart={startRecognition}
             onStop={stopRecognition}
             onReset={resetIdentity}
-            onEnroll={(pin) => startEnrollment(entityName || 'Ahab', pin)}
+            onEnroll={(pin) => startEnrollment(entityName || 'User', pin)}
             onBypass={bypassIdentity}
             videoRef={videoRef}
             bboxes={bboxes}

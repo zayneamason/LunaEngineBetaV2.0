@@ -13,7 +13,7 @@ import GraphSettings from './views/GraphSettings'
 
 const TABS = ['Entities', 'Quests', 'Threads', 'Journal', 'Graph', 'Timeline', 'Replay', 'Settings']
 
-export default function ObservatoryApp({ onBack }) {
+export default function ObservatoryApp({ onBack, activeProjectSlug }) {
   const [tab, setTab] = useState('Entities')
   const {
     wsConnected, setWsConnected, handleEvent,
@@ -24,12 +24,9 @@ export default function ObservatoryApp({ onBack }) {
 
   useEffect(() => {
     connectWS(handleEvent, setWsConnected)
-    // Fetch data directly (production only, no DB switching)
+    // Fetch non-project-filtered data once
     Promise.all([
       fetchUniverse(),
-      fetchEntities(),
-      fetchQuests(),
-      fetchThreads(),
       fetchGraph(),
       fetchConfig(),
     ])
@@ -38,6 +35,13 @@ export default function ObservatoryApp({ onBack }) {
       disconnectWS()
     }
   }, [])
+
+  // Re-fetch project-filtered data when project changes
+  useEffect(() => {
+    fetchEntities(null, activeProjectSlug)
+    fetchQuests(null, null, activeProjectSlug)
+    fetchThreads(null, activeProjectSlug)
+  }, [activeProjectSlug])
 
   // Handle deep-link navigation from bus
   useEffect(() => {
@@ -84,15 +88,15 @@ export default function ObservatoryApp({ onBack }) {
 
   const renderTab = () => {
     switch (tab) {
-      case 'Entities': return <EntitiesView navigateTab={navigateTab} />
-      case 'Quests': return <QuestsView navigateTab={navigateTab} />
-      case 'Threads': return <ThreadsView navigateTab={navigateTab} />
-      case 'Journal': return <JournalView navigateTab={navigateTab} />
+      case 'Entities': return <EntitiesView navigateTab={navigateTab} activeProjectSlug={activeProjectSlug} />
+      case 'Quests': return <QuestsView navigateTab={navigateTab} activeProjectSlug={activeProjectSlug} />
+      case 'Threads': return <ThreadsView navigateTab={navigateTab} activeProjectSlug={activeProjectSlug} />
+      case 'Journal': return <JournalView navigateTab={navigateTab} activeProjectSlug={activeProjectSlug} />
       case 'Graph': return <GraphView navigateTab={navigateTab} />
       case 'Timeline': return <Timeline navigateTab={navigateTab} />
       case 'Replay': return <Replay />
       case 'Settings': return <GraphSettings />
-      default: return <EntitiesView navigateTab={navigateTab} />
+      default: return <EntitiesView navigateTab={navigateTab} activeProjectSlug={activeProjectSlug} />
     }
   }
 
@@ -129,6 +133,16 @@ export default function ObservatoryApp({ onBack }) {
             OBSERVATORY
           </span>
           <span style={{ color: '#444', fontSize: 11 }}>Memory Matrix</span>
+          {activeProjectSlug && (
+            <span style={{
+              background: '#1a2a1e', color: '#4ade80',
+              padding: '2px 8px', borderRadius: 4,
+              fontSize: 10, fontWeight: 600,
+              letterSpacing: 0.5, textTransform: 'uppercase',
+            }}>
+              {activeProjectSlug}
+            </span>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

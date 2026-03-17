@@ -13,10 +13,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Dict, Optional
 
+from luna.core.paths import config_dir
+
 logger = logging.getLogger(__name__)
 
 # Config directory: <project_root>/config/projects/
-_CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "config" / "projects"
+_CONFIG_DIR = config_dir() / "projects"
 
 
 def _default_sources() -> list["SearchSourceConfig"]:

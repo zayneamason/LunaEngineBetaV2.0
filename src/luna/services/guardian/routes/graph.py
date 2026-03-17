@@ -1,12 +1,13 @@
 """Knowledge graph routes — serve graph visualization data."""
 
 import json
-from pathlib import Path
 from fastapi import APIRouter
+
+from luna.core.paths import local_dir
 
 router = APIRouter()
 
-GRAPH_DIR = Path("data/guardian/org_timeline")
+GRAPH_DIR = local_dir() / "guardian" / "org_timeline"
 
 
 @router.get("/graph")

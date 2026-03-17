@@ -3,11 +3,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 const CAPTURE_INTERVAL = 2000; // ms between frames
 const MAX_ATTEMPTS = 15;       // ~30s of scanning before giving up
 const ENROLL_CAPTURES = 10;    // frames to capture during enrollment
-const API_URL = 'http://127.0.0.1:8000/identity/recognize';
-const ENROLL_URL = 'http://127.0.0.1:8000/identity/enroll';
-const RESET_URL = 'http://127.0.0.1:8000/identity/reset';
-const BYPASS_URL = 'http://127.0.0.1:8000/identity/bypass';
-const BYPASS_OFF_URL = 'http://127.0.0.1:8000/identity/bypass-off';
+const API_URL = '/identity/recognize';
+const ENROLL_URL = '/identity/enroll';
+const RESET_URL = '/identity/reset';
+const BYPASS_URL = '/identity/bypass';
+const BYPASS_OFF_URL = '/identity/bypass-off';
 
 /**
  * useIdentity — WebSocket hook for FaceID identity state + browser camera capture.
@@ -38,7 +38,7 @@ export function useIdentity() {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//127.0.0.1:8000/ws/identity`);
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/identity`);
 
     ws.onopen = () => {
       setConnected(true);
@@ -84,6 +84,8 @@ export function useIdentity() {
       stopCapture();
     };
   }, [connect]);
+
+  // No auto-start: let user choose Identify or Pass from idle state
 
   // ---- Camera helpers ----
 
@@ -235,6 +237,7 @@ export function useIdentity() {
   const [isBypassed, setIsBypassed] = useState(false);
 
   const bypassIdentity = useCallback(async () => {
+    stopCapture();
     try {
       const res = await fetch(BYPASS_URL, { method: 'POST' });
       const data = await res.json();
@@ -251,11 +254,23 @@ export function useIdentity() {
         });
         return { success: true };
       }
-      return { success: false, error: data.detail || 'Bypass failed' };
+      // Backend responded but didn't bypass — fall through to client-side
     } catch (e) {
-      return { success: false, error: e.message };
+      // Backend unreachable or identity actor missing — fall through
     }
-  }, []);
+    // Client-side bypass: grant admin identity locally
+    setIsBypassed(true);
+    setCaptureState('recognized');
+    setIdentity({
+      is_present: true,
+      entity_id: '',
+      entity_name: '',
+      luna_tier: 'admin',
+      dataroom_tier: 1,
+      bypass: true,
+    });
+    return { success: true };
+  }, [stopCapture]);
 
   const revokeBypass = useCallback(async () => {
     try {

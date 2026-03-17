@@ -93,7 +93,10 @@ class TuningSessionManager:
     Stores sessions and iterations in SQLite for history tracking.
     """
 
-    def __init__(self, db_path: str = "data/luna_engine.db"):
+    def __init__(self, db_path: str = None):
+        from luna.core.paths import user_dir
+        if db_path is None:
+            db_path = str(user_dir() / "luna_engine.db")
         """
         Initialize the session manager.
 

@@ -342,13 +342,64 @@ async def api_stats():
 # ── Entity & Quest HTTP Endpoints ────────────────────────────────
 
 
+def _resolve_scope_patterns(conn, project_slug: str, nodes_table: str) -> list[str]:
+    """Resolve a project slug to actual DB scope LIKE patterns.
+
+    The frontend slug (e.g. 'kinoni-ict-hub') may differ from the DB scope
+    value (e.g. 'project:guardian-kinoni'). We query all distinct non-global
+    scopes and match any that share a keyword with the slug.
+    """
+    scopes = [
+        r[0] for r in conn.execute(
+            f"SELECT DISTINCT scope FROM {nodes_table} WHERE scope IS NOT NULL AND scope != 'global'"
+        ).fetchall()
+    ]
+    if not scopes:
+        return [f"%{project_slug}%"]
+
+    # Extract keywords (3+ chars) from the slug
+    keywords = [w for w in project_slug.split("-") if len(w) >= 3]
+
+    matched = []
+    for scope in scopes:
+        # Direct substring match first
+        if project_slug in scope or scope.split(":")[-1] in project_slug:
+            matched.append(f"%{scope.split(':')[-1]}%")
+            continue
+        # Keyword match: any keyword from slug appears in scope
+        for kw in keywords:
+            if kw in scope:
+                matched.append(f"%{scope.split(':')[-1]}%")
+                break
+
+    return matched if matched else [f"%{project_slug}%"]
+
+
 @app.get("/api/entities")
-async def api_entities(type: str = Query(default=None)):
-    """Get all entities, optionally filtered by type."""
+async def api_entities(type: str = Query(default=None), project: str = Query(default=None)):
+    """Get all entities, optionally filtered by type or project scope."""
     tn = _get_table_names()
     conn = _sync_db()
     try:
-        if type:
+        if project:
+            # Filter entities to those mentioned in project-scoped nodes
+            node_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tn['nodes']})").fetchall()}
+            if "scope" in node_cols:
+                type_cond = f" AND e.{tn['entity_type_col']} = ?" if type else ""
+                patterns = _resolve_scope_patterns(conn, project, tn["nodes"])
+                scope_clauses = " OR ".join(["n.scope LIKE ?"] * len(patterns))
+                sql_params = patterns + ([type] if type else [])
+                rows = conn.execute(
+                    f"SELECT DISTINCT e.* FROM entities e "
+                    f"JOIN entity_mentions em ON e.id = em.entity_id "
+                    f"JOIN {tn['nodes']} n ON em.node_id = n.id "
+                    f"WHERE ({scope_clauses}){type_cond} ORDER BY e.name",
+                    sql_params,
+                ).fetchall()
+            else:
+                # No scope column — fall back to unfiltered
+                rows = conn.execute("SELECT * FROM entities ORDER BY name").fetchall()
+        elif type:
             rows = conn.execute(
                 f"SELECT * FROM entities WHERE {tn['entity_type_col']} = ? ORDER BY name", (type,)
             ).fetchall()
@@ -436,24 +487,47 @@ async def api_entity_detail(entity_id: str):
 
 
 @app.get("/api/quests")
-async def api_quests(status: str = Query(default=None), type: str = Query(default=None)):
-    """Get all quests, optionally filtered by status or type."""
+async def api_quests(status: str = Query(default=None), type: str = Query(default=None), project: str = Query(default=None)):
+    """Get all quests, optionally filtered by status, type, or project."""
     conn = _sync_db()
     try:
         conditions = []
         params = []
 
         if status:
-            conditions.append("status = ?")
+            conditions.append("q.status = ?")
             params.append(status)
         if type:
-            conditions.append("type = ?")
+            conditions.append("q.type = ?")
             params.append(type)
 
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-        sql = f"SELECT * FROM quests WHERE {where_clause} ORDER BY created_at DESC"
-
-        quests = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        if project:
+            # Filter quests whose targets link to project-scoped entities
+            tn = _get_table_names()
+            node_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({tn['nodes']})").fetchall()}
+            if "scope" in node_cols:
+                patterns = _resolve_scope_patterns(conn, project, tn["nodes"])
+                scope_clauses = " OR ".join(["n.scope LIKE ?"] * len(patterns))
+                where = " AND ".join(conditions) if conditions else "1=1"
+                sql = (
+                    f"SELECT DISTINCT q.* FROM quests q "
+                    f"JOIN quest_targets qt ON q.id = qt.quest_id "
+                    f"JOIN entities e ON qt.target_id = e.id "
+                    f"JOIN entity_mentions em ON e.id = em.entity_id "
+                    f"JOIN {tn['nodes']} n ON em.node_id = n.id "
+                    f"WHERE ({scope_clauses}) AND {where} "
+                    f"ORDER BY q.created_at DESC"
+                )
+                params = patterns + params
+                quests = [dict(r) for r in conn.execute(sql, params).fetchall()]
+            else:
+                where = " AND ".join(conditions) if conditions else "1=1"
+                sql = f"SELECT * FROM quests q WHERE {where} ORDER BY q.created_at DESC"
+                quests = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        else:
+            where = " AND ".join(conditions) if conditions else "1=1"
+            sql = f"SELECT * FROM quests q WHERE {where} ORDER BY q.created_at DESC"
+            quests = [dict(r) for r in conn.execute(sql, params).fetchall()]
 
         # Add targets to each quest
         for quest in quests:
@@ -565,7 +639,7 @@ async def api_quest_complete(quest_id: str, body: dict):
 
 
 @app.get("/api/threads")
-async def api_threads(status: str = Query(default=None)):
+async def api_threads(status: str = Query(default=None), project: str = Query(default=None)):
     """Get THREAD nodes from Memory Matrix, parsed from JSON content."""
     tn = _get_table_names()
     conn = _sync_db()
@@ -613,6 +687,10 @@ async def api_threads(status: str = Query(default=None)):
 
             # Apply status filter (stored inside JSON, not a SQL column)
             if status and thread["status"] != status:
+                continue
+
+            # Apply project filter (stored inside JSON content)
+            if project and thread["project_slug"] != project:
                 continue
 
             # Get INVOLVES edges to find connected entities

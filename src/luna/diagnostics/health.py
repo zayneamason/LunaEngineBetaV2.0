@@ -8,6 +8,8 @@ import time
 import sqlite3
 import json
 
+from luna.core.paths import user_dir
+
 
 class HealthStatus(Enum):
     """Health status levels."""
@@ -41,7 +43,7 @@ class HealthChecker:
     """
 
     # Default database path (relative to project root)
-    DEFAULT_DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "luna_engine.db"
+    DEFAULT_DB_PATH = user_dir() / "luna_engine.db"
 
     def __init__(self, db_path: Optional[str] = None):
         """

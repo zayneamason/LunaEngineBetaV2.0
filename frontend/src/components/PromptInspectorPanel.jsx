@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = '';
 
 // Layer definitions with colors
 const LAYERS = [

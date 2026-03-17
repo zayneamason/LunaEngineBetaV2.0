@@ -36,10 +36,12 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from luna.core.paths import project_root, user_dir
+
 # Path setup for imports
-SRC_PATH = Path(__file__).parent.parent.resolve()
-if str(SRC_PATH) not in sys.path:
-    sys.path.insert(0, str(SRC_PATH))
+SRC_PATH = str(project_root() / "src")
+if SRC_PATH not in sys.path:
+    sys.path.insert(0, SRC_PATH)
 
 from luna_mcp.memory_log import memory_logger, MEMORY_LOG_FILE, LogAction
 
@@ -91,8 +93,7 @@ async def check_engine_health() -> bool:
 # ==============================================================================
 
 # Resolve cache path relative to the Luna Engine project root
-_ENGINE_ROOT = Path(__file__).parent.parent.parent.resolve()
-_SHARED_TURN_CACHE_PATH = _ENGINE_ROOT / "data" / "cache" / "shared_turn.yaml"
+_SHARED_TURN_CACHE_PATH = user_dir() / "cache" / "shared_turn.yaml"
 
 
 def _read_shared_turn_cache() -> dict:

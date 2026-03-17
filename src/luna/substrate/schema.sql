@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS graph_edges (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     metadata TEXT,
     scope TEXT NOT NULL DEFAULT 'global',  -- Edge scope: 'global' or 'project:{slug}'
+    origin TEXT NOT NULL DEFAULT 'user',  -- 'system' | 'user' | 'seed'
     FOREIGN KEY (from_id) REFERENCES memory_nodes(id),
     FOREIGN KEY (to_id) REFERENCES memory_nodes(id),
     UNIQUE(from_id, to_id, relationship)
@@ -225,8 +226,12 @@ CREATE TABLE IF NOT EXISTS entities (
     current_version INTEGER DEFAULT 1,
     metadata TEXT,                    -- Flexible JSON blob
     created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (datetime('now')),
+    origin TEXT NOT NULL DEFAULT 'user'  -- 'system' | 'user' | 'seed'
 );
+
+-- idx_entities_origin created by _migrate_origin_columns() for existing DBs,
+-- or on fresh installs where the column exists from CREATE TABLE above.
 
 -- Entity relationships: Graph of connections between entities
 CREATE TABLE IF NOT EXISTS entity_relationships (
@@ -372,3 +377,37 @@ CREATE INDEX IF NOT EXISTS idx_coll_lock_in_score ON collection_lock_in(lock_in 
 CREATE INDEX IF NOT EXISTS idx_annotations_collection ON collection_annotations(collection_key);
 CREATE INDEX IF NOT EXISTS idx_annotations_type ON collection_annotations(annotation_type);
 CREATE INDEX IF NOT EXISTS idx_annotations_doc ON collection_annotations(collection_key, doc_id);
+
+-- ============================================================================
+-- DIRECTIVE / QUEST SYSTEM
+-- Intent layer: directives, skills, and automated quest execution
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS quests (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,                    -- 'directive' | 'skill'
+    status TEXT NOT NULL DEFAULT 'armed',  -- 'armed' | 'fired' | 'disabled' | 'available'
+    priority TEXT DEFAULT 'medium',        -- 'low' | 'medium' | 'high'
+    title TEXT NOT NULL,
+    objective TEXT,
+    trigger_type TEXT,                     -- 'session_start' | 'keyword' | 'entity_mention'
+    trigger_config TEXT,                   -- JSON: match patterns, entity lists, etc.
+    action TEXT,                           -- Action string(s)
+    trust_tier TEXT DEFAULT 'confirm',     -- 'auto' | 'confirm' | 'manual'
+    cooldown_minutes INTEGER,
+    fire_count INTEGER DEFAULT 0,
+    invocation_count INTEGER DEFAULT 0,
+    last_fired_at TEXT,
+    last_invoked_at TEXT,
+    steps TEXT,                            -- JSON array of step strings (for skills)
+    tags_json TEXT,                        -- JSON array of tags
+    authored_by TEXT DEFAULT 'system',
+    approved_by TEXT,
+    source TEXT,                           -- 'yaml_seed' | 'user' | 'manual'
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_quests_type_status ON quests(type, status);
+CREATE INDEX IF NOT EXISTS idx_quests_trigger ON quests(trigger_type);
+CREATE INDEX IF NOT EXISTS idx_quests_priority ON quests(priority DESC);

@@ -10,11 +10,12 @@ const WIDGETS = [
   { id: 'debug',   icon: '🔍', label: 'Debug',   accent: 'var(--ec-accent-debug)' },
   { id: 'vk',      icon: '🎭', label: 'VK',      accent: 'var(--ec-accent-vk)' },
   { id: 'divider2' },
+  { id: 'lunascript', icon: '◈', label: 'LunaScript', accent: 'var(--ec-accent-memory)' },
   { id: 'cache',   icon: '💾', label: 'Cache',   accent: 'var(--ec-accent-luna)' },
   { id: 'thought', icon: '💭', label: 'Thought', accent: 'var(--ec-accent-voice)' },
 ];
 
-export default function WidgetDock({ activeWidget, onWidgetToggle, badges }) {
+export default function WidgetDock({ activeWidget, onWidgetToggle, badges, enabledWidgets }) {
   return (
     <div
       style={{
@@ -29,7 +30,7 @@ export default function WidgetDock({ activeWidget, onWidgetToggle, badges }) {
         borderRight: '1px solid var(--ec-border)',
       }}
     >
-      {WIDGETS.map((w) => {
+      {WIDGETS.filter((w) => w.id.startsWith('divider') || !enabledWidgets || enabledWidgets[w.id] !== false).map((w) => {
         if (w.id.startsWith('divider')) {
           return (
             <div

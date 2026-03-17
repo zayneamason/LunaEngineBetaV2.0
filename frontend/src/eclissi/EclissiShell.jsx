@@ -6,10 +6,14 @@ import EclissiHome from './EclissiHome';
 import KozmoApp from '../kozmo/KozmoApp';
 import ObservatoryApp from '../observatory/ObservatoryApp';
 import PlaceholderView from './components/PlaceholderView';
-import AibrarianView from './AibrarianView';
+import ProjectStrip from './components/ProjectStrip';
+import SettingsApp from '../settings/SettingsApp';
+import WelcomeWizard from '../components/WelcomeWizard';
+
 import { useNavigation } from '../hooks/useNavigation';
 import { useIdentity } from '../hooks/useIdentity';
 import { useLunaAPI } from '../hooks/useLunaAPI';
+import { useFrontendConfig } from '../hooks/useFrontendConfig';
 
 // Widget content components
 import EngineWidget from './widgets/EngineWidget';
@@ -21,8 +25,9 @@ import DebugWidget from './widgets/DebugWidget';
 import VKWidget from './widgets/VKWidget';
 import CacheWidget from './widgets/CacheWidget';
 import ThoughtWidget from './widgets/ThoughtWidget';
+import LunaScriptWidget from './widgets/LunaScriptWidget';
 
-const TABS = ['eclissi', 'studio', 'kozmo', 'guardian', 'observatory'];
+const ALL_TABS = ['eclissi', 'studio', 'kozmo', 'guardian', 'observatory', 'settings'];
 
 const WIDGET_COMPONENTS = {
   engine: EngineWidget,
@@ -34,13 +39,31 @@ const WIDGET_COMPONENTS = {
   vk: VKWidget,
   cache: CacheWidget,
   thought: ThoughtWidget,
+  lunascript: LunaScriptWidget,
 };
 
 export default function EclissiShell() {
   const [activeTab, setActiveTab] = useState('eclissi');
   const [activeWidget, setActiveWidget] = useState(null);
   const [dockOpen, setDockOpen] = useState(true);
+  const [activeProjectSlug, setActiveProjectSlug] = useState(null);
+  const [isFirstRun, setIsFirstRun] = useState(null);
   const { pending: navPending, consume: navConsume } = useNavigation();
+  const frontendConfig = useFrontendConfig();
+  const enabledPages = frontendConfig.pages || {};
+  const enabledWidgets = frontendConfig.widgets || {};
+  const TABS = ALL_TABS.filter((t) => enabledPages[t] !== false);
+
+  // First-run detection — respects wizard.enabled from frontend config
+  useEffect(() => {
+    if (frontendConfig.wizard?.enabled === false) {
+      setIsFirstRun(false);
+      return;
+    }
+    fetch('/api/status/first-run').then(r => r.json())
+      .then(data => setIsFirstRun(data.is_first_run))
+      .catch(() => setIsFirstRun(false));
+  }, [frontendConfig]);
 
   // Identity + connection for header
   const identityHook = useIdentity();
@@ -84,14 +107,18 @@ export default function EclissiShell() {
   const WidgetContent = activeWidget ? WIDGET_COMPONENTS[activeWidget] : null;
 
   const isEclissiTab = activeTab === 'eclissi';
+  const showProjectStrip = activeTab === 'eclissi' || activeTab === 'observatory';
   const showDock = isEclissiTab && dockOpen;
+
+  if (isFirstRun === null) return null;
+  if (isFirstRun) return <WelcomeWizard onComplete={() => setIsFirstRun(false)} />;
 
   return (
     <div
       style={{
         display: 'grid',
         gridTemplateColumns: '1fr',
-        gridTemplateRows: 'var(--ec-header-height, 48px) 1fr',
+        gridTemplateRows: showProjectStrip ? 'var(--ec-header-height, 48px) auto 1fr' : 'var(--ec-header-height, 48px) 1fr',
         height: '100vh',
         width: '100vw',
         background: 'var(--ec-bg)',
@@ -106,7 +133,13 @@ export default function EclissiShell() {
         dockOpen={dockOpen}
         isEclissiTab={isEclissiTab}
         onToggleDock={toggleDock}
+        enabledPages={enabledPages}
       />
+
+      {/* Project Strip (eclissi + observatory tabs) */}
+      {showProjectStrip && (
+        <ProjectStrip onProjectChange={setActiveProjectSlug} />
+      )}
 
       {/* Row 2: Content area with optional widget dock + right panel */}
       <div
@@ -130,20 +163,21 @@ export default function EclissiShell() {
             <WidgetDock
               activeWidget={activeWidget}
               onWidgetToggle={toggleWidget}
+              enabledWidgets={enabledWidgets}
             />
           </div>
         )}
 
         {/* Main content */}
         <main style={{ overflow: 'hidden', position: 'relative', height: '100%' }}>
-          {activeTab === 'eclissi' && <EclissiHome />}
+          {activeTab === 'eclissi' && <EclissiHome activeProjectSlug={activeProjectSlug} />}
           {activeTab === 'kozmo' && (
             <KozmoApp onBack={() => switchTab('eclissi')} />
           )}
           {activeTab === 'observatory' && (
-            <ObservatoryApp onBack={() => switchTab('eclissi')} />
+            <ObservatoryApp onBack={() => switchTab('eclissi')} activeProjectSlug={activeProjectSlug} />
           )}
-          {activeTab === 'studio' && <AibrarianView />}
+          {activeTab === 'studio' && <iframe src="/studio/?v=2" style={{ width: '100%', height: '100%', border: 'none' }} />}
           {activeTab === 'guardian' && (
             <PlaceholderView
               name="GUARDIAN"
@@ -151,6 +185,7 @@ export default function EclissiShell() {
               description="Guardian service — sovereignty & permissions. Phase 6 integration."
             />
           )}
+          {activeTab === 'settings' && <SettingsApp />}
         </main>
 
         {/* Right Panel (only when a widget is active on eclissi tab) */}

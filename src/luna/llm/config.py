@@ -10,10 +10,12 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+from luna.core.paths import config_dir
+
 logger = logging.getLogger(__name__)
 
 # Default config path
-CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "llm_providers.json"
+CONFIG_PATH = config_dir() / "llm_providers.json"
 
 
 @dataclass

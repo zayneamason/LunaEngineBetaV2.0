@@ -11,53 +11,6 @@ export const APERTURE_PRESETS = [
   { id: 'open',     label: 'OPEN',     angle: 95, desc: 'Full memory access, no filtering',   icon: '\u2299' },
 ];
 
-// --- LunaOrb ---
-export function LunaOrb({ size = 48, apertureAngle = 55, isHovered }) {
-  const normalizedAngle = apertureAngle / 95;
-  const glowSize = 8 + normalizedAngle * 20;
-
-  return (
-    <div style={{ width: size, height: size, position: 'relative' }}>
-      {/* Outer glow */}
-      <div style={{
-        position: 'absolute', inset: -glowSize, borderRadius: '50%',
-        background: `radial-gradient(circle, rgba(192,132,252,${(0.3 + normalizedAngle * 0.3).toFixed(2)}) 0%, transparent 70%)`,
-        transition: 'all 0.6s ease',
-        animation: isHovered ? 'ec-orb-pulse 2s ease-in-out infinite' : 'none',
-      }} />
-
-      {/* Core orb */}
-      <div style={{
-        width: size, height: size, borderRadius: '50%', position: 'relative',
-        background: 'radial-gradient(circle at 35% 35%, rgba(192,132,252,0.25), rgba(167,139,250,0.12), rgba(192,132,252,0.06))',
-        border: '1.5px solid rgba(192,132,252,0.25)',
-        boxShadow: `0 0 ${glowSize}px rgba(192,132,252,0.19), inset 0 0 12px rgba(192,132,252,0.09)`,
-        transition: 'all 0.4s ease',
-        transform: isHovered ? 'scale(1.08)' : 'scale(1)',
-      }}>
-        {/* Inner highlight */}
-        <div style={{
-          position: 'absolute', top: '15%', left: '20%', width: '30%', height: '25%',
-          borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,255,255,0.15), transparent)',
-        }} />
-
-        {/* Aperture indicator ring */}
-        <svg style={{ position: 'absolute', inset: -3, width: size + 6, height: size + 6 }} viewBox="0 0 54 54">
-          <circle cx="27" cy="27" r="25" fill="none"
-            stroke="#c084fc" strokeWidth="1" strokeOpacity="0.15" />
-          <circle cx="27" cy="27" r="25" fill="none"
-            stroke="#c084fc" strokeWidth="1.5" strokeOpacity="0.6"
-            strokeDasharray={`${normalizedAngle * 157} 157`}
-            strokeLinecap="round"
-            transform="rotate(-90 27 27)"
-            style={{ transition: 'stroke-dasharray 0.4s ease' }}
-          />
-        </svg>
-      </div>
-    </div>
-  );
-}
-
 // --- ApertureDial ---
 export default function ApertureDial({ angle, onChange, visible, orbCenter, collections = [] }) {
   const dialRef = useRef(null);
@@ -113,18 +66,21 @@ export default function ApertureDial({ angle, onChange, visible, orbCenter, coll
   const coneEndRad = -Math.PI / 2 + (angle * Math.PI / 180) / 2;
   const CONE_RADIUS = 70;
 
+  const hasCenter = orbCenter && (orbCenter.x || orbCenter.y);
+  const posStyle = hasCenter
+    ? { position: 'fixed', left: orbCenter.x - DIAL_RADIUS, top: orbCenter.y - DIAL_RADIUS }
+    : { position: 'fixed', top: '50%', left: '50%', transform: `translate(-50%, -50%) scale(${visible ? 1 : 0.85})` };
+
   return (
     <div
       ref={dialRef}
       style={{
-        position: 'absolute',
         width: DIAL_RADIUS * 2,
         height: DIAL_RADIUS * 2,
-        left: (orbCenter?.x || 0) - DIAL_RADIUS,
-        top: (orbCenter?.y || 0) - DIAL_RADIUS,
+        ...posStyle,
         opacity: visible ? 1 : 0,
         pointerEvents: visible ? 'auto' : 'none',
-        transform: visible ? 'scale(1)' : 'scale(0.85)',
+        ...(hasCenter ? { transform: visible ? 'scale(1)' : 'scale(0.85)' } : {}),
         transition: 'opacity 0.25s ease, transform 0.25s ease',
         zIndex: 100,
       }}

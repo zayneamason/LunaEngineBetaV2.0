@@ -17,36 +17,20 @@ from typing import Dict, Optional
 import logging
 
 from luna.memory.cluster_manager import ClusterManager, get_state_from_lock_in
+from luna.memory.config_loader import get_weights, get_decay_lambdas
 
 
 logger = logging.getLogger(__name__)
 
 
-# State thresholds (from architecture spec)
-STATE_THRESHOLDS = {
-    'drifting': 0.20,
-    'fluid': 0.70,
-    'settled': 0.85,
-    # crystallized = above 0.85
-}
+def _weights():
+    """Load lock-in weights from config (hot-reloads on file change)."""
+    return get_weights()
 
-# Lock-in component weights (Gemini corrections)
-WEIGHTS = {
-    'node': 0.40,    # Average node lock-in (weighted by membership)
-    'access': 0.30,  # Logarithmic access boost
-    'edge': 0.20,    # Average edge strength to other clusters
-    'age': 0.10,     # Age factor (newer = higher)
-}
 
-# Decay rates by state (per second)
-# Lower = slower decay = more persistent
-# Crystallized memories are nearly permanent
-DECAY_LAMBDAS = {
-    'crystallized': 0.00001,  # ~11.5 days half-life
-    'settled': 0.0001,        # ~1.15 days half-life
-    'fluid': 0.001,           # ~2.8 hours half-life
-    'drifting': 0.01,         # ~17 minutes half-life
-}
+def _decay_lambdas():
+    """Load decay rates from config (hot-reloads on file change)."""
+    return get_decay_lambdas()
 
 
 class LockInCalculator:
@@ -189,11 +173,12 @@ class LockInCalculator:
         conn.close()
 
         # ==================== CALCULATE BASE LOCK-IN ====================
+        weights = _weights()
         lock_in = (
-            WEIGHTS['node'] * weighted_node_strength +
-            WEIGHTS['access'] * access_factor +
-            WEIGHTS['edge'] * edge_factor +
-            WEIGHTS['age'] * age_factor
+            weights['node'] * weighted_node_strength +
+            weights['access'] * access_factor +
+            weights['edge'] * edge_factor +
+            weights['age'] * age_factor
         )
 
         # ==================== APPLY DECAY ====================
@@ -212,7 +197,7 @@ class LockInCalculator:
                 offline_seconds = (datetime.now() - last_access_dt).total_seconds()
 
                 # Get decay rate for current state
-                lambda_decay = DECAY_LAMBDAS.get(current_state, 0.001)
+                lambda_decay = _decay_lambdas().get(current_state, 0.001)
 
                 # Exponential decay: lock_in *= exp(-lambda * time)
                 decay_factor = math.exp(-lambda_decay * offline_seconds)
@@ -339,7 +324,7 @@ class LockInCalculator:
         if not cluster:
             return {'error': 'Cluster not found'}
 
-        lambda_decay = DECAY_LAMBDAS.get(cluster.state, 0.001)
+        lambda_decay = _decay_lambdas().get(cluster.state, 0.001)
         half_life_seconds = math.log(2) / lambda_decay if lambda_decay > 0 else float('inf')
 
         # Calculate time since last access
@@ -402,7 +387,8 @@ if __name__ == "__main__":
     print()
 
     # Run actual update
-    db_path = Path(__file__).parent.parent.parent.parent / "data" / "luna_engine.db"
+    from luna.core.paths import user_dir
+    db_path = user_dir() / "luna_engine.db"
 
     if db_path.exists():
         calc = LockInCalculator(str(db_path))

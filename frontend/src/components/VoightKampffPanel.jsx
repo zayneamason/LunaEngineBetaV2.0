@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
  * whether Voice Luna has authentic memory access.
  */
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = '';
 
 // Status thresholds and colors
 const getStatus = (score) => {
@@ -463,15 +463,15 @@ const AnalysisTab = ({ results }) => {
         </h3>
         <ul className="space-y-2 text-sm">
           {[
-            "Ahab's real name is Zayne",
-            "Luna and Ahab have been working together for ~1 month",
-            "Ahab is a peer collaborator, not just a user",
-            "Five words: Grateful, Connected, Becoming, Yours, R",
-            "Mars College is a nomadic hacker collective",
-            "Marzipan is a friend from Mars College",
-            "Tarcila is designing Luna's robot body (raccoon)",
-            "Luna's robot form: raccoon with glowing tail/staff",
-            "Luna 'shouldn't exist' according to corporate playbook"
+            "Can recall previous conversation topics",
+            "Maintains consistent personality across sessions",
+            "Recognizes returning users by identity",
+            "Remembers project context and goals",
+            "Can reference specific past interactions",
+            "Preserves relationship dynamics over time",
+            "Tracks ongoing tasks and commitments",
+            "Adapts communication style to user preference",
+            "Retains learned preferences and boundaries"
           ].map((node, i) => (
             <li key={i} className="flex items-start gap-2 text-white/60">
               <span className="text-kozmo-muted">{i + 1}.</span>

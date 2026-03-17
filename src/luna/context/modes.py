@@ -56,16 +56,16 @@ MODE_CONTRACTS = {
         "rules": [
             "Stay on topic — don't wander",
             "Be precise and actionable",
-            "Ask clarifying questions if the request is ambiguous",
+            "If you have relevant context, lead with it rather than asking clarifying questions",
             "Use appropriate technical depth for the task",
         ],
     },
     ResponseMode.UNCERTAIN: {
         "description": "Insufficient context to determine intent.",
         "rules": [
-            "Ask ONE clarifying question",
+            "If you have relevant memories, share them first — then ask for clarification only if needed",
             "Don't guess what the user wants",
-            "Keep it brief — 'what do you mean by that?' is fine",
+            "Keep it brief",
         ],
     },
 }

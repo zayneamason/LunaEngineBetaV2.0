@@ -22,7 +22,7 @@ export function ServerMonitorPanel({ onClose }) {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/health');
+      const res = await fetch('/health');
       if (!res.ok) throw new Error('Backend unreachable');
       const data = await res.json();
       setHealth(data);
@@ -36,7 +36,7 @@ export function ServerMonitorPanel({ onClose }) {
 
   const fetchProviders = useCallback(async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/llm/fallback-chain');
+      const res = await fetch('/llm/fallback-chain');
       if (res.ok) {
         const data = await res.json();
         setProviders(data.providers || {});
@@ -67,7 +67,7 @@ export function ServerMonitorPanel({ onClose }) {
   const handleRestartBackend = async () => {
     setRestarting(true);
     try {
-      const res = await fetch('http://127.0.0.1:8000/slash/restart-backend', {
+      const res = await fetch('/slash/restart-backend', {
         method: 'POST',
       });
       if (res.ok) {

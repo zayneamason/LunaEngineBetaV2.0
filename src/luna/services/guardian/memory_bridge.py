@@ -25,10 +25,10 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Default demo data location
-GUARDIAN_DATA_ROOT = Path("data/guardian")
+from luna.core.paths import local_dir
+GUARDIAN_DATA_ROOT = local_dir() / "guardian"
 
-# Project scope for all Guardian data
-GUARDIAN_SCOPE = "project:guardian-kinoni"
+# Scope is now derived from the engine's active project at init time.
 
 
 class GuardianMemoryBridge:
@@ -42,6 +42,12 @@ class GuardianMemoryBridge:
         """
         self.engine = engine
         self.data_root = data_root or GUARDIAN_DATA_ROOT
+        # Compute scope from engine's active project
+        self._scope = (
+            f"project:{engine.active_project}"
+            if engine and getattr(engine, "active_project", None)
+            else "global"
+        )
         self._synced = False
         self._node_map = {}  # guardian_id -> matrix_node_id
 
@@ -63,13 +69,10 @@ class GuardianMemoryBridge:
 
         stats = {"entities": 0, "knowledge": 0, "edges": 0, "skipped": 0}
 
-        # Check if already synced (look for existing guardian-kinoni nodes)
-        existing = await self._check_existing(matrix)
-        if existing > 0:
-            logger.info(
-                f"Guardian bridge: Found {existing} existing nodes in "
-                f"{GUARDIAN_SCOPE}, skipping sync (already populated)"
-            )
+        # Idempotency: skip if a substantial sync already exists (by scope, not content)
+        existing = await self._count_scoped_nodes(matrix)
+        if existing > 100:
+            logger.info(f"Guardian bridge: {existing} scoped nodes exist, skipping sync")
             self._synced = True
             return {"already_synced": True, "existing_nodes": existing}
 
@@ -89,7 +92,7 @@ class GuardianMemoryBridge:
         logger.info(
             f"Guardian bridge: Synced {stats['entities']} entities, "
             f"{stats['knowledge']} knowledge nodes, {stats['edges']} edges "
-            f"into scope '{GUARDIAN_SCOPE}'"
+            f"into scope '{self._scope}'"
         )
         return stats
 
@@ -99,7 +102,7 @@ class GuardianMemoryBridge:
             results = await matrix._matrix.search_nodes(
                 query="Kinoni",
                 limit=5,
-                scope=GUARDIAN_SCOPE,
+                scope=self._scope,
             )
             return len(results)
         except Exception:
@@ -150,7 +153,7 @@ class GuardianMemoryBridge:
                     node_type="FACT",
                     tags=tags,
                     confidence=95,
-                    scope=GUARDIAN_SCOPE,
+                    scope=self._scope,
                 )
                 self._node_map[entity_id] = node_id
                 count += 1
@@ -211,7 +214,7 @@ class GuardianMemoryBridge:
                         node_type=matrix_type,
                         tags=tags,
                         confidence=int(lock_in * 100),
-                        scope=GUARDIAN_SCOPE,
+                        scope=self._scope,
                     )
                     self._node_map[node_id] = matrix_node_id
                     count += 1
@@ -252,6 +255,7 @@ class GuardianMemoryBridge:
                         to_id=to_matrix,
                         relationship=rel_type,
                         strength=strength,
+                        scope=self._scope,
                     )
                     edge_count += 1
                 except Exception as e:
@@ -278,6 +282,7 @@ class GuardianMemoryBridge:
                                     to_id=to_matrix,
                                     relationship="related_to",
                                     strength=0.7,
+                                    scope=self._scope,
                                 )
                                 edge_count += 1
                             except Exception:
@@ -285,9 +290,21 @@ class GuardianMemoryBridge:
 
         return edge_count
 
+    async def _count_scoped_nodes(self, matrix) -> int:
+        """Count nodes that have the guardian scope."""
+        try:
+            db = matrix._matrix.db
+            row = await db.fetchone(
+                "SELECT COUNT(*) FROM memory_nodes WHERE scope = ?",
+                (self._scope,)
+            )
+            return row[0] if row else 0
+        except Exception:
+            return 0
+
     async def clear(self) -> int:
         """
-        Remove all Guardian-synced nodes from the matrix.
+        Remove all Guardian-synced nodes and edges from the matrix.
 
         Returns:
             Number of nodes removed.
@@ -296,17 +313,29 @@ class GuardianMemoryBridge:
         if not matrix or not matrix.is_ready:
             return 0
 
-        # Delete all nodes in guardian-kinoni scope directly via SQL
         try:
             db = matrix._matrix.db
+
+            # Delete scoped edges first (FK-safe order)
+            await db.execute(
+                "DELETE FROM graph_edges WHERE scope = ?",
+                (self._scope,)
+            )
+
+            # Delete scoped nodes
             result = await db.execute(
                 "DELETE FROM memory_nodes WHERE scope = ?",
-                (GUARDIAN_SCOPE,)
+                (self._scope,)
             )
             removed = result.rowcount
+
+            # Reload in-memory graph to drop deleted edges
+            if matrix._graph:
+                await matrix._graph.load()
+
             self._synced = False
             self._node_map = {}
-            logger.info(f"Guardian bridge: Cleared {removed} nodes")
+            logger.info(f"Guardian bridge: Cleared {removed} nodes + edges")
             return removed
         except Exception as e:
             logger.error(f"Guardian bridge: Clear failed: {e}")

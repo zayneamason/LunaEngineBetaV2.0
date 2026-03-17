@@ -186,7 +186,27 @@ check_service() {
 
 # ── 5. Launch services ──
 launch_services() {
-  local backend_pid="" frontend_pid="" observatory_pid="" tunnel_pid="" tunnel_url=""
+  local backend_pid="" frontend_pid="" observatory_pid="" tunnel_pid="" tunnel_url="" faceid_pid=""
+
+  # FaceID (start before backend — backend proxy depends on it)
+  local faceid_port=8101
+  local existing_faceid
+  existing_faceid=$(lsof -t -i ":$faceid_port" 2>/dev/null | head -1 || true)
+  if [ -n "$existing_faceid" ]; then
+    echo -e "  ${YELLOW}–${NC} FaceID already running on :$faceid_port (PID $existing_faceid)"
+  else
+    echo -e "${CYAN}Starting FaceID on :$faceid_port...${NC}"
+    cd "$ROOT/Tools/FaceID"
+    python3 serve.py --port "$faceid_port" &
+    faceid_pid=$!
+    sleep 2
+    if curl -s "http://localhost:$faceid_port/health" >/dev/null 2>&1; then
+      echo -e "  ${GREEN}●${NC} FaceID ready on :$faceid_port (PID $faceid_pid)"
+    else
+      echo -e "  ${YELLOW}!${NC} FaceID may still be starting (PID $faceid_pid)"
+    fi
+    cd "$ROOT"
+  fi
 
   # Backend (must start first — frontend proxies to it)
   if [ "$BACKEND_ENABLED" = true ]; then
@@ -194,7 +214,7 @@ launch_services() {
     cd "$ROOT"
     local debug_flag=""
     [ "$BACKEND_DEBUG" = true ] && debug_flag="--debug"
-    python scripts/run.py --server --host "$BACKEND_HOST" --port "$BACKEND_PORT" $debug_flag &
+    PYTHONPATH=src python3 scripts/run.py --server --host "$BACKEND_HOST" --port "$BACKEND_PORT" $debug_flag &
     backend_pid=$!
 
     local ready=false
@@ -275,6 +295,7 @@ launch_services() {
   python3 -c "
 import json
 pids = {}
+$([ -n "$faceid_pid" ] && echo "pids['faceid'] = {'pid': $faceid_pid, 'port': 8101}")
 $([ -n "$backend_pid" ] && echo "pids['backend'] = {'pid': $backend_pid, 'port': $BACKEND_PORT}")
 $([ -n "$frontend_pid" ] && echo "pids['frontend'] = {'pid': $frontend_pid, 'port': $FRONTEND_PORT}")
 $([ -n "$observatory_pid" ] && echo "pids['observatory'] = {'pid': $observatory_pid, 'port': $OBSERVATORY_PORT}")
@@ -395,6 +416,47 @@ setup_cleanup_trap() {
   trap 'echo ""; stop_all' EXIT INT TERM
 }
 
+# ── Service watchdog ──
+# Checks every 2s that FaceID, backend, and frontend are still up.
+# Restarts any that have died, logging each event.
+watchdog_loop() {
+  local check_interval=2
+  local restart_delay=1
+
+  while true; do
+    sleep "$check_interval"
+
+    # FaceID
+    if ! curl -s "http://localhost:8101/health" >/dev/null 2>&1; then
+      echo -e "${YELLOW}[watchdog]${NC} FaceID down — restarting on :8101"
+      cd "$ROOT/Tools/FaceID"
+      python3 serve.py --port 8101 &
+      cd "$ROOT"
+      sleep "$restart_delay"
+    fi
+
+    # Backend
+    if [ "$BACKEND_ENABLED" = true ] && ! curl -s "http://localhost:$BACKEND_PORT/health" >/dev/null 2>&1; then
+      echo -e "${YELLOW}[watchdog]${NC} Backend down — restarting on :$BACKEND_PORT"
+      cd "$ROOT"
+      local debug_flag=""
+      [ "$BACKEND_DEBUG" = true ] && debug_flag="--debug"
+      PYTHONPATH=src python3 scripts/run.py --server --host "$BACKEND_HOST" --port "$BACKEND_PORT" $debug_flag &
+      sleep "$restart_delay"
+    fi
+
+    # Frontend
+    if [ "$FRONTEND_ENABLED" = true ] && ! curl -s "http://localhost:$FRONTEND_PORT" >/dev/null 2>&1; then
+      echo -e "${YELLOW}[watchdog]${NC} Frontend down — restarting on :$FRONTEND_PORT"
+      cd "$ROOT/frontend"
+      LUNA_BACKEND_PORT=$BACKEND_PORT npm run dev &
+      cd "$ROOT"
+      sleep "$restart_delay"
+    fi
+
+  done
+}
+
 # ── Main ──
 # First pass: grab --profile before reading config (it affects config parsing)
 for arg in "$@"; do
@@ -431,5 +493,5 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop all services.${NC}"
 
-# Keep alive — wait for background processes
-wait
+# Keep alive — watchdog checks every 2s and restarts any dead service
+watchdog_loop

@@ -124,7 +124,7 @@ export default function ProjectSettings({ onClose }) {
                 marginTop: 6, fontSize: 9, color: '#4ade80',
                 fontFamily: "'JetBrains Mono', monospace",
               }}>
-                + Sync active -> {current.media_sync_path}
+                + Sync active {"\u2192"} {current.media_sync_path}
               </div>
             )}
           </div>

@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Optional, Dict
 from datetime import datetime
 
+from luna.core.paths import user_dir
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -33,7 +35,7 @@ class ClusteringService:
     """
 
     # Default database path
-    DEFAULT_DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "luna_engine.db"
+    DEFAULT_DB_PATH = user_dir() / "luna_engine.db"
 
     def __init__(
         self,

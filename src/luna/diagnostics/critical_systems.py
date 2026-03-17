@@ -8,11 +8,14 @@ This gate prevents silent failures that cause confabulation.
 If any critical system is broken, Luna refuses to pretend to be herself.
 """
 
+import os
 import sys
 import sqlite3
 import logging
 from pathlib import Path
 from typing import Optional
+
+from luna.core.paths import project_root as _default_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +32,14 @@ class CriticalSystemsCheck:
     # Required files that MUST exist
     REQUIRED_FILES = [
         ("models/luna_lora_mlx/adapters.safetensors", "LoRA adapter missing!"),
-        ("data/luna_engine.db", "Memory database missing!"),
+        ("data/user/luna_engine.db", "Memory database missing!"),
     ]
 
     # Required data integrity (db_path, query, minimum, name)
     # Note: Thresholds lowered after brain scrub (Jan 2026) - quality over quantity
     REQUIRED_DATA = [
-        ("data/luna_engine.db", "SELECT COUNT(*) FROM memory_nodes", 10000, "Memory nodes"),
-        ("data/luna_engine.db", "SELECT COUNT(*) FROM graph_edges", 10000, "Graph edges"),
+        ("data/user/luna_engine.db", "SELECT COUNT(*) FROM memory_nodes", 10000, "Memory nodes"),
+        ("data/user/luna_engine.db", "SELECT COUNT(*) FROM graph_edges", 10000, "Graph edges"),
     ]
 
     def __init__(self, project_root: Optional[Path] = None):
@@ -48,8 +51,7 @@ class CriticalSystemsCheck:
                           If None, auto-detected from this file's location.
         """
         if project_root is None:
-            # Navigate from src/luna/diagnostics/ to project root
-            self.project_root = Path(__file__).parent.parent.parent.parent
+            self.project_root = _default_project_root()
         else:
             self.project_root = Path(project_root)
 
@@ -128,9 +130,16 @@ class CriticalSystemsCheck:
         messages.append("LUNA CRITICAL SYSTEMS CHECK")
         messages.append("=" * 60)
 
+        # In compiled binary, skip mlx/LoRA checks (cloud-only mode)
+        _compiled = getattr(sys, "frozen", False) or hasattr(sys, "__compiled__") or os.environ.get("LUNA_BASE_PATH")
+        required_systems = [] if _compiled else self.REQUIRED_SYSTEMS
+        required_files = [f for f in self.REQUIRED_FILES if "luna_engine.db" in f[0]] if _compiled else self.REQUIRED_FILES
+
         # Check modules
         messages.append("\n📦 Required Modules:")
-        for module, fix_cmd in self.REQUIRED_SYSTEMS:
+        if not required_systems:
+            messages.append("  ✅ Compiled mode — local inference checks skipped")
+        for module, fix_cmd in required_systems:
             passed, msg = self.check_module(module)
             messages.append(f"  {msg}")
             if not passed:
@@ -138,20 +147,43 @@ class CriticalSystemsCheck:
                 messages.append(f"    Fix: {fix_cmd}")
 
         # Check files
+        # In compiled/app mode, missing files are warnings — the engine
+        # auto-creates databases from schema on first boot
         messages.append("\n📁 Required Files:")
-        for path, error_msg in self.REQUIRED_FILES:
+        for path, error_msg in required_files:
             passed, msg = self.check_file(path, error_msg)
             messages.append(f"  {msg}")
             if not passed:
-                all_passed = False
+                if _compiled:
+                    messages.append(f"    ⚠️  Will be created on first boot")
+                else:
+                    all_passed = False
 
         # Check data integrity
+        # In compiled/app mode OR first boot, data thresholds are advisory —
+        # the engine should boot even with an empty brain (first run, Tauri app, etc.)
+        _db_path = self.project_root / "data" / "user" / "luna_engine.db"
+        _first_boot = not _db_path.exists()
+        if not _first_boot:
+            try:
+                _conn = sqlite3.connect(str(_db_path))
+                _turns = _conn.execute("SELECT COUNT(*) FROM conversation_turns").fetchone()[0]
+                _conn.close()
+                _first_boot = _turns == 0
+            except Exception:
+                _first_boot = True
+
         messages.append("\n🧠 Memory Integrity:")
+        if _first_boot:
+            messages.append("  ℹ️  First boot detected — data thresholds are advisory")
         for db_path, query, minimum, name in self.REQUIRED_DATA:
             passed, msg = self.check_data(db_path, query, minimum, name)
             messages.append(f"  {msg}")
             if not passed:
-                all_passed = False
+                if _compiled or _first_boot:
+                    messages.append(f"    ⚠️  {name} below threshold — engine will start with limited memory")
+                else:
+                    all_passed = False
 
         # Check pipeline wiring (static analysis of server.py)
         messages.append("\n🔗 Pipeline Wiring:")
@@ -192,18 +224,17 @@ class CriticalSystemsCheck:
         checker = cls(project_root)
         passed, messages = checker.run_all_checks()
 
-        # Log all messages
+        # Log all messages (use logger, not print — compiled binaries may default to ASCII)
         for msg in messages:
             if msg.startswith("❌"):
                 logger.error(msg)
             elif msg.startswith("✅"):
                 logger.info(msg)
             else:
-                print(msg)  # Headers go to stdout
+                logger.info(msg)
 
         if not passed and strict:
-            print("\n🚨 Luna refuses to start with critical systems broken.")
-            print("Fix the issues above and restart.\n")
+            logger.critical("Luna refuses to start with critical systems broken. Fix the issues above and restart.")
             sys.exit(1)
 
         return passed

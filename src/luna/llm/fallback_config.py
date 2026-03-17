@@ -12,10 +12,12 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from .registry import ProviderRegistry
 
+from luna.core.paths import config_dir
+
 logger = logging.getLogger(__name__)
 
 # Default config location
-_CONFIG_DIR = Path(__file__).parent.parent.parent.parent / "config"
+_CONFIG_DIR = config_dir()
 DEFAULT_CONFIG_PATH = _CONFIG_DIR / "fallback_chain.yaml"
 
 

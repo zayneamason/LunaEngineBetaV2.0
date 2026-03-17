@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
 from luna.memory.cluster_manager import Cluster
+from luna.memory.config_loader import get_constellation_params
 
 
 @dataclass
@@ -42,13 +43,16 @@ class ConstellationAssembler:
     4. Format for Director consumption
     """
 
-    def __init__(self, max_tokens: int = 3000):
+    def __init__(self, max_tokens: int = None):
         """
         Initialize the assembler.
 
         Args:
-            max_tokens: Maximum tokens to allocate for context
+            max_tokens: Maximum tokens to allocate for context (reads from config if None)
         """
+        if max_tokens is None:
+            params = get_constellation_params()
+            max_tokens = params['max_tokens']
         self.max_tokens = max_tokens
         self.words_per_token = 0.75  # Conservative estimate
 
@@ -295,7 +299,7 @@ class ConstellationAssembler:
 def assemble_context(
     clusters: List[Dict],
     nodes: List[Dict],
-    max_tokens: int = 3000
+    max_tokens: int = None
 ) -> str:
     """
     Quick helper to assemble and format context.

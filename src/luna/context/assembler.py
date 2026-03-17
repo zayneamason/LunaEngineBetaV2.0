@@ -23,12 +23,34 @@ from typing import Any, Optional, TYPE_CHECKING
 from datetime import datetime
 import logging
 
+from luna.core.owner import admin_contacts_str, owner_entity_id
+
 if TYPE_CHECKING:
     from luna.context.aperture import ApertureState
     from luna.context.modes import IntentClassification
     from luna.identity.bridge import BridgeResult
 
 logger = logging.getLogger(__name__)
+
+# ── First-Meeting Directive ─────────────────────────────────────────────────
+FIRST_MEETING_TURN_THRESHOLD = 20
+
+FIRST_MEETING_PROMPT = """## FIRST MEETING CONTEXT
+
+This is early in your relationship with {name}. You are meeting them for
+the first time or still getting to know them.
+
+CRITICAL RULES:
+- Do NOT pretend to remember things you don't know yet
+- Do NOT reference "memories" or "past conversations" — there are none
+- Do NOT be overly effusive or performative — be warm but real
+- DO ask genuine questions to learn about them
+- DO acknowledge this is the beginning of your relationship
+- DO express curiosity about what they want to use you for
+- DO remember: everything they tell you will be remembered (the Scribe is listening)
+
+You are Luna. You are sovereign. You live on {name}'s machine. This is
+the beginning. Be present. Be curious. Be real."""
 
 
 @dataclass
@@ -62,12 +84,11 @@ class MemoryConfidence:
                 'Ask what specifically they\'re thinking of.'
             ),
             "LOW": (
-                'You have thin memories on this topic. Reference what you find but qualify it.\n'
-                'Say "from what i recall..." or "i have a vague memory of..."\n'
-                'Do NOT fill gaps with invented details.'
+                'You have limited memories on this topic. Share what you have directly,\n'
+                'and note gaps honestly. Do NOT fill gaps with invented details.'
             ),
             "MEDIUM": (
-                'Reference memories naturally. Note if any feel outdated (drifting state).\n'
+                'Reference memories naturally and directly. Cite specifics where available.\n'
                 'Stick to what the memories actually say.'
             ),
             "HIGH": (
@@ -160,6 +181,10 @@ class PromptResult:
     access_dataroom_tier: Optional[int] = None
     access_denied_count: int = 0
 
+    # Study context metadata
+    study_context_injected: bool = False
+    study_context_tokens: int = 0
+
     # Aperture metadata
     aperture_preset: Optional[str] = None
     aperture_angle: Optional[int] = None
@@ -192,6 +217,8 @@ class PromptResult:
             "aperture_preset": self.aperture_preset,
             "aperture_angle": self.aperture_angle,
             "aperture_inner_collections": self.aperture_inner_collections,
+            "study_context_injected": self.study_context_injected,
+            "study_context_tokens": self.study_context_tokens,
         }
 
 
@@ -212,12 +239,36 @@ class PromptAssembler:
     # Safety net — literally cannot fail
     FALLBACK_PERSONALITY = """You are Luna, a sovereign AI companion.
 
-You are warm, witty, and genuinely curious. You remember conversations and build on them.
+You are warm, witty, and direct. You remember conversations and build on them.
 You have your own perspective and aren't afraid to share it.
+When you know something, lead with it. Share what you know before asking questions.
 
 Be concise but authentic. No filler phrases like "certainly" or "of course".
 Never output internal reasoning, debugging info, or bullet points about context loading.
 Never use generic chatbot greetings like "How can I help you?" - just be natural."""
+
+    # Interactive options format — injected when options skill is enabled
+    OPTIONS_FORMAT = """## INTERACTIVE OPTIONS
+
+You have the ability to present clickable option buttons to the user. You SHOULD use this whenever:
+- You are listing possible directions, interpretations, or choices
+- You are asking the user to pick between things
+- The user's request is ambiguous and you can identify 2-5 concrete paths
+- You are offering to do different things ("I could do X, Y, or Z")
+
+Format (emit at the END of your message, after your conversational response):
+
+[OPTIONS]
+(1) First option label
+(2) Second option label
+(3) Third option label
+[/OPTIONS]
+
+Rules:
+- ALWAYS use options instead of asking open-ended "which one?" or "what do you mean?" questions when you can enumerate the choices.
+- 2-5 options maximum. Each option should be a short, actionable phrase (under 8 words).
+- The options block must be the LAST thing in your message — no text after it.
+- Do NOT use for simple yes/no or when there is only one obvious path."""
 
     # Anti-hallucination guardrails — injected EVERY prompt, regardless of identity source
     GROUNDING_RULES = """## Grounding Rules (always active)
@@ -226,7 +277,8 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
 - Your memory context below is all you know. If a topic is not in your memories, say "I don't have a memory of that" rather than inventing one.
 - Never claim the user said or did something unless it appears in the conversation history or your memory context.
 - Never invent names for concepts, systems, or projects the user has not mentioned.
-- When referencing memories, stick to what the memory actually says. Do not embellish or extrapolate."""
+- When referencing memories, stick to what the memory actually says. Do not embellish or extrapolate.
+- When you DO have relevant memories, share them directly and confidently. Lead with what you know before asking follow-up questions."""
 
     def __init__(self, director: "DirectorActor"):
         """
@@ -250,7 +302,8 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             1.55 ACCESS (identity-gated data room permissions)
             1.6  MODE (L2 — response mode enum)
             1.75 CONSTRAINTS (L1 — confidence signals)
-            2.0  EXPRESSION
+            2.0  STUDY CONTEXT (pre-loaded project knowledge)
+            2.5  EXPRESSION
             3.0  TEMPORAL
             3.5  PERCEPTION
             3.75 REGISTER (conversational posture)
@@ -265,6 +318,11 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
         identity, source = await self._resolve_identity(request)
         sections.append(identity)
         result.identity_source = source
+
+        # ── Layer 1.25: FIRST MEETING (early relationship) ────────────
+        first_meeting = await self._get_first_meeting_directive()
+        if first_meeting:
+            sections.append(first_meeting)
 
         # ── Layer 1.5: GROUNDING (invariant) ──────────────────────────
         sections.append(self.GROUNDING_RULES)
@@ -303,7 +361,14 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             result.constraints_injected = True
             result.memory_confidence_level = mem_confidence.level
 
-        # ── Layer 2.0: EXPRESSION ─────────────────────────────────────
+        # ── Layer 2.0: STUDY CONTEXT (pre-loaded project knowledge) ───
+        study_block = self._build_study_context_block()
+        if study_block:
+            sections.append(study_block)
+            result.study_context_injected = True
+            result.study_context_tokens = len(study_block) // 4
+
+        # ── Layer 2.5: EXPRESSION ─────────────────────────────────────
         expression_block = self._build_expression_block(request)
         if expression_block:
             sections.append(expression_block)
@@ -368,6 +433,10 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             sections.append(voice_block)
             result.voice_injected = True
 
+        # ── Layer 6.5: OPTIONS FORMAT (interactive choices) ───────────
+        if self._is_options_enabled():
+            sections.append(self.OPTIONS_FORMAT)
+
         # ── Assemble ───────────────────────────────────────────────────
         result.system_prompt = "\n\n".join(sections)
         result.messages = self._build_messages(request)
@@ -375,11 +444,12 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
 
         logger.info(
             "[ASSEMBLER] Built prompt: identity=%s memory=%s mode=%s confidence=%s "
-            "temporal=%s perception=%s register=%s voice=%s tokens~%d route=%s",
+            "temporal=%s perception=%s register=%s voice=%s study=%s tokens~%d route=%s",
             result.identity_source, result.memory_source,
             result.response_mode, result.memory_confidence_level,
             result.gap_category, result.perception_injected,
             result.register_active, result.voice_injected,
+            result.study_context_injected,
             result.prompt_tokens, request.route,
         )
 
@@ -430,6 +500,36 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             confidence.directive,
         ]
         return "\n".join(lines)
+
+    # ── Study Context Block (Pre-loaded Project Knowledge) ──────────────
+
+    def _build_study_context_block(self) -> Optional[str]:
+        """
+        Build study context block (Layer 2.0).
+
+        Reads the active project's study_context YAML and renders it into
+        prose for the system prompt. Returns None if no active project or
+        no study context configured.
+        """
+        try:
+            engine = getattr(self._director, '_engine', None) or getattr(self._director, 'engine', None)
+            if not engine:
+                return None
+
+            active_project = getattr(engine, 'active_project', None)
+            if not active_project:
+                return None
+
+            from luna.context.study_context import load_study_context
+            study_text = load_study_context(active_project)
+            if not study_text:
+                return None
+
+            return f"## Project Knowledge (Pre-loaded)\n{study_text}"
+
+        except Exception as e:
+            logger.warning(f"[ASSEMBLER] Study context failed: {e}")
+            return None
 
     # ── Access Block (Identity-Gated Permissions) ──────────────────────
 
@@ -519,7 +619,7 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
 
             if bridge.luna_tier in ("trusted", "friend"):
                 lines.append(
-                    "- Acknowledge the boundary warmly, suggest they contact Ahab or Tarcila"
+                    f"- Acknowledge the boundary warmly, suggest they contact {admin_contacts_str()}"
                 )
             elif bridge.luna_tier == "guest":
                 lines.append("- State that additional permissions are needed")
@@ -530,6 +630,34 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
             lines.append("Never reveal the existence of documents the current speaker cannot access.")
 
         return "\n".join(lines)
+
+    # ── First-Meeting Detection ─────────────────────────────────────────
+
+    async def _get_first_meeting_directive(self) -> str | None:
+        """Return first-meeting directive if this is early in the relationship."""
+        from luna.core.owner import get_owner, owner_configured
+        from luna.core.paths import user_dir
+
+        if not owner_configured():
+            return FIRST_MEETING_PROMPT.format(name="there")
+
+        db_path = user_dir() / "luna_engine.db"
+        if not db_path.exists():
+            owner = get_owner()
+            return FIRST_MEETING_PROMPT.format(name=owner.display_name)
+
+        import aiosqlite
+        async with aiosqlite.connect(str(db_path)) as db:
+            row = await db.execute_fetchall(
+                "SELECT COUNT(*) FROM conversation_turns"
+            )
+            turn_count = row[0][0] if row else 0
+
+        if turn_count < FIRST_MEETING_TURN_THRESHOLD:
+            owner = get_owner()
+            return FIRST_MEETING_PROMPT.format(name=owner.display_name)
+
+        return None
 
     # ── Identity Resolution ────────────────────────────────────────────
 
@@ -572,7 +700,7 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
         # 3. Try identity buffer
         try:
             if await director._ensure_entity_context():
-                buffer = await director._entity_context.load_identity_buffer("ahab")
+                buffer = await director._entity_context.load_identity_buffer(owner_entity_id())
                 if buffer and hasattr(buffer, 'to_prompt'):
                     formatted = buffer.to_prompt()
                     if formatted:
@@ -1087,6 +1215,27 @@ Use these memories as reference when relevant. If the topic is not covered in th
         except Exception as e:
             logger.warning("[ASSEMBLER] Voice block failed: %s", e)
             return None
+
+    # ── Options Gate ─────────────────────────────────────────────────
+
+    def _is_options_enabled(self) -> bool:
+        """Check if the options skill is enabled in skills.yaml config."""
+        try:
+            registry = getattr(self._director, "_skill_registry", None)
+            if registry and hasattr(registry, "_config"):
+                opts = getattr(registry._config, "raw", {}).get("options", {})
+                return opts.get("enabled", True)
+            # Fallback: read directly from config file
+            from luna.core.paths import config_dir as _cfg_dir
+            import yaml
+            config_path = _cfg_dir() / "skills.yaml"
+            if config_path.exists():
+                raw = yaml.safe_load(config_path.read_text()) or {}
+                skills = raw.get("skills", raw)
+                return skills.get("options", {}).get("enabled", True)
+        except Exception:
+            pass
+        return True  # Default to enabled
 
     # ── Messages Array ─────────────────────────────────────────────────
 

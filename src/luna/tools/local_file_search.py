@@ -7,13 +7,14 @@ Searches project files by content matching (case-insensitive substring).
 import asyncio
 import logging
 from functools import partial
-from pathlib import Path
 from typing import Optional
+
+from luna.core.paths import project_root
 
 logger = logging.getLogger(__name__)
 
 # Project root for resolving relative paths
-_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.resolve()
+_PROJECT_ROOT = project_root()
 
 
 def _sync_search_files(

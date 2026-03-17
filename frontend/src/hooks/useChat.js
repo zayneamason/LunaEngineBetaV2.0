@@ -41,6 +41,9 @@ const parseSlashCommand = (text) => {
   if (command === '/restart-frontend') {
     return { command, isLocal: true, type: 'restart-frontend' };
   }
+  if (command === '/options-test') {
+    return { command, isLocal: true, type: 'options-test' };
+  }
 
   const commands = {
     '/health': { endpoint: '/slash/health', method: 'GET' },
@@ -62,6 +65,14 @@ const parseSlashCommand = (text) => {
     // Voight-Kampff identity test
     '/vk': { endpoint: '/slash/vk', method: 'GET' },
     '/voight-kampff': { endpoint: '/slash/voight-kampff', method: 'GET' },
+    // Skill slash commands
+    '/math':       { endpoint: '/slash/skill/math',       method: 'POST', hasBody: true },
+    '/logic':      { endpoint: '/slash/skill/logic',      method: 'POST', hasBody: true },
+    '/read':       { endpoint: '/slash/skill/reading',    method: 'POST', hasBody: true },
+    '/diagnostic': { endpoint: '/slash/skill/diagnostic', method: 'POST', hasBody: true },
+    '/eden':       { endpoint: '/slash/skill/eden',       method: 'POST', hasBody: true },
+    '/format':     { endpoint: '/slash/skill/formatting', method: 'POST', hasBody: true },
+    '/analytics':  { endpoint: '/slash/skill/analytics',  method: 'POST', hasBody: true },
     // System prompt diagnostic
     '/prompt': { endpoint: '/slash/prompt', method: 'GET' },
     // FaceID management
@@ -80,13 +91,29 @@ const parseSlashCommand = (text) => {
   return { ...cmd, command, args };
 };
 
+const CHAT_STORAGE_KEY = 'luna_chat_messages';
+
+const loadPersistedMessages = () => {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Strip any stale streaming flags from recovered messages
+        return parsed.map((m) => ({ ...m, streaming: false }));
+      }
+    }
+  } catch {}
+  return [];
+};
+
 let _msgCounter = 0;
 const nextId = (prefix = 'msg') => `${prefix}-${Date.now()}-${++_msgCounter}`;
 
 export function useChat() {
   const { streamPersona, abort, isLoading, error } = useLunaAPI();
 
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(loadPersistedMessages);
   const [context, setContext] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const streamingRef = useRef('');
@@ -98,7 +125,8 @@ export function useChat() {
   useEffect(() => {
     const connectWebSocket = () => {
       try {
-        const ws = new WebSocket('ws://127.0.0.1:8000/ws/chat');
+        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/chat`);
 
         ws.onopen = () => {
           console.log('[Chat WS] Connected to shared session');
@@ -137,6 +165,7 @@ export function useChat() {
                   delegated: payload.data.delegated,
                   local: payload.data.local,
                   latency: payload.data.latency_ms,
+                  groundingMetadata: payload.data.groundingMetadata || null,
                   external: true,
                 },
               ]);
@@ -184,8 +213,12 @@ export function useChat() {
     ]);
 
     try {
-      const response = await fetch(`http://127.0.0.1:8000${parsed.endpoint}`, {
+      const response = await fetch(parsed.endpoint, {
         method: parsed.method,
+        ...(parsed.hasBody ? {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: parsed.args || '' }),
+        } : {}),
       });
 
       if (!response.ok) {
@@ -296,6 +329,35 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
           return { type: 'orb-test', animations: ORB_ANIMATIONS };
         }
 
+        if (parsed.type === 'options-test') {
+          setMessages((prev) => [
+            ...prev,
+            { id: nextId('user'), role: 'user', content: text },
+            {
+              id: nextId('cmd'),
+              role: 'assistant',
+              content: 'Here are some options to test the widget:',
+              isCommand: true,
+              commandSuccess: true,
+              widget: {
+                type: 'options',
+                skill: null,
+                data: {
+                  prompt: 'test options',
+                  options: [
+                    { label: 'Build a REST API', value: 'Build a REST API' },
+                    { label: 'Create a CLI tool', value: 'Create a CLI tool' },
+                    { label: 'Design a web app', value: 'Design a web app' },
+                  ],
+                  style: 'buttons',
+                },
+                latex: null,
+              },
+            },
+          ]);
+          return;
+        }
+
         if (parsed.type === 'restart-frontend') {
           setMessages((prev) => [
             ...prev,
@@ -369,9 +431,12 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
                     metadata: result.metadata,
                     tokens: result.metadata?.output_tokens,
                     latency: result.metadata?.generation_time_ms,
-                    delegated: result.metadata?.model?.includes('claude'),
-                    local: result.metadata?.model?.includes('qwen'),
+                    delegated: result.metadata?.model?.includes('claude') || result.metadata?.delegated === true,
+                    local: result.metadata?.model?.includes('qwen') || result.metadata?.local === true,
                     accessDeniedCount: result.metadata?.access_denied_count || 0,
+                    groundingMetadata: result.groundingMetadata || null,
+                    lunascript: result.metadata?.lunascript || null,
+                    widget: result.metadata?.widget || null,
                   }
                 : m
             )

@@ -7,6 +7,7 @@ Combines focused sub-routers into a single router for server.py.
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
+from luna.core.paths import user_dir
 from ..project import ProjectPaths, load_project, list_projects
 from ..entity import slugify, parse_entity_safe
 from ..graph import ProjectGraph
@@ -14,7 +15,7 @@ from ..scribo import ScriboService
 
 # ── Shared Configuration ─────────────────────────────────────────────────────
 
-DEFAULT_PROJECTS_ROOT = Path("data/kozmo_projects")
+DEFAULT_PROJECTS_ROOT = user_dir() / "kozmo_projects"
 
 
 # ── Shared Helpers ────────────────────────────────────────────────────────────

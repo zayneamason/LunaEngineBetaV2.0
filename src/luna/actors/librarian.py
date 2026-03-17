@@ -61,6 +61,12 @@ BUDGET_PRESETS = {
 }
 
 
+# ── First-Run Lock-In Boost (configurable) ──────────────────────────────────
+EARLY_RELATIONSHIP_TURN_THRESHOLD = 50
+EARLY_IMPORTANCE_BOOST = 0.3        # default importance 0.5 → 0.8
+EARLY_OWNER_IMPORTANCE_BOOST = 0.15  # extra boost for owner-mentioned nodes
+
+
 # =============================================================================
 # LIBRARIAN ACTOR
 # =============================================================================
@@ -417,7 +423,15 @@ class LibrarianActor(Actor):
         # 1. Check alias cache
         if name_lower in self.alias_cache:
             logger.debug(f"The Dude: Cache hit for '{name}'")
-            return self.alias_cache[name_lower]
+            entity_id = self.alias_cache[name_lower]
+            # Bump access_count on repeated mention → drives lock-in
+            matrix = await self._get_matrix()
+            if matrix:
+                try:
+                    await matrix.record_access(entity_id)
+                except Exception:
+                    pass  # Non-critical; don't block entity resolution
+            return entity_id
 
         # 2. Check exact DB match via Matrix actor
         matrix = await self._get_matrix()
@@ -426,6 +440,11 @@ class LibrarianActor(Actor):
             if existing:
                 self.alias_cache[name_lower] = existing
                 self._nodes_merged += 1
+                # Bump access_count on re-discovered entity → drives lock-in
+                try:
+                    await matrix.record_access(existing)
+                except Exception:
+                    pass
                 logger.debug(f"The Dude: Found existing node for '{name}'")
                 return existing
 
@@ -775,16 +794,28 @@ class LibrarianActor(Actor):
         # 1. Process objects - store as memory nodes, resolve mentioned entities
         matrix = await self._get_matrix()
 
+        # Early-relationship importance boost
+        early = await self._is_early_relationship()
+
         for obj in extraction.objects:
             node_type = obj.type.value if hasattr(obj.type, 'value') else str(obj.type)
 
             # Store the extracted object as a memory node (not as an entity)
             if matrix:
+                importance = 0.5  # default
+                if early:
+                    importance = min(1.0, importance + EARLY_IMPORTANCE_BOOST)
+                    from luna.core.owner import get_owner
+                    owner_name = (get_owner().display_name or "").lower()
+                    if owner_name and owner_name in obj.content.lower():
+                        importance = min(1.0, importance + EARLY_OWNER_IMPORTANCE_BOOST)
+
                 node_id = await matrix.add_node(
                     node_type=node_type,
                     content=obj.content,
                     source=extraction.source_id,
                     confidence=obj.confidence,
+                    importance=importance,
                     metadata=obj.metadata if hasattr(obj, 'metadata') else None,
                 )
                 result.nodes_created.append(node_id)
@@ -913,7 +944,7 @@ class LibrarianActor(Actor):
         graph = matrix_actor._graph
 
         # Check if edge already exists
-        if graph.has_edge(from_id, to_id):
+        if graph.has_edge(from_id, to_id, relationship=edge_type):
             logger.debug(
                 f"EDGE_SKIP: Duplicate | from={from_id} to={to_id} type={edge_type}"
             )
@@ -1013,7 +1044,7 @@ class LibrarianActor(Actor):
         cutoff = datetime.now().timestamp() - (age_days * 24 * 3600)
         edges_to_prune = []
 
-        for u, v, data in graph.graph.edges(data=True):
+        for u, v, key, data in graph.graph.edges(data=True, keys=True):
             strength = data.get("strength", 1.0)
             # created_at is stored as ISO string by add_edge, parse it
             created_raw = data.get("created_at")
@@ -1035,7 +1066,7 @@ class LibrarianActor(Actor):
                 result["preserved"] += 1
                 continue
 
-            edges_to_prune.append((u, v, data.get("relationship")))
+            edges_to_prune.append((u, v, key))
 
         for from_id, to_id, relationship in edges_to_prune:
             try:
@@ -1429,7 +1460,7 @@ class LibrarianActor(Actor):
                 content=json.dumps(thread.to_dict()),
                 source="librarian",
                 confidence=1.0,
-                tags=self._thread_tags(thread),
+                metadata={"tags": self._thread_tags(thread)},
             )
             thread.id = node_id
 
@@ -1472,6 +1503,22 @@ class LibrarianActor(Actor):
         if len(self._thread_cache) > self._max_cached_threads:
             oldest_key = next(iter(self._thread_cache))
             del self._thread_cache[oldest_key]
+
+        # Study context section awareness (Phase 4c)
+        if thread.project_slug and thread.entities:
+            try:
+                from luna.context.study_context import load_raw_config, get_matching_sections
+                raw_config = load_raw_config(thread.project_slug)
+                if raw_config:
+                    sections = get_matching_sections(raw_config, thread.entities)
+                    thread.study_context_sections = sections
+                    if sections:
+                        logger.info(
+                            f"The Dude: Thread '{thread.topic}' matched "
+                            f"{len(sections)} study context sections: {sections}"
+                        )
+            except Exception as e:
+                logger.debug(f"The Dude: Study context matching failed: {e}")
 
         return thread
 
@@ -1579,7 +1626,7 @@ class LibrarianActor(Actor):
             await matrix.update_node(
                 node_id=thread.id,
                 content=json.dumps(thread.to_dict()),
-                tags=self._thread_tags(thread),
+                metadata={"tags": self._thread_tags(thread)},
             )
         except Exception as e:
             logger.error(f"The Dude: Failed to update thread node {thread.id}: {e}")
@@ -1739,6 +1786,20 @@ class LibrarianActor(Actor):
 
         return None
 
+    async def _is_early_relationship(self) -> bool:
+        """True if < EARLY_RELATIONSHIP_TURN_THRESHOLD conversation turns."""
+        if not self.engine:
+            return False
+        try:
+            matrix_actor = self.engine.actors.get("matrix")
+            if matrix_actor and matrix_actor._matrix:
+                count = await matrix_actor._matrix.db.fetchone(
+                    "SELECT COUNT(*) FROM conversation_turns"
+                )
+                return (count[0] if count else 0) < EARLY_RELATIONSHIP_TURN_THRESHOLD
+        except Exception:
+            return False
+
     # =========================================================================
     # STATS & LIFECYCLE
     # =========================================================================
@@ -1785,10 +1846,8 @@ class LibrarianActor(Actor):
         """Load alias cache from disk."""
         import json
         import os
-        cache_path = os.path.join(
-            os.environ.get("LUNA_BASE_PATH", ""),
-            "data", "alias_cache.json"
-        )
+        from luna.core.paths import user_dir
+        cache_path = str(user_dir() / "alias_cache.json")
         try:
             if os.path.exists(cache_path):
                 with open(cache_path, "r") as f:
@@ -1801,10 +1860,8 @@ class LibrarianActor(Actor):
         """Save alias cache to disk."""
         import json
         import os
-        cache_path = os.path.join(
-            os.environ.get("LUNA_BASE_PATH", ""),
-            "data", "alias_cache.json"
-        )
+        from luna.core.paths import user_dir
+        cache_path = str(user_dir() / "alias_cache.json")
         try:
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             with open(cache_path, "w") as f:

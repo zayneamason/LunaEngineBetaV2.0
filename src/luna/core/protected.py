@@ -16,8 +16,8 @@ from typing import List
 # Paths that are CRITICAL to Luna's identity
 PROTECTED_PATHS = [
     # Memory — Luna's experiences (61k+ memories)
-    "data/luna_engine.db",
-    "data/luna.db",
+    "data/user/luna_engine.db",
+    "data/user/luna.db",
 
     # Identity — Luna's trained personality (LoRA adapter)
     "models/luna_lora_mlx/",
@@ -115,16 +115,16 @@ def check_protection_status(project_root: Path) -> dict:
 
 if __name__ == "__main__":
     # Allow running as standalone script
-    from pathlib import Path
     import json
+    from luna.core.paths import project_root
 
     # Navigate from src/luna/core/ to project root
-    project_root = Path(__file__).parent.parent.parent.parent
+    _root = project_root()
 
     print("Protected Paths Status:")
     print("=" * 60)
 
-    status = check_protection_status(project_root)
+    status = check_protection_status(_root)
     for path, info in status.items():
         if info["exists"]:
             if info["type"] == "file":

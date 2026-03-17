@@ -188,6 +188,36 @@ class QueryRouter:
         ],
     }
 
+    SKILL_PATTERNS = {
+        "skill:math": [
+            r"\b(solve|integrate|differentiate|factor|simplify|expand)\b",
+            r"\b(derivative|integral|equation|polynomial)\b",
+        ],
+        "skill:logic": [
+            r"\b(truth table|tautology|contradiction|satisfiable)\b",
+            r"\b(propositional|boolean)\b.*\b(logic|expression)\b",
+        ],
+        "skill:diagnostic": [
+            r"\b(system health|diagnostics?|health check|status check)\b",
+            r"\bhow.{0,15}(doing|feeling|running)\b",
+        ],
+        "skill:formatting": [
+            r"\b(bullet points?|numbered list|outline for|table of)\b",
+            r"\b(format|organize|structure)\b.{0,20}\b(as|into)\b.{0,20}\b(list|bullets|table)\b",
+        ],
+        "skill:reading": [
+            r"\b(read|open|load|parse)\b.{0,30}\.(pdf|docx?|xlsx|pptx|txt|md)\b",
+        ],
+        "skill:eden": [
+            r"\b(generate|create|make|draw|paint|render)\b.{0,30}\b(image|picture|art|illustration)\b",
+            r"\b(generate|create|make)\b.{0,30}\b(video|animation)\b",
+        ],
+        "skill:analytics": [
+            r"\b(memory stats?|memory (analytics?|summary))\b",
+            r"\b(session stats?|entity count)\b",
+        ],
+    }
+
     BACKGROUND_PATTERNS = [
         r"\bin the background\b",
         r"\b(notify|tell) me when\b",
@@ -209,13 +239,13 @@ class QueryRouter:
 
     # Known project entity names — any mention forces SIMPLE_PLAN → RETRIEVE
     # This prevents "tell me about Kozmo" from routing DIRECT and skipping memory
+    # Luna architecture entity names — any mention forces SIMPLE_PLAN → RETRIEVE
     ENTITY_PATTERNS = [
         r"\bkozmo\b", r"\bguardian\b", r"\beclissi\b", r"\btapestry\b",
-        r"\bkinoni\b", r"\brosa\b", r"\beden\b", r"\bmemory.?matrix\b",
-        r"\bhai.?dai\b", r"\btarcila\b", r"\bcalvin\b", r"\bearth.?scale\b",
-        r"\brotary\b", r"\bcrane.?ai\b", r"\baibrarian\b", r"\bobservatory\b",
+        r"\beden\b", r"\bmemory.?matrix\b",
+        r"\baibrarian\b", r"\bobservatory\b", r"\bnexus\b",
         r"\bthe forger\b", r"\bben.?franklin\b", r"\bthe scribe\b",
-        r"\blibrarian\b", r"\bdataroom\b", r"\bmars college\b",
+        r"\blibrarian\b", r"\bdataroom\b",
     ]
 
     def __init__(self):
@@ -230,6 +260,10 @@ class QueryRouter:
         self._memory_query_re = [re.compile(p, re.IGNORECASE) for p in self.MEMORY_QUERY_PATTERNS]
         self._entity_re = [re.compile(p, re.IGNORECASE) for p in self.ENTITY_PATTERNS]
         self._dataroom_re = [re.compile(p, re.IGNORECASE) for p in self.DATAROOM_PATTERNS]
+        self._skill_re = {
+            skill: [re.compile(p, re.IGNORECASE) for p in patterns]
+            for skill, patterns in self.SKILL_PATTERNS.items()
+        }
         self._tool_re = {
             tool: [re.compile(p, re.IGNORECASE) for p in patterns]
             for tool, patterns in self.TOOL_PATTERNS.items()
@@ -559,6 +593,11 @@ class QueryRouter:
         # Data room query
         if self._matches_any(query, self._dataroom_re):
             signals.append("dataroom_query")
+
+        # Skill-eligible query detection (observability — skills fire from Director)
+        for skill_name, patterns in self._skill_re.items():
+            if self._matches_any(query, patterns):
+                signals.append(skill_name)
 
         return signals
 

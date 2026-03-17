@@ -9,10 +9,15 @@ Handles camera lifecycle, frame grabbing, and cleanup.
 import cv2
 import numpy as np
 import logging
+import time as _time
 from typing import Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# Rate-limit camera error logging to once per 60 seconds
+_last_capture_error_log: float = 0.0
+_CAPTURE_ERROR_LOG_INTERVAL: float = 60.0
 
 
 @dataclass
@@ -93,7 +98,11 @@ class Camera:
                 )
             time.sleep(0.05)
 
-        logger.error("Failed to capture frame after retries")
+        global _last_capture_error_log
+        now = _time.time()
+        if now - _last_capture_error_log >= _CAPTURE_ERROR_LOG_INTERVAL:
+            logger.error("Failed to capture frame after retries (suppressing for 60s)")
+            _last_capture_error_log = now
         return None
     
     def close(self):

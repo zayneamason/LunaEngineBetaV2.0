@@ -27,6 +27,7 @@ class ExtractionType(str, Enum):
     OBSERVATION = "OBSERVATION" # Something noticed or observed
     MEMORY = "MEMORY"           # A memory or recollection shared
     CORRECTION = "CORRECTION"   # User or Luna corrected a previous claim
+    DELEGATION_RESULT = "DELEGATION_RESULT"  # LunaScript delegation round-trip outcome
 
 
 class SourceProvenance(str, Enum):
@@ -237,7 +238,7 @@ class ExtractionConfig:
 
     Allows runtime switching between Claude models and local inference.
     """
-    backend: str = "local"  # "local", "haiku", "sonnet", "disabled"
+    backend: str = "haiku"  # "local", "haiku", "sonnet", "disabled"
     batch_size: int = 5     # Turns per extraction call
     min_content_length: int = 10  # Skip very short messages
 
@@ -346,6 +347,7 @@ class Thread:
     resumed_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     project_slug: Optional[str] = None
+    study_context_sections: list[str] = field(default_factory=list)
     parent_thread_id: Optional[str] = None
     resume_count: int = 0
 
@@ -363,6 +365,7 @@ class Thread:
             "resumed_at": self.resumed_at.isoformat() if self.resumed_at else None,
             "closed_at": self.closed_at.isoformat() if self.closed_at else None,
             "project_slug": self.project_slug,
+            "study_context_sections": self.study_context_sections,
             "parent_thread_id": self.parent_thread_id,
             "resume_count": self.resume_count,
         }
@@ -382,6 +385,7 @@ class Thread:
             resumed_at=datetime.fromisoformat(data["resumed_at"]) if data.get("resumed_at") else None,
             closed_at=datetime.fromisoformat(data["closed_at"]) if data.get("closed_at") else None,
             project_slug=data.get("project_slug"),
+            study_context_sections=data.get("study_context_sections", []),
             parent_thread_id=data.get("parent_thread_id"),
             resume_count=data.get("resume_count", 0),
         )

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import GlassCard from './GlassCard';
 import AnnotatedText from './AnnotatedText';
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = '';
 
 // Ring colors for visual distinction
 const RING_COLORS = {

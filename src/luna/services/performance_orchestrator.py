@@ -4,9 +4,12 @@ Performance Orchestrator — Coordinates voice + orb from gestures.
 This wraps OrbStateManager and adds voice modulation,
 keeping the systems unified rather than duplicated.
 """
+import json
+import os
 import re
 import logging
-from typing import Optional, Callable, List, Tuple
+from pathlib import Path
+from typing import Optional, Callable, List, Tuple, Set
 from dataclasses import replace
 
 from .performance_state import (
@@ -14,8 +17,21 @@ from .performance_state import (
     EMOTION_PRESETS, GESTURE_TO_EMOTION, EMOJI_TO_EMOTION, EmotionPreset
 )
 from .orb_state import OrbStateManager, OrbAnimation
+from luna.core.paths import config_dir
 
 logger = logging.getLogger(__name__)
+
+# Map each EmotionPreset to the gesture_contexts it belongs to.
+# When gesture_contexts is configured, only emotions whose context
+# appears in the allowed list will fire.
+_EMOTION_CONTEXT: dict[EmotionPreset, str] = {
+    EmotionPreset.EXCITED: "emotional_responses",
+    EmotionPreset.THOUGHTFUL: "processing_complex_thoughts",
+    EmotionPreset.WARM: "connection_moments",
+    EmotionPreset.PLAYFUL: "emotional_responses",
+    EmotionPreset.CONCERNED: "emotional_responses",
+    EmotionPreset.CURIOUS: "processing_complex_thoughts",
+}
 
 
 class PerformanceOrchestrator:
@@ -46,6 +62,12 @@ class PerformanceOrchestrator:
             for pattern, emotion in GESTURE_TO_EMOTION.items()
         }
 
+        # Load allowed gesture contexts from config
+        self._allowed_contexts: Optional[Set[str]] = None
+        self._config_mtime: float = 0
+        self._config_path = config_dir() / "personality.json"
+        self._load_gesture_contexts()
+
     @property
     def current_state(self) -> PerformanceState:
         return self._current_state
@@ -53,6 +75,25 @@ class PerformanceOrchestrator:
     @property
     def orb_manager(self) -> OrbStateManager:
         return self._orb_manager
+
+    def _load_gesture_contexts(self):
+        """Load allowed gesture contexts from personality.json, with mtime caching."""
+        try:
+            if not self._config_path.exists():
+                self._allowed_contexts = None
+                return
+            mtime = self._config_path.stat().st_mtime
+            if mtime == self._config_mtime:
+                return  # No change
+            self._config_mtime = mtime
+            with open(self._config_path, "r") as f:
+                config = json.load(f)
+            contexts = config.get("expression", {}).get("gesture_contexts", [])
+            self._allowed_contexts = set(contexts) if contexts else None
+            logger.debug("Loaded gesture_contexts: %s", self._allowed_contexts)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning("Failed to load gesture_contexts: %s", e)
+            self._allowed_contexts = None
 
     def subscribe(self, callback: Callable[[PerformanceState], None]) -> Callable:
         """Subscribe to state changes. Returns unsubscribe function."""
@@ -109,9 +150,17 @@ class PerformanceOrchestrator:
 
     def _detect_emotion(self, text: str) -> Optional[EmotionPreset]:
         """Match text against gesture patterns, then emoji, to find emotion."""
+        # Refresh allowed contexts (mtime-cached, cheap)
+        self._load_gesture_contexts()
+
         # 1. Gesture patterns first
         for pattern, emotion in self._compiled_patterns.items():
             if pattern.search(text):
+                if self._allowed_contexts is not None:
+                    ctx = _EMOTION_CONTEXT.get(emotion)
+                    if ctx and ctx not in self._allowed_contexts:
+                        logger.debug("Filtered emotion %s (context %s not allowed)", emotion, ctx)
+                        continue
                 logger.debug(f"Detected emotion {emotion} from pattern {pattern.pattern}")
                 return emotion
 
@@ -119,6 +168,10 @@ class PerformanceOrchestrator:
         scan_text = text[:500]
         for emoji, emotion in EMOJI_TO_EMOTION.items():
             if emoji in scan_text:
+                if self._allowed_contexts is not None:
+                    ctx = _EMOTION_CONTEXT.get(emotion)
+                    if ctx and ctx not in self._allowed_contexts:
+                        continue
                 logger.debug(f"Detected emotion {emotion} from emoji {emoji}")
                 return emotion
 

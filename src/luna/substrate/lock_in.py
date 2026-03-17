@@ -245,30 +245,41 @@ async def compute_lock_in_for_node(
     retrieval_count: int,
     reinforcement_count: int,
     graph: "MemoryGraph",
+    db=None,
 ) -> tuple[float, LockInState]:
     """
     Compute lock-in for a specific node, including network effects.
 
-    This queries the graph to count settled neighbors.
+    Queries the graph for neighbors and the DB for their lock-in states
+    to count how many settled nodes surround this one.
 
     Args:
         node_id: The node to compute lock-in for
         retrieval_count: Access count for this node
         reinforcement_count: Reinforcement count for this node
         graph: The memory graph for neighbor lookup
+        db: Optional DB handle for querying neighbor lock-in states
 
     Returns:
         Tuple of (lock_in_coefficient, state)
     """
-    # Count settled neighbors
     locked_neighbor_count = 0
-    
+
     if graph and graph.has_node(node_id):
         neighbors = await graph.get_neighbors(node_id, depth=1)
-        # Would need to query each neighbor's lock_in from DB
-        # For now, simplified - just count neighbors
-        # TODO: Optimize with batch query
-        locked_neighbor_count = len(neighbors) // 3  # Rough estimate
+        if neighbors and db:
+            # Batch query: count neighbors with lock_in_state = 'settled'
+            placeholders = ",".join("?" for _ in neighbors)
+            try:
+                row = await db.fetchone(
+                    f"SELECT COUNT(*) FROM memory_nodes WHERE id IN ({placeholders}) AND lock_in_state = 'settled'",
+                    tuple(neighbors),
+                )
+                locked_neighbor_count = row[0] if row else 0
+            except Exception:
+                locked_neighbor_count = len(neighbors) // 3  # Fallback
+        elif neighbors:
+            locked_neighbor_count = len(neighbors) // 3  # No DB, rough estimate
 
     # TODO: Implement tag sibling counting
     locked_tag_sibling_count = 0

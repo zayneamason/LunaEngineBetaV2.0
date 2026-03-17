@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
  * Shows real-time QA health, assertion results, and bug tracking.
  */
 
-const API_BASE = 'http://127.0.0.1:8000';
+const API_BASE = '';
 
 // Severity colors
 const severityColors = {

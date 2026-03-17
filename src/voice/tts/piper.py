@@ -34,9 +34,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Vendored binary location (relative to src/)
+# Vendored binary location
 # Path: src/voice/piper_bin/piper/piper
-_SRC_DIR = Path(__file__).parent.parent.parent  # src/
+try:
+    from luna.core.paths import project_root as _project_root
+    _SRC_DIR = _project_root() / "src"
+except ImportError:
+    _SRC_DIR = Path(__file__).parent.parent.parent  # src/ (fallback)
 PIPER_BIN_DIR = _SRC_DIR / "voice" / "piper_bin" / "piper"
 PIPER_BINARY = PIPER_BIN_DIR / "piper"
 

@@ -22,13 +22,13 @@ const MENTION_TYPE_COLORS = {
   reference: '#64748b',
 }
 
-export default function EntitiesView({ navigateTab }) {
+export default function EntitiesView({ navigateTab, activeProjectSlug }) {
   const { entities, selectedEntityId, entityDetail, selectEntity, fetchEntityDetail, fetchEntities } = useObservatoryStore()
   const [typeFilter, setTypeFilter] = useState(null)
 
   useEffect(() => {
-    fetchEntities(typeFilter)
-  }, [typeFilter])
+    fetchEntities(typeFilter, activeProjectSlug)
+  }, [typeFilter, activeProjectSlug])
 
   const filtered = entities.filter(e => !typeFilter || e.type === typeFilter)
 
