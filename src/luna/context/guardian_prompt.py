@@ -56,8 +56,11 @@ async def build_guardian_prompt(engine) -> str:
                 f"Avg lock-in: {stats.get('avg_lock_in', '?')}. "
                 f"DB size: {stats.get('db_size_mb', '?')} MB."
             )
+        elif stats and stats.get("error"):
+            state_parts.append(f"Memory topology: unavailable ({stats['error']})")
     except Exception as e:
-        logger.debug(f"Guardian prompt: Observatory stats unavailable: {e}")
+        logger.warning(f"Guardian prompt: Observatory stats failed: {e}")
+        state_parts.append(f"Memory topology: unavailable (error: {e})")
 
     # 2. Pipeline health
     try:
@@ -73,7 +76,7 @@ async def build_guardian_prompt(engine) -> str:
             f"{librarian_stats.get('edges_created', 0)} edges created."
         )
     except Exception as e:
-        logger.debug(f"Guardian prompt: Pipeline stats unavailable: {e}")
+        logger.warning(f"Guardian prompt: Pipeline stats unavailable: {e}")
 
     # 3. Consciousness state
     try:
@@ -84,7 +87,7 @@ async def build_guardian_prompt(engine) -> str:
             f"focused topics: {summary.get('focused_topics', [])}"
         )
     except Exception as e:
-        logger.debug(f"Guardian prompt: Consciousness unavailable: {e}")
+        logger.warning(f"Guardian prompt: Consciousness unavailable: {e}")
 
     # 4. QA summary
     try:
@@ -100,7 +103,7 @@ async def build_guardian_prompt(engine) -> str:
                 f"recent failures: {qa_stats.get('recent_failures', 0)}"
             )
     except Exception as e:
-        logger.debug(f"Guardian prompt: QA stats unavailable: {e}")
+        logger.warning(f"Guardian prompt: QA stats unavailable: {e}")
 
     # 5. Pending entity confirmations
     try:
@@ -116,7 +119,7 @@ async def build_guardian_prompt(engine) -> str:
             else:
                 state_parts.append("Pending entity confirmations: 0")
     except Exception as e:
-        logger.debug(f"Guardian prompt: Entity queue unavailable: {e}")
+        logger.warning(f"Guardian prompt: Entity queue unavailable: {e}")
 
     # 6. Active thread
     try:
@@ -132,18 +135,19 @@ async def build_guardian_prompt(engine) -> str:
             else:
                 state_parts.append("Active thread: none")
     except Exception as e:
-        logger.debug(f"Guardian prompt: Thread info unavailable: {e}")
+        logger.warning(f"Guardian prompt: Thread info unavailable: {e}")
 
     # 7. Engine uptime and actor health
     try:
-        actor_names = [a.name for a in engine._actors] if hasattr(engine, "_actors") else []
-        uptime = time.time() - engine._start_time if hasattr(engine, "_start_time") else 0
+        actor_names = list(engine.actors.keys()) if hasattr(engine, "actors") else []
+        from datetime import datetime
+        uptime_secs = (datetime.now() - engine.start_time).total_seconds() if hasattr(engine, "start_time") else 0
         state_parts.append(
-            f"Engine uptime: {uptime:.0f}s. "
+            f"Engine uptime: {uptime_secs:.0f}s. "
             f"Active actors: {', '.join(actor_names) if actor_names else 'unknown'}"
         )
     except Exception as e:
-        logger.debug(f"Guardian prompt: Engine info unavailable: {e}")
+        logger.warning(f"Guardian prompt: Engine info unavailable: {e}")
 
     # Assemble system state section
     if state_parts:
