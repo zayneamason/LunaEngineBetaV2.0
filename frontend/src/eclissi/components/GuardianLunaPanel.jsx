@@ -6,7 +6,7 @@ import React, { useRef, useEffect } from 'react';
  * Shows session summaries, entity health, action recommendations, Observatory stats,
  * and a placeholder input bar (no LLM backend until Phase 6).
  */
-export default function GuardianLunaPanel({ messages = [], stats, onClose, onSend, inputText = '', onInputChange }) {
+export default function GuardianLunaPanel({ messages = [], stats, onClose, onSend, inputText = '', onInputChange, isStreaming = false }) {
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -21,7 +21,7 @@ export default function GuardianLunaPanel({ messages = [], stats, onClose, onSen
   ];
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isStreaming) {
       e.preventDefault();
       onSend?.(inputText);
     }
@@ -144,18 +144,21 @@ export default function GuardianLunaPanel({ messages = [], stats, onClose, onSen
           onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(251,191,36,0.15)'; }}
         />
         <button
-          onClick={() => onSend?.(inputText)}
+          onClick={() => !isStreaming && onSend?.(inputText)}
+          disabled={isStreaming}
           style={{
             padding: '6px 12px', borderRadius: 6,
             fontSize: 11, fontWeight: 600,
-            background: 'rgba(251,191,36,0.15)',
+            background: isStreaming ? 'rgba(251,191,36,0.08)' : 'rgba(251,191,36,0.15)',
             border: '1px solid rgba(251,191,36,0.3)',
-            color: '#fbbf24', cursor: 'pointer',
+            color: isStreaming ? '#94a3b8' : '#fbbf24',
+            cursor: isStreaming ? 'not-allowed' : 'pointer',
+            opacity: isStreaming ? 0.6 : 1,
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(251,191,36,0.25)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(251,191,36,0.15)'; }}
+          onMouseEnter={(e) => { if (!isStreaming) e.currentTarget.style.background = 'rgba(251,191,36,0.25)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = isStreaming ? 'rgba(251,191,36,0.08)' : 'rgba(251,191,36,0.15)'; }}
         >
-          Send
+          {isStreaming ? '...' : 'Send'}
         </button>
       </div>
     </div>
@@ -168,6 +171,7 @@ function GuardianMessage({ msg }) {
     summary: { bg: 'rgba(96,165,250,0.06)', border: 'rgba(96,165,250,0.15)', icon: '📊', label: 'Session' },
     health: { bg: 'rgba(244,114,182,0.06)', border: 'rgba(244,114,182,0.15)', icon: 'E', label: 'Entity' },
     action: { bg: 'rgba(251,191,36,0.06)', border: 'rgba(251,191,36,0.15)', icon: '!', label: 'Action' },
+    assistant: { bg: 'rgba(251,191,36,0.04)', border: 'rgba(251,191,36,0.12)', icon: '◆', label: 'Guardian' },
     user: { bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)', icon: '>', label: 'You' },
     system: { bg: 'rgba(148,163,184,0.06)', border: 'rgba(148,163,184,0.1)', icon: '⚙', label: 'System' },
   };

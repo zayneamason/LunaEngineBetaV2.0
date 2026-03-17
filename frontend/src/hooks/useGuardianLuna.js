@@ -24,16 +24,102 @@ const useGuardianStore = create((set, get) => ({
   setStats: (stats) => set({ stats }),
   setInputText: (inputText) => set({ inputText }),
 
-  sendMessage: (text) => {
+  isStreaming: false,
+
+  sendMessage: async (text) => {
     if (!text.trim()) return;
+    const { addMessage } = get();
+
+    // Add user message immediately
     set((s) => ({
-      messages: [
-        ...s.messages,
-        { type: 'user', content: text, ts: Date.now() },
-        { type: 'system', content: 'Guardian Luna backend is not yet connected (Phase 6).', ts: Date.now() },
-      ],
+      messages: [...s.messages, { type: 'user', content: text, ts: Date.now() }],
       inputText: '',
+      isStreaming: true,
     }));
+
+    try {
+      const response = await fetch('/guardian/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      });
+
+      if (!response.ok) {
+        addMessage({ type: 'system', content: `Error: ${response.status} ${response.statusText}` });
+        set({ isStreaming: false });
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let accumulated = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.type === 'token') {
+              accumulated += event.text;
+              // Update the last message in-place for streaming effect
+              set((s) => {
+                const msgs = [...s.messages];
+                const last = msgs[msgs.length - 1];
+                if (last?.type === 'assistant' && last._streaming) {
+                  msgs[msgs.length - 1] = { ...last, content: accumulated };
+                } else {
+                  msgs.push({ type: 'assistant', content: accumulated, ts: Date.now(), _streaming: true });
+                }
+                return { messages: msgs };
+              });
+            } else if (event.type === 'done') {
+              // Finalize the streamed message
+              set((s) => {
+                const msgs = [...s.messages];
+                const last = msgs[msgs.length - 1];
+                if (last?.type === 'assistant' && last._streaming) {
+                  msgs[msgs.length - 1] = {
+                    type: 'assistant',
+                    content: event.response,
+                    ts: Date.now(),
+                    metadata: event.metadata,
+                  };
+                } else {
+                  msgs.push({
+                    type: 'assistant',
+                    content: event.response,
+                    ts: Date.now(),
+                    metadata: event.metadata,
+                  });
+                }
+                return { messages: msgs, isStreaming: false };
+              });
+            } else if (event.type === 'error') {
+              addMessage({ type: 'system', content: `Error: ${event.message}` });
+              set({ isStreaming: false });
+            }
+          } catch {
+            // Skip malformed SSE lines
+          }
+        }
+      }
+
+      // Safety: ensure streaming flag is cleared
+      set({ isStreaming: false });
+
+    } catch (err) {
+      addMessage({ type: 'system', content: `Connection error: ${err.message}` });
+      set({ isStreaming: false });
+    }
   },
 }));
 

@@ -247,6 +247,7 @@ const EclissiHome = ({ activeProjectSlug }) => {
           onSend={guardian.sendMessage}
           inputText={guardian.inputText}
           onInputChange={guardian.setInputText}
+          isStreaming={guardian.isStreaming}
         />
       )}
     </div>

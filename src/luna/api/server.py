@@ -1228,6 +1228,145 @@ async def reject_entity(entity_id: str):
 
 
 # ============================================
+# GUARDIAN LUNA — OPERATIONAL CHAT STREAM
+# ============================================
+
+@app.post("/guardian/chat/stream")
+async def guardian_chat_stream(request: MessageRequest):
+    """
+    Stream Guardian Luna's response to admin queries.
+
+    Guardian Luna is a READ-ONLY inspector of Luna's knowledge system.
+    Uses the same LLM fallback chain as companion chat but with a flat
+    operational system prompt — no personality kernel, no prosody.
+
+    SSE format matches /persona/stream:
+    - {"type": "context", "state": {...}}
+    - {"type": "token", "text": "chunk"}
+    - {"type": "done", "response": "full text", "metadata": {...}}
+    - {"type": "error", "message": "..."}
+    """
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+
+    async def generate_guardian_sse() -> AsyncGenerator[str, None]:
+        """Generate Guardian Luna SSE stream."""
+        import time as _time
+
+        start_time = _time.time()
+
+        try:
+            # 1. Build Guardian system prompt with live state
+            from luna.context.guardian_prompt import build_guardian_prompt, fetch_guardian_history
+            system_prompt = await build_guardian_prompt(_engine)
+
+            # 2. Fetch Guardian conversation history
+            history = await fetch_guardian_history(_engine, limit=20)
+
+            # 3. Build messages array for LLM
+            messages = []
+            for turn in history:
+                messages.append({"role": turn["role"], "content": turn["content"]})
+            messages.append({"role": "user", "content": request.message})
+
+            # 4. Send context event (system state summary for frontend)
+            context_event = {
+                "type": "context",
+                "state": {"source": "guardian", "history_turns": len(history)},
+            }
+            yield f"data: {json.dumps(context_event)}\n\n"
+
+            # 5. Get the fallback chain from Director (shares same LLM config)
+            director = _engine.get_actor("director")
+            if not director:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Director not available'})}\n\n"
+                return
+
+            fallback_chain = getattr(director, "_fallback_chain", None)
+            if not fallback_chain:
+                yield f"data: {json.dumps({'type': 'error', 'message': 'No LLM provider available'})}\n\n"
+                return
+
+            # 6. Stream from fallback chain with Guardian prompt
+            response_text = ""
+            token_count = 0
+
+            try:
+                async for text in fallback_chain.stream(
+                    messages=messages,
+                    system=system_prompt,
+                    max_tokens=1024,
+                    temperature=0.5,  # Lower temp for factual/diagnostic responses
+                ):
+                    response_text += text
+                    token_count += 1
+                    yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
+
+            except Exception as llm_err:
+                logger.error(f"Guardian LLM error: {llm_err}")
+                yield f"data: {json.dumps({'type': 'error', 'message': f'LLM inference failed: {llm_err}'})}\n\n"
+                return
+
+            elapsed_ms = (_time.time() - start_time) * 1000
+
+            # 7. Record turns to DB with guardian source tag
+            # Direct DB insert — skips Scribe extraction (admin chatter is not knowledge)
+            try:
+                import aiosqlite
+                from luna.core.paths import user_dir
+                from datetime import datetime
+
+                db_path = user_dir() / "luna_engine.db"
+                now = datetime.utcnow().isoformat()
+                meta = json.dumps({"source": "guardian"})
+
+                async with aiosqlite.connect(str(db_path)) as db:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO conversation_turns "
+                        "(session_id, role, content, tokens, created_at, metadata) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (_engine.session_id, "user", request.message, None, now, meta),
+                    )
+                    await db.execute(
+                        "INSERT OR IGNORE INTO conversation_turns "
+                        "(session_id, role, content, tokens, created_at, metadata) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (_engine.session_id, "assistant", response_text, token_count, now, meta),
+                    )
+                    await db.commit()
+            except Exception as db_err:
+                logger.warning(f"Guardian: failed to record turns: {db_err}")
+
+            # 8. Send done event
+            done_event = {
+                "type": "done",
+                "response": response_text,
+                "metadata": {
+                    "source": "guardian",
+                    "latency_ms": round(elapsed_ms),
+                    "output_tokens": token_count,
+                },
+            }
+            yield f"data: {json.dumps(done_event)}\n\n"
+
+        except Exception as e:
+            logger.error(f"Guardian stream error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate_guardian_sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ============================================
 # BROWSER FACE RECOGNITION ENDPOINT
 # ============================================
 
