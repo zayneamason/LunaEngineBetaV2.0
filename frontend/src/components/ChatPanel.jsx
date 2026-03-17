@@ -103,6 +103,83 @@ const SLASH_COMMANDS = [
   { command: '/faceid', description: 'FaceID: status, set-pin, or reset', icon: '🔐', placeholder: '[set-pin <pin> | reset <pin>]' },
 ];
 
+/**
+ * ActivitySummary — shows the most relevant pipeline events (one per type),
+ * with a collapsed count and expand link to Observatory.
+ */
+function ActivitySummary({ events, navigate }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const relevant = events.filter((e) =>
+    ['fact_extracted', 'edge_created', 'thread_updated', 'quest_generated'].includes(e.type)
+  );
+  if (relevant.length === 0) return null;
+
+  // Deduplicate: keep the latest event per type
+  const byType = {};
+  for (const e of relevant) {
+    byType[e.type] = e;
+  }
+  const deduped = Object.values(byType);
+
+  // Count totals per type for the summary line
+  const typeCounts = {};
+  for (const e of relevant) {
+    typeCounts[e.type] = (typeCounts[e.type] || 0) + 1;
+  }
+
+  const summaryParts = [];
+  if (typeCounts.fact_extracted) summaryParts.push(`${typeCounts.fact_extracted} facts`);
+  if (typeCounts.edge_created) summaryParts.push(`${typeCounts.edge_created} edges`);
+  if (typeCounts.thread_updated) summaryParts.push(`thread activity`);
+  if (typeCounts.quest_generated) summaryParts.push(`${typeCounts.quest_generated} quests`);
+
+  return (
+    <div className="mt-1" style={{ fontSize: 11 }}>
+      {/* Summary line */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '3px 12px', color: 'var(--ec-text-faint, #6b7280)',
+        }}
+      >
+        <span style={{ opacity: 0.5 }}>pipeline:</span>
+        <span>{summaryParts.join(' · ')}</span>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: '#60a5fa', fontSize: 10, padding: 0,
+          }}
+        >
+          {expanded ? 'collapse' : 'expand'}
+        </button>
+        <button
+          onClick={() => navigate({ to: 'observatory' })}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'var(--ec-text-faint, #6b7280)', fontSize: 10, padding: 0,
+            marginLeft: 'auto',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = '#60a5fa'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--ec-text-faint, #6b7280)'; }}
+        >
+          full report →
+        </button>
+      </div>
+
+      {/* Expanded: show individual cards */}
+      {expanded && (
+        <div className="flex flex-col">
+          {deduped.map((event, i) => (
+            <ActivityCard key={`activity-${i}`} event={event} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entities = [], identityName = null, identityTier = null, extractions = [], extractionEntities = [], extractionRelationships = [], pendingEntities = [], onConfirmEntity, onRejectEntity, voice = null, activeProjectSlug = null, knowledgeEvents = [], guardianOpen = false, onToggleGuardian = null, consciousness = null }) => {
   const [input, setInput] = useState('');
   const [showCommands, setShowCommands] = useState(false);
@@ -458,15 +535,16 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                         ? 'bg-kozmo-accent/10 border border-kozmo-accent/30 text-white/90'
                         : 'bg-kozmo-surface border border-kozmo-border text-white/80'
                     }`}
-                    style={msg.role === 'assistant' ? {
+                    style={msg.role === 'assistant' && msg.metadata?.life_state ? {
                       borderLeft: `2.5px solid ${
-                        msg.metadata?.life_state === 'personal' ? '#60a5fa' :
-                        msg.metadata?.life_state === 'bridge' ? '#fbbf24' :
-                        msg.metadata?.life_state === 'mixed' ? '#c084fc' :
-                        '#34d399'
+                        msg.metadata.life_state === 'personal' ? '#5b8fa8' :
+                        msg.metadata.life_state === 'project' ? '#7a9e6d' :
+                        msg.metadata.life_state === 'bridge' ? '#c4975a' :
+                        msg.metadata.life_state === 'mixed' ? '#9a7fb5' :
+                        'transparent'
                       }`,
                     } : undefined}
-                    data-state={msg.role === 'assistant' ? (msg.metadata?.life_state || 'project') : undefined}
+                    data-state={msg.role === 'assistant' ? (msg.metadata?.life_state || undefined) : undefined}
                   >
                     <div className="text-sm whitespace-pre-wrap">
                       {debugKeywords.length > 0
@@ -527,19 +605,12 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                   </div>
                 )}
 
-                {/* Activity Cards — pipeline events after last assistant message */}
+                {/* Activity Cards — most relevant pipeline events after last assistant message */}
                 {badgeConfig.show_knowledge_events &&
                   msg.role === 'assistant' && !msg.streaming &&
                   msg.id === messages[messages.length - 1]?.id &&
                   knowledgeEvents.length > 0 && (
-                  <div className="flex flex-col mt-1">
-                    {knowledgeEvents
-                      .filter((e) => ['fact_extracted', 'edge_created', 'thread_updated', 'quest_generated'].includes(e.type))
-                      .slice(-5)
-                      .map((event, i) => (
-                        <ActivityCard key={`activity-${i}`} event={event} />
-                      ))}
-                  </div>
+                  <ActivitySummary events={knowledgeEvents} navigate={navigate} />
                 )}
 
                 {/* Thread Card — active thread after last assistant message */}
@@ -562,18 +633,22 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                       <QuestCard key={`quest-${i}`} quest={e.payload} />
                     ))}
 
-                {/* Attention Prompts — frequent entity mentions */}
+                {/* Attention Prompts — entities mentioned frequently across extractions */}
                 {msg.role === 'assistant' && !msg.streaming &&
                   msg.id === messages[messages.length - 1]?.id &&
                   (() => {
+                    // Count how often each entity name appears across fact_extracted events
                     const counts = {};
                     knowledgeEvents.forEach((e) => {
-                      if (e.type === 'entity_created' && e.payload?.name) {
-                        counts[e.payload.name] = (counts[e.payload.name] || 0) + 1;
+                      if (e.type === 'fact_extracted' && e.payload?.entities) {
+                        for (const name of e.payload.entities) {
+                          counts[name] = (counts[name] || 0) + 1;
+                        }
                       }
                     });
                     return Object.entries(counts)
                       .filter(([, count]) => count >= 3)
+                      .sort(([, a], [, b]) => b - a)
                       .slice(0, 2)
                       .map(([name, count]) => (
                         <AttentionPrompt key={`attn-${name}`} entityName={name} mentionCount={count} />

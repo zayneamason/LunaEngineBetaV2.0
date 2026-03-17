@@ -1,11 +1,12 @@
 import React from 'react';
 import { useNavigation } from '../hooks/useNavigation';
 
+// Colors match the handoff spec — muted, purposeful tones
 const STATE_COLORS = {
-  personal: '#60a5fa',
-  project: '#34d399',
-  bridge: '#fbbf24',
-  mixed: '#c084fc',
+  personal: '#5b8fa8',
+  project: '#7a9e6d',
+  bridge: '#c4975a',
+  mixed: '#9a7fb5',
 };
 
 /**
@@ -15,8 +16,8 @@ const STATE_COLORS = {
 export default function ContextStrip({ consciousness, entities = [], sessionStart }) {
   const { navigate } = useNavigation();
 
-  const mood = consciousness?.mood || 'project';
-  const stateColor = STATE_COLORS[mood] || STATE_COLORS.project;
+  const mood = consciousness?.mood;
+  const stateColor = mood ? (STATE_COLORS[mood] || '#94a3b8') : null;
 
   // Session duration
   let duration = '';
@@ -42,19 +43,21 @@ export default function ContextStrip({ consciousness, entities = [], sessionStar
       flexShrink: 0,
       overflow: 'hidden',
     }}>
-      {/* Life state pill */}
-      <span style={{
-        padding: '2px 8px',
-        borderRadius: 10,
-        fontSize: 10,
-        fontWeight: 600,
-        background: `${stateColor}15`,
-        color: stateColor,
-        textTransform: 'uppercase',
-        letterSpacing: '0.5px',
-      }}>
-        {mood}
-      </span>
+      {/* Life state pill — only shown when consciousness reports a state */}
+      {mood && stateColor && (
+        <span style={{
+          padding: '2px 8px',
+          borderRadius: 10,
+          fontSize: 10,
+          fontWeight: 600,
+          background: `${stateColor}15`,
+          color: stateColor,
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+        }}>
+          {mood}
+        </span>
+      )}
 
       {/* Separator */}
       {visibleEntities.length > 0 && (

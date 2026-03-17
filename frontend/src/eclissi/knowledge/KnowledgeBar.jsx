@@ -100,7 +100,7 @@ export default function KnowledgeBar({ extractions, liveEvents, isActive, onClic
           className="ec-font-mono"
           style={{ fontSize: 9, color: 'var(--ec-text-faint)', marginLeft: 2 }}
         >
-          {extractions.length}
+          {source.length}
         </span>
       </div>
 
