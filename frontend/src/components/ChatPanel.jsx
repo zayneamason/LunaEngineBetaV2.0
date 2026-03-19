@@ -713,6 +713,9 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
           isListening={voice.isListening}
           isSpeaking={voice.isSpeaking}
           isThinking={voice.isThinking}
+          transcription={voice.transcription}
+          audioLevel={voice.audioLevel}
+          hint={voice.hint}
           onClose={voice.stopVoice}
         />
       )}
@@ -777,44 +780,20 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
             className="flex-1 font-mono bg-kozmo-surface border border-kozmo-border rounded px-4 py-3 text-sm text-white/90 placeholder-white/30 focus:outline-none focus:border-kozmo-accent/50 transition-all disabled:opacity-50"
             style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03), 0 2px 8px rgba(0,0,0,0.3)' }}
           />
-          {/* Mic button */}
-          {voice && (
+          {/* Voice controls */}
+          {voice && !voice.isRunning && (
+            /* Voice OFF — single toggle button */
             <button
               type="button"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                if (!voice.isRunning) {
-                  voice.startVoice(false);
-                } else if (!voice.isListening) {
-                  voice.startListening();
-                }
-              }}
-              onMouseUp={() => {
-                if (voice.isListening) voice.stopListening();
-              }}
-              onMouseLeave={() => {
-                if (voice.isListening) voice.stopListening();
-              }}
+              onClick={() => voice.startVoice(false)}
+              title="Start voice mode"
               style={{
-                width: 40,
-                height: 40,
-                borderRadius: 8,
-                border: voice.isRunning
-                  ? '1px solid rgba(192,132,252,0.5)'
-                  : '1px solid var(--ec-border, rgba(255,255,255,0.06))',
-                background: voice.isListening
-                  ? 'rgba(192,132,252,0.3)'
-                  : voice.isRunning
-                  ? 'rgba(192,132,252,0.12)'
-                  : 'rgba(255,255,255,0.03)',
-                color: voice.isRunning ? 'var(--ec-accent-luna, #c084fc)' : 'var(--ec-text-faint, #5a5a70)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                transition: 'all 0.2s ease',
-                animation: voice.isListening ? 'ec-mic-pulse 1.5s ease-in-out infinite' : 'none',
+                width: 40, height: 40, borderRadius: 8,
+                border: '1px solid var(--ec-border, rgba(255,255,255,0.06))',
+                background: 'rgba(255,255,255,0.03)',
+                color: 'var(--ec-text-faint, #5a5a70)',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0, transition: 'all 0.2s ease',
               }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -824,6 +803,108 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                 <line x1="8" y1="23" x2="16" y2="23" />
               </svg>
             </button>
+          )}
+          {voice && voice.isRunning && (
+            /* Voice ON — obvious control strip */
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              {/* State label pill */}
+              <div style={{
+                padding: '4px 10px', borderRadius: 6,
+                fontSize: 10, fontWeight: 600, letterSpacing: '1.5px',
+                fontFamily: 'var(--ec-font-mono, monospace)',
+                background: voice.isListening ? 'rgba(239,68,68,0.2)'
+                  : voice.isThinking ? 'rgba(245,158,11,0.2)'
+                  : voice.isSpeaking ? 'rgba(34,197,94,0.2)'
+                  : 'rgba(192,132,252,0.1)',
+                color: voice.isListening ? '#ef4444'
+                  : voice.isThinking ? '#f59e0b'
+                  : voice.isSpeaking ? '#22c55e'
+                  : 'var(--ec-accent-luna, #c084fc)',
+                border: `1px solid ${
+                  voice.isListening ? 'rgba(239,68,68,0.3)'
+                  : voice.isThinking ? 'rgba(245,158,11,0.3)'
+                  : voice.isSpeaking ? 'rgba(34,197,94,0.3)'
+                  : 'rgba(192,132,252,0.2)'
+                }`,
+                animation: voice.isListening ? 'ec-pulse 1s ease-in-out infinite' : 'none',
+              }}>
+                {voice.isListening ? 'REC'
+                  : voice.isThinking ? 'PROCESSING'
+                  : voice.isSpeaking ? 'SPEAKING'
+                  : 'READY'}
+              </div>
+
+              {/* Push-to-talk button — big and obvious */}
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  if (!voice.isListening) voice.startListening();
+                }}
+                onMouseUp={() => { if (voice.isListening) voice.stopListening(); }}
+                onMouseLeave={() => { if (voice.isListening) voice.stopListening(); }}
+                title="Hold to talk"
+                style={{
+                  width: 44, height: 44, borderRadius: 22,
+                  border: voice.isListening
+                    ? '2px solid #ef4444'
+                    : '2px solid rgba(192,132,252,0.4)',
+                  background: voice.isListening
+                    ? `rgba(239,68,68,${0.2 + Math.min(1, (voice.audioLevel || 0) * 5) * 0.4})`
+                    : voice.isThinking
+                    ? 'rgba(245,158,11,0.15)'
+                    : 'rgba(192,132,252,0.08)',
+                  color: voice.isListening ? '#ef4444'
+                    : voice.isThinking ? '#f59e0b'
+                    : 'var(--ec-accent-luna, #c084fc)',
+                  cursor: voice.isThinking || voice.isSpeaking ? 'wait' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0,
+                  transition: voice.isListening ? 'background 0.08s' : 'all 0.2s ease',
+                  boxShadow: voice.isListening
+                    ? `0 0 ${10 + Math.min(1, (voice.audioLevel || 0) * 5) * 20}px rgba(239,68,68,${0.15 + Math.min(1, (voice.audioLevel || 0) * 5) * 0.35})`
+                    : 'none',
+                }}
+              >
+                {voice.isThinking ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ animation: 'ec-spin 1s linear infinite' }}>
+                    <path d="M12 2a10 10 0 0 1 10 10" />
+                  </svg>
+                ) : voice.isSpeaking ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                  </svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                  </svg>
+                )}
+              </button>
+
+              {/* Stop voice button */}
+              <button
+                type="button"
+                onClick={voice.stopVoice}
+                title="End voice mode"
+                style={{
+                  width: 28, height: 28, borderRadius: 6,
+                  border: '1px solid rgba(239,68,68,0.2)',
+                  background: 'rgba(239,68,68,0.08)',
+                  color: 'rgba(239,68,68,0.6)',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0, transition: 'all 0.2s ease',
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                </svg>
+              </button>
+            </div>
           )}
 
           <button

@@ -7,6 +7,7 @@ direct PersonaAdapter integration and uses Piper TTS (no Docker).
 import logging
 import asyncio
 import time
+import re
 import numpy as np
 from typing import Optional, Callable
 
@@ -189,6 +190,9 @@ class VoiceBackend:
         self._on_speech_end: Optional[Callable[[str], None]] = None
         self._on_response: Optional[Callable[[str], None]] = None
         self._on_status_change: Optional[Callable[[str], None]] = None
+        self._on_audio_level: Optional[Callable[[float], None]] = None
+        self._audio_level_cb = None  # capture callback reference for removal
+        self._level_skip = False  # throttle to ~5 events/sec
 
         logger.info("VoiceBackend initialized")
 
@@ -274,6 +278,26 @@ class VoiceBackend:
         self._recording = True
         self._audio_buffer = b""
         self.audio_capture.clear_queue()
+
+        # Register audio level callback for real-time mic feedback
+        if self._on_audio_level:
+            self._level_skip = False
+
+            def _level_cb(audio_bytes: bytes):
+                # Throttle: emit every other chunk (~5/sec at 100ms chunks)
+                self._level_skip = not self._level_skip
+                if self._level_skip:
+                    return
+                try:
+                    samples = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                    rms = float(np.sqrt(np.mean(samples ** 2)))
+                    self._on_audio_level(rms)
+                except Exception:
+                    pass
+
+            self._audio_level_cb = _level_cb
+            self.audio_capture.add_callback(_level_cb)
+
         self.audio_capture.start()
         self.conversation.start_turn(Speaker.USER)
 
@@ -294,21 +318,29 @@ class VoiceBackend:
 
         self._recording = False
 
+        # Remove audio level callback
+        if self._audio_level_cb:
+            self.audio_capture.remove_callback(self._audio_level_cb)
+            self._audio_level_cb = None
+            if self._on_audio_level:
+                self._on_audio_level(0.0)  # reset to zero
+
         # Small delay to ensure final audio chunks are queued
         await asyncio.sleep(0.15)
 
-        # Collect all recorded audio with longer timeout
+        # Stop the capture stream first so no new chunks are produced,
+        # then drain whatever remains in the queue.
+        self.audio_capture.stop()
+
         audio_chunks = []
         empty_count = 0
-        while empty_count < 3:  # Allow up to 3 empty reads before stopping
-            chunk = self.audio_capture.get_audio(timeout=0.1)
+        while empty_count < 3:
+            chunk = self.audio_capture.get_audio(timeout=0.05)
             if chunk is None:
                 empty_count += 1
             else:
                 audio_chunks.append(chunk)
-                empty_count = 0  # Reset on successful read
-
-        self.audio_capture.stop()
+                empty_count = 0
 
         audio_data = b"".join(audio_chunks)
         if not audio_data:
@@ -437,6 +469,10 @@ class VoiceBackend:
         """
         Process user input and generate spoken response.
 
+        Uses Director's streaming callbacks to start TTS at the first
+        sentence boundary — Luna begins speaking while the LLM is still
+        generating the rest of the response.
+
         Args:
             user_text: Transcribed user speech
         """
@@ -460,21 +496,71 @@ class VoiceBackend:
 
         # Process through PersonaAdapter (Luna Engine)
         if self.persona.is_available():
+            # Get Director for token streaming callback
+            director = None
             try:
-                # Pass conversation history to PersonaAdapter - THIS IS THE KEY FIX
+                if self.persona._engine and hasattr(self.persona._engine, 'director'):
+                    director = self.persona._engine.director
+            except Exception:
+                pass
+
+            # Streaming TTS state
+            sentence_buffer = ""
+            audio_queue: asyncio.Queue = asyncio.Queue()
+            first_sentence_sent = False
+            # Use default prosody for streamed sentences (personality not yet available)
+            voice_knobs = self.prosody_mapper.get_luna_default().to_voice_knobs()
+
+            # Parallel playback task — synthesizes + plays each sentence as it arrives
+            async def _playback_loop():
+                while True:
+                    item = await audio_queue.get()
+                    if item is None:
+                        break
+                    try:
+                        audio = await self.tts.synthesize(item, voice_knobs=voice_knobs)
+                        if audio.data:
+                            await self.audio_playback.play(audio)
+                    except Exception as e:
+                        logger.error(f"[STREAM-TTS] Playback error: {e}")
+
+            playback_task = asyncio.create_task(_playback_loop())
+
+            # Token callback — fires for every token during Director generation
+            def _on_token(token: str):
+                nonlocal sentence_buffer, first_sentence_sent
+                sentence_buffer += token
+                # Push on sentence boundary (. ! ? followed by space/end), min 20 chars
+                if re.search(r'[.!?]\s*$', sentence_buffer) and len(sentence_buffer) > 20:
+                    sentence = sentence_buffer.strip()
+                    sentence_buffer = ""
+                    if not first_sentence_sent:
+                        first_sentence_sent = True
+                        self._notify_status("speaking")
+                        logger.info(f"[STREAM-TTS] First sentence ready ({len(sentence)} chars)")
+                    audio_queue.put_nowait(sentence)
+
+            # Register streaming callback BEFORE calling process_message
+            if director:
+                director.on_stream(_on_token)
+                logger.info("[STREAM-TTS] Registered Director token callback")
+
+            try:
                 history_to_pass = self.conversation_buffer.to_messages()
-                logger.info(f"[HISTORY-TRACE] VoiceBackend: About to call PersonaAdapter with {len(history_to_pass)} history turns")
-                for i, turn in enumerate(history_to_pass):
-                    logger.info(f"[HISTORY-TRACE] VoiceBackend: Turn {i}: {turn['role']}: '{turn['content'][:50]}...'")
+                logger.info(f"[STREAM-TTS] Calling PersonaAdapter with {len(history_to_pass)} history turns")
 
                 response = await self.persona.process_message(
                     message=user_text,
                     interface="voice",
-                    conversation_history=history_to_pass  # NEW: Pass history!
+                    conversation_history=history_to_pass,
                 )
 
                 if response and response.response:
-                    response_text = response.response
+                    # Strip [OPTIONS] blocks
+                    response_text = re.sub(
+                        r'\[OPTIONS\].*?\[/OPTIONS\]', '',
+                        response.response, flags=re.DOTALL
+                    ).strip()
                     route_decision = response.debug.get("route_decision", "delegated") if response.debug else "delegated"
                     route_reason = response.debug.get("route_reason", "PersonaAdapter") if response.debug else "PersonaAdapter"
                     memory_nodes_count = response.debug.get("memories_retrieved", 0) if response.debug else len(response.memory_context)
@@ -484,34 +570,36 @@ class VoiceBackend:
                         f"Luna: '{response_text[:100]}{'...' if len(response_text) > 100 else ''}'"
                     )
 
-                    # Get prosody from personality
+                    # Update prosody from personality (applies to remaining queued sentences)
                     personality = response.personality_state
-                    prosody_params = None
-
                     if personality:
                         prosody_params = self.prosody_mapper.map_personality(personality)
-                        logger.debug(f"Prosody: rate={prosody_params.rate:.2f}, pitch={prosody_params.pitch:.2f}")
+                        voice_knobs = prosody_params.to_voice_knobs()
+                        logger.debug(f"Prosody updated: rate={prosody_params.rate:.2f}")
                     else:
                         prosody_params = self.prosody_mapper.get_luna_default()
-                        logger.debug("Using default Luna prosody")
 
-                    # Add assistant response to buffer AFTER generation
+                    # Flush remaining sentence buffer
+                    if sentence_buffer.strip():
+                        if not first_sentence_sent:
+                            self._notify_status("speaking")
+                        audio_queue.put_nowait(sentence_buffer.strip())
+                        sentence_buffer = ""
+
+                    # If streaming didn't produce any sentences (short response),
+                    # synthesize the whole thing
+                    if not first_sentence_sent and response_text:
+                        self._notify_status("speaking")
+                        audio_queue.put_nowait(response_text)
+
+                    # Add to conversation buffer + record turn
                     self.conversation_buffer.add_turn("assistant", response_text)
-                    logger.debug(f"[BUFFER] Added assistant turn, buffer size: {len(self.conversation_buffer)}")
-
-                    # Record assistant turn
                     self.conversation.start_turn(Speaker.ASSISTANT)
                     self.conversation.end_turn(response_text)
 
-                    self._notify_status("speaking")
-
+                    # Fire response callback with FULL text (for chat transcript)
                     if self._on_response:
                         self._on_response(response_text)
-
-                    # Synthesize and play
-                    audio = await self.tts.synthesize(response_text)
-                    if audio.data:
-                        await self.audio_playback.play(audio)
 
                     # Log to tracer
                     elapsed_ms = (time.time() - start_time) * 1000
@@ -527,13 +615,8 @@ class VoiceBackend:
                         conversation_history_length=len(self.conversation_buffer),
                     )
 
-                    # Back to idle
-                    self._notify_status("idle")
-                    return
-
             except Exception as e:
                 logger.error(f"PersonaAdapter processing failed: {e}", exc_info=True)
-                # Log error to tracer
                 elapsed_ms = (time.time() - start_time) * 1000
                 self._tracer.trace(
                     session_id=self._session_id,
@@ -545,6 +628,17 @@ class VoiceBackend:
                     conversation_history_length=len(self.conversation_buffer),
                     error=str(e),
                 )
+
+            finally:
+                # Always clean up: remove callback, drain queue, wait for playback
+                if director:
+                    director.remove_stream_callback(_on_token)
+                audio_queue.put_nowait(None)  # sentinel
+                await playback_task
+                self._notify_status("idle")
+
+            if response_text:
+                return
 
         # Fallback response if PersonaAdapter unavailable
         error_msg = (
@@ -582,6 +676,34 @@ class VoiceBackend:
         )
 
         self._notify_status("idle")
+
+    # ===== Sentence Splitting =====
+
+    @staticmethod
+    def _split_sentences(text: str) -> list:
+        """Split text into sentences for parallel TTS synthesis.
+
+        Uses sentence-ending punctuation followed by whitespace as boundaries.
+        Keeps short fragments attached to the previous sentence to avoid
+        synthesizing tiny chunks that sound choppy.
+        """
+        # Split on sentence-ending punctuation followed by space or end
+        raw = re.split(r'(?<=[.!?])\s+', text.strip())
+        if not raw:
+            return [text]
+
+        # Merge short fragments (< 15 chars) into the previous sentence
+        merged = []
+        for part in raw:
+            part = part.strip()
+            if not part:
+                continue
+            if merged and len(part) < 15:
+                merged[-1] = merged[-1] + " " + part
+            else:
+                merged.append(part)
+
+        return merged if merged else [text]
 
     # ===== Diagnostics =====
 
@@ -681,6 +803,10 @@ class VoiceBackend:
     def on_status_change(self, callback: Callable[[str], None]):
         """Register callback for status changes (idle, listening, thinking, speaking)."""
         self._on_status_change = callback
+
+    def on_audio_level(self, callback: Callable[[float], None]):
+        """Register callback for real-time audio level (RMS energy 0-1)."""
+        self._on_audio_level = callback
 
     def _notify_status(self, status: str):
         """Notify status change."""

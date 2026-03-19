@@ -15,6 +15,7 @@ from typing import Optional, Any
 import logging
 
 from .attention import AttentionManager
+from .curiosity import CuriosityBuffer
 from .personality import PersonalityWeights
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class ConsciousnessState:
 
     attention: AttentionManager = field(default_factory=AttentionManager)
     personality: PersonalityWeights = field(default_factory=PersonalityWeights)
+    curiosity: CuriosityBuffer = field(default_factory=CuriosityBuffer)
     coherence: float = 1.0  # How "together" Luna feels (0-1)
     mood: str = "neutral"   # Current emotional state
     last_updated: datetime = field(default_factory=datetime.now)
@@ -68,6 +70,9 @@ class ConsciousnessState:
         pruned = self.attention.decay_all()
         if pruned > 0:
             changes["attention_pruned"] = pruned
+
+        # 1.5 Age curiosity buffer (auto-suppress stale low-priority entries)
+        self.curiosity.tick(self.tick_count)
 
         # 2. Update coherence
         if self.active_thread_topic:
@@ -165,6 +170,11 @@ class ConsciousnessState:
         # Mood hint
         if self.mood != "neutral":
             hints.append(f"Current mood: {self.mood}.")
+
+        # Curiosity synthesis (injected only when ripe)
+        curiosity_block = self.curiosity.to_prompt_block()
+        if curiosity_block:
+            hints.append("\n\n" + curiosity_block)
 
         return " ".join(hints)
 

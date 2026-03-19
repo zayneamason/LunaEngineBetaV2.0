@@ -162,6 +162,23 @@ export function useGuardianEventAggregator(knowledgeEvents) {
           });
         }
       }
+
+      // Response latency alerts → Guardian diagnostic
+      if (event.type === 'response_slow') {
+        const p = event.payload || {};
+        const severity = p.severity === 'critical' ? 'TIMEOUT' : 'SLOW';
+        const ttftSec = ((p.time_to_first_token_ms || 0) / 1000).toFixed(1);
+        addMessage({
+          type: 'health',
+          content: `[${severity}] Response took ${ttftSec}s to first token. `
+            + `Provider: ${p.provider || 'unknown'}, Route: ${p.route || 'unknown'}, `
+            + `Memory nodes: ${p.memory_nodes || 0}. ${p.diagnosis_hint || ''}`,
+          severity: p.severity,
+          ttft_ms: p.time_to_first_token_ms,
+          provider: p.provider,
+          message_preview: p.message_preview,
+        });
+      }
     }
 
     // Generate recommendations based on pending count

@@ -89,6 +89,14 @@ class SkillRegistry:
         except ImportError:
             logger.debug("[SKILLS] FormattingSkill not available")
 
+        # Phase 5: Arcade
+        try:
+            from .arcade.skill import ArcadeSkill
+            if self.config.arcade.get("enabled", True):
+                self.register(ArcadeSkill(self.config.arcade))
+        except ImportError:
+            logger.debug("[SKILLS] ArcadeSkill not available (missing pyxel?)")
+
     def register_plugins(self, plugin_dir) -> None:
         """Discover and load plugin skills from a directory.
 

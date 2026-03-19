@@ -43,6 +43,26 @@ class ProsodyParameters:
             "volume": self.volume,
         }
 
+    def to_voice_knobs(self):
+        """Convert to VoiceKnobs for Piper TTS integration.
+
+        Mapping:
+          rate         → length_scale  (inverted: fast speech = low length_scale)
+          pitch_variation → noise_scale (expressiveness)
+          intonation   → noise_w       (rhythm variation)
+          pause_duration → sentence_silence (seconds)
+          pitch        → pitch_shift   (scaled to semitones, ±12)
+        """
+        from luna.services.performance_state import VoiceKnobs
+
+        return VoiceKnobs(
+            length_scale=max(0.5, min(2.0, 1.0 / self.rate)) if self.rate else 1.0,
+            noise_scale=max(0.0, min(1.0, self.pitch_variation)),
+            noise_w=max(0.0, min(1.0, self.intonation)),
+            sentence_silence=max(0.0, min(1.0, self.pause_duration * 0.2)),
+            pitch_shift=max(-12.0, min(12.0, self.pitch * 6.0)),
+        )
+
 
 def lerp(a: float, b: float, t: float) -> float:
     """Linear interpolation between a and b by t (0-1)."""

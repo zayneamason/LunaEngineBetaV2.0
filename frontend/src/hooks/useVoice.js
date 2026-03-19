@@ -30,6 +30,10 @@ export function useVoice() {
   const [response, setResponse] = useState(null);
   const [error, setError] = useState(null);
   const [handsFreee, setHandsFree] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [hint, setHint] = useState(null);
+  const hintTimerRef = useRef(null);
+  const thinkingTimeoutRef = useRef(null);
 
   // SSE connection ref
   const eventSourceRef = useRef(null);
@@ -48,6 +52,11 @@ export function useVoice() {
         setIsRunning(data.running);
         if (data.status) {
           setVoiceState(data.status);
+          // Backend sent a real status — cancel any stale thinking timeout
+          if (thinkingTimeoutRef.current) {
+            clearTimeout(thinkingTimeoutRef.current);
+            thinkingTimeoutRef.current = null;
+          }
         }
       } catch {}
     });
@@ -63,6 +72,13 @@ export function useVoice() {
       try {
         const data = JSON.parse(e.data);
         setResponse(data.text);
+      } catch {}
+    });
+
+    es.addEventListener('audio_level', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        setAudioLevel(data.level || 0);
       } catch {}
     });
 
@@ -106,6 +122,8 @@ export function useVoice() {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
       }
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+      if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
     };
   }, [connectStream]);
 
@@ -188,6 +206,7 @@ export function useVoice() {
     if (!isRunning || handsFreee) return;
 
     setError(null);
+    setAudioLevel(0);
 
     try {
       setVoiceState(VoiceState.THINKING);
@@ -206,26 +225,32 @@ export function useVoice() {
       // Check if speech was detected
       if (data.transcription) {
         setTranscription(data.transcription);
+        setHint(null);
       } else {
-        // No speech detected - return to idle with info
+        // No speech detected - show hint briefly
         setVoiceState(VoiceState.IDLE);
+        const hintText = data.hint || 'No speech detected — hold longer while speaking';
+        setHint(hintText);
+        if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+        hintTimerRef.current = setTimeout(() => setHint(null), 3000);
         return {
           ...data,
           no_speech: true,
-          hint: data.hint || 'Hold for at least 1 second while speaking'
+          hint: hintText,
         };
       }
 
-      // Poll for completion since SSE may not be reliable
-      // After 10 seconds, assume done and reset to idle
-      setTimeout(() => {
+      // Safety net: if SSE doesn't deliver a status update within 15s, reset to idle
+      if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
+      thinkingTimeoutRef.current = setTimeout(() => {
         setVoiceState((prev) => {
           if (prev === VoiceState.THINKING) {
             return VoiceState.IDLE;
           }
           return prev;
         });
-      }, 10000);
+        thinkingTimeoutRef.current = null;
+      }, 15000);
 
       return { ...data, no_speech: false };
     } catch (e) {
@@ -268,6 +293,8 @@ export function useVoice() {
     response,
     error,
     handsFree: handsFreee,
+    audioLevel,
+    hint,
 
     // Actions
     startVoice,

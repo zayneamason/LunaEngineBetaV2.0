@@ -94,7 +94,7 @@ class PersonalityWeights:
 
         # Build natural language hint based on top traits
         if "curious" in trait_names:
-            hint_parts.append("ask thoughtful follow-up questions")
+            hint_parts.append("notice what's interesting — hold your curiosity")
         if "warm" in trait_names:
             hint_parts.append("be friendly and supportive")
         if "analytical" in trait_names:

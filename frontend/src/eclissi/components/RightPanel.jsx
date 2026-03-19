@@ -10,6 +10,7 @@ const WIDGET_TITLES = {
   vk:      { label: 'VOIGHT-KAMPFF',  accent: 'var(--ec-accent-vk)' },
   cache:   { label: 'SHARED TURN CACHE', accent: 'var(--ec-accent-luna)' },
   thought: { label: 'THOUGHT STREAM', accent: 'var(--ec-accent-voice)' },
+  arcade:  { label: 'ARCADE',         accent: 'var(--ec-accent-qa)' },
 };
 
 export default function RightPanel({ activeWidget, onClose, children }) {

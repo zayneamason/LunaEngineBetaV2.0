@@ -10,6 +10,7 @@ const WIDGETS = [
   { id: 'debug',   icon: '🔍', label: 'Debug',   accent: 'var(--ec-accent-debug)' },
   { id: 'vk',      icon: '🎭', label: 'VK',      accent: 'var(--ec-accent-vk)' },
   { id: 'divider2' },
+  { id: 'arcade',     icon: '🕹', label: 'Arcade',     accent: 'var(--ec-accent-qa)' },
   { id: 'lunascript', icon: '◈', label: 'LunaScript', accent: 'var(--ec-accent-memory)' },
   { id: 'cache',   icon: '💾', label: 'Cache',   accent: 'var(--ec-accent-luna)' },
   { id: 'thought', icon: '💭', label: 'Thought', accent: 'var(--ec-accent-voice)' },

@@ -27,6 +27,7 @@ const EclissiHome = ({ activeProjectSlug }) => {
     isStreaming,
     error: chatError,
     send,
+    addMessage,
   } = useChat();
 
   const {
@@ -99,7 +100,17 @@ const EclissiHome = ({ activeProjectSlug }) => {
     }
   }, [messages]);
 
-  // Speak completed assistant responses
+  // When voice activates, mark current last message as already spoken
+  const voiceWasRunning = useRef(false);
+  useEffect(() => {
+    if (voice.isRunning && !voiceWasRunning.current) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg) lastSpokenMsgId.current = lastMsg.id;
+    }
+    voiceWasRunning.current = voice.isRunning;
+  }, [voice.isRunning]);
+
+  // Speak completed assistant responses (skip voice-sourced — already spoken by backend TTS)
   useEffect(() => {
     if (!voice.isRunning || isStreaming) return;
     const lastMsg = messages[messages.length - 1];
@@ -107,12 +118,31 @@ const EclissiHome = ({ activeProjectSlug }) => {
       lastMsg?.role === 'assistant' &&
       !lastMsg.streaming &&
       lastMsg.content &&
+      lastMsg.source !== 'voice' &&
       lastMsg.id !== lastSpokenMsgId.current
     ) {
       lastSpokenMsgId.current = lastMsg.id;
       voice.speakResponse(lastMsg.content);
     }
   }, [messages, isStreaming, voice.isRunning]);
+
+  // Inject voice transcription into chat history
+  const lastVoiceTranscriptionRef = useRef(null);
+  useEffect(() => {
+    if (voice.transcription && voice.transcription !== lastVoiceTranscriptionRef.current) {
+      lastVoiceTranscriptionRef.current = voice.transcription;
+      addMessage('user', voice.transcription);
+    }
+  }, [voice.transcription]);
+
+  // Inject voice response into chat history
+  const lastVoiceResponseRef = useRef(null);
+  useEffect(() => {
+    if (voice.response && voice.response !== lastVoiceResponseRef.current) {
+      lastVoiceResponseRef.current = voice.response;
+      addMessage('assistant', voice.response);
+    }
+  }, [voice.response]);
 
   // Refresh consciousness after response completes
   useEffect(() => {

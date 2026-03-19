@@ -45,9 +45,15 @@ SKILL_PATTERNS: dict[str, list[str]] = {
         r"\b(memory|session|delegation).{0,10}(stats|statistics|summary|overview)\b",
         r"\b(analyze|analyse)\b.{0,20}\bdata\b",
     ],
+    "arcade": [
+        r"\b(play|launch|start|run)\b.{0,20}\b(game|arcade)\b",
+        r"\bsteve j savage\b",
+        r"\barcade\b",
+        r"\blet'?s play\b",
+    ],
 }
 
-SKILL_PRIORITY = ["diagnostic", "math", "logic", "reading", "eden", "formatting", "analytics"]
+SKILL_PRIORITY = ["diagnostic", "math", "logic", "reading", "eden", "arcade", "formatting", "analytics"]
 
 # All known skill names for LLM validation
 _SKILL_NAMES = set(SKILL_PATTERNS.keys())
@@ -56,7 +62,7 @@ _SKILL_NAMES = set(SKILL_PATTERNS.keys())
 _CLASSIFY_PROMPT = (
     "Classify the following user message into exactly one skill category, "
     "or 'none' if it doesn't match any.\n"
-    "Categories: math, logic, formatting, reading, diagnostic, eden, analytics\n"
+    "Categories: math, logic, formatting, reading, diagnostic, eden, analytics, arcade\n"
     "Reply with ONLY the category name (one word).\n\n"
     "Message: {message}\n\nCategory:"
 )

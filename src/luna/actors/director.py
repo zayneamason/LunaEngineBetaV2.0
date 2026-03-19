@@ -835,6 +835,7 @@ class DirectorActor(Actor):
         conversation_history = context.get("conversation_history", [])
         memories = context.get("memories", [])
         session_id = context.get("session_id")
+        interface = context.get("interface", "desktop")
         self._last_denied_count = 0  # Reset per-request
         self._last_injected_memories = memories  # Expose for GroundingLink
 
@@ -865,6 +866,22 @@ class DirectorActor(Actor):
         # PERCEPTION: Ingest user message before prompt assembly
         self._perception_turn_count += 1
         self._perception_field.ingest(message, self._perception_turn_count)
+
+        # CURIOSITY: Feed memory confidence gaps into curiosity buffer
+        try:
+            engine = getattr(self, '_engine', None) or getattr(self, 'engine', None)
+            if engine and hasattr(engine, 'consciousness'):
+                cbuf = engine.consciousness.curiosity
+                cbuf.tick(self._perception_turn_count)
+                if self._last_memory_confidence:
+                    conf_level = self._last_memory_confidence.level
+                    query = self._last_memory_confidence.query
+                    if conf_level == "NONE":
+                        cbuf.ingest("memory_gap", f"What is '{query}' about?", 0.7)
+                    elif conf_level == "LOW":
+                        cbuf.ingest("memory_gap", f"Fragments about '{query}' but gaps remain", 0.5)
+        except Exception as e:
+            logger.debug(f"[CURIOSITY] Ingestion error (non-fatal): {e}")
 
         start_time = time.time()
         response_text = ""
@@ -997,6 +1014,7 @@ class DirectorActor(Actor):
                 memories=memories,
                 framed_context=framed_context,
                 route="delegated",
+                interface=interface,
                 intent=intent,
                 bridge_result=bridge_result,
                 register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
@@ -1132,6 +1150,7 @@ class DirectorActor(Actor):
                         memories=memories,
                         framed_context=framed_context,
                         route="local",
+                        interface=interface,
                         bridge_result=bridge_result,
                         register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
                     ))
@@ -1143,6 +1162,7 @@ class DirectorActor(Actor):
                     memories=memories,
                     framed_context=framed_context,
                     route="local",
+                    interface=interface,
                     bridge_result=bridge_result,
                     register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
                 ))
@@ -1302,6 +1322,17 @@ class DirectorActor(Actor):
         if response_text:
             self._perception_field.record_luna_action(response_text)
 
+            # CURIOSITY: Track if Luna asked a question (for spacing enforcement)
+            if "?" in response_text:
+                try:
+                    engine = getattr(self, '_engine', None) or getattr(self, 'engine', None)
+                    if engine and hasattr(engine, 'consciousness'):
+                        engine.consciousness.curiosity.record_question_asked(
+                            self._perception_turn_count
+                        )
+                except Exception:
+                    pass
+
             # LunaScript: record Luna's response for trait measurement on next turn
             if self._lunascript:
                 self._lunascript.last_luna_response = response_text
@@ -1454,8 +1485,9 @@ class DirectorActor(Actor):
                 "logic":      {"max_sent": 8,  "question_req": False},
                 "diagnostic": {"max_sent": 8,  "question_req": False},
                 "eden":       {"max_sent": 4,  "question_req": False},
-                "reading":    {"max_sent": 12, "question_req": True},
-                "analytics":  {"max_sent": 10, "question_req": True},
+                "reading":    {"max_sent": 12, "question_req": False},
+                "analytics":  {"max_sent": 10, "question_req": False},
+                "arcade":     {"max_sent": 4,  "question_req": False},
             }
             geo = _SKILL_GEOMETRY.get(_skill_result.skill_name, {})
             skill_injection = (
@@ -1475,6 +1507,7 @@ class DirectorActor(Actor):
             _SKILL_WIDGET_TYPES = {
                 "math": "latex", "logic": "table", "diagnostic": "diagnostic",
                 "eden": "image", "reading": "document", "analytics": "chart",
+                "arcade": "arcade",
             }
             widget_type = _SKILL_WIDGET_TYPES.get(_skill_result.skill_name)
             if widget_type and _skill_result.data:
@@ -3622,6 +3655,13 @@ OUTPUT:"""
         # Reset perception field for fresh observation slate
         self._perception_field.reset()
         self._perception_turn_count = 0
+        # Reset curiosity buffer for fresh session
+        try:
+            engine = getattr(self, '_engine', None) or getattr(self, 'engine', None)
+            if engine and hasattr(engine, 'consciousness'):
+                engine.consciousness.curiosity.reset()
+        except Exception:
+            pass
         logger.debug("Session cleared")
 
     def get_session_stats(self) -> dict:

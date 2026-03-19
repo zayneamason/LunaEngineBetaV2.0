@@ -2351,7 +2351,11 @@ async def stream_message(request: MessageRequest):
             )
             await director.mailbox.put(msg)
 
-            # Stream tokens as they arrive
+            # Stream tokens as they arrive — track TTFT for Guardian
+            import time as _ttft_time2
+            _ttft_start2 = _ttft_time2.time()
+            _first_token2 = False
+
             while True:
                 try:
                     token = await asyncio.wait_for(
@@ -2363,10 +2367,47 @@ async def stream_message(request: MessageRequest):
                         # End of stream
                         break
 
+                    # TTFT tracking → Guardian alert if >10s
+                    if not _first_token2:
+                        _first_token2 = True
+                        _ttft2_ms = (_ttft_time2.time() - _ttft_start2) * 1000
+                        if _ttft2_ms > 10_000:
+                            try:
+                                from luna.core.event_bus import event_bus, KnowledgeEvent
+                                event_bus.emit("knowledge", KnowledgeEvent(
+                                    type="response_slow",
+                                    payload={
+                                        "severity": "warning",
+                                        "time_to_first_token_ms": round(_ttft2_ms),
+                                        "provider": "unknown",
+                                        "route": "stream",
+                                        "message_preview": request.message[:60],
+                                        "diagnosis_hint": f"TTFT {_ttft2_ms/1000:.1f}s on /message stream",
+                                    },
+                                ))
+                            except Exception:
+                                pass
+
                     # Send token as SSE event
                     yield f"event: token\ndata: {json.dumps({'text': token})}\n\n"
 
                 except asyncio.TimeoutError:
+                    _to_ms = (_ttft_time2.time() - _ttft_start2) * 1000
+                    try:
+                        from luna.core.event_bus import event_bus, KnowledgeEvent
+                        event_bus.emit("knowledge", KnowledgeEvent(
+                            type="response_slow",
+                            payload={
+                                "severity": "critical",
+                                "time_to_first_token_ms": round(_to_ms),
+                                "provider": "unknown",
+                                "route": "stream",
+                                "message_preview": request.message[:60],
+                                "diagnosis_hint": f"Full timeout after {_to_ms/1000:.0f}s on /message stream",
+                            },
+                        ))
+                    except Exception:
+                        pass
                     yield f"event: error\ndata: {json.dumps({'error': 'Timeout waiting for tokens'})}\n\n"
                     break
 
@@ -2375,7 +2416,7 @@ async def stream_message(request: MessageRequest):
 
             # Record assistant turn (Scribe skips assistant turns by design,
             # but this feeds HistoryManager + matrix storage)
-            response_text = "".join(full_response)
+            response_text = final_data.get("text", "")
             if response_text:
                 await _engine.record_conversation_turn(
                     role="assistant",
@@ -2622,7 +2663,11 @@ async def persona_stream(request: MessageRequest):
             )
             await director.mailbox.put(msg)
 
-            # Stream tokens as they arrive
+            # Stream tokens as they arrive — track time-to-first-token for Guardian
+            import time as _ttft_time
+            _ttft_start = _ttft_time.time()
+            _first_token_seen = False
+
             while True:
                 try:
                     token = await asyncio.wait_for(
@@ -2633,6 +2678,29 @@ async def persona_stream(request: MessageRequest):
                     if token is None:
                         break
 
+                    # Track time-to-first-token → alert Guardian if >10s
+                    if not _first_token_seen:
+                        _first_token_seen = True
+                        _ttft_ms = (_ttft_time.time() - _ttft_start) * 1000
+                        if _ttft_ms > 10_000:
+                            try:
+                                from luna.core.event_bus import event_bus, KnowledgeEvent
+                                event_bus.emit("knowledge", KnowledgeEvent(
+                                    type="response_slow",
+                                    payload={
+                                        "severity": "warning",
+                                        "time_to_first_token_ms": round(_ttft_ms),
+                                        "provider": final_metadata.get("model", "unknown"),
+                                        "route": "delegated" if final_metadata.get("delegated") else "local",
+                                        "memory_nodes": len(memory_context) if memory_context else 0,
+                                        "message_preview": request.message[:60],
+                                        "diagnosis_hint": f"TTFT {_ttft_ms/1000:.1f}s — check provider latency or cold start",
+                                    },
+                                ))
+                                logger.warning(f"[GUARDIAN-ALERT] Slow TTFT: {_ttft_ms:.0f}ms for '{request.message[:40]}'")
+                            except Exception:
+                                pass
+
                     # Process token for gestures (may strip or annotate based on config)
                     processed_token = token
                     if _orb_state_manager:
@@ -2641,6 +2709,25 @@ async def persona_stream(request: MessageRequest):
                     yield f"data: {json.dumps({'type': 'token', 'text': processed_token})}\n\n"
 
                 except asyncio.TimeoutError:
+                    # Full timeout — critical Guardian alert
+                    _timeout_ms = (_ttft_time.time() - _ttft_start) * 1000
+                    try:
+                        from luna.core.event_bus import event_bus, KnowledgeEvent
+                        event_bus.emit("knowledge", KnowledgeEvent(
+                            type="response_slow",
+                            payload={
+                                "severity": "critical",
+                                "time_to_first_token_ms": round(_timeout_ms),
+                                "provider": final_metadata.get("model", "unknown"),
+                                "route": "unknown",
+                                "memory_nodes": len(memory_context) if memory_context else 0,
+                                "message_preview": request.message[:60],
+                                "diagnosis_hint": f"Full timeout after {_timeout_ms/1000:.0f}s — no tokens received. Check Director/LLM.",
+                            },
+                        ))
+                        logger.error(f"[GUARDIAN-ALERT] Full timeout: {_timeout_ms:.0f}ms for '{request.message[:40]}'")
+                    except Exception:
+                        pass
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Timeout waiting for tokens'})}\n\n"
                     break
 
@@ -4729,11 +4816,27 @@ async def voice_stream():
                     "text": text,
                 })
 
+        def on_audio_level(level: float) -> None:
+            """Callback for real-time mic audio level."""
+            if connected:
+                event_queue.put_nowait({
+                    "type": "audio_level",
+                    "level": round(level, 4),
+                })
+
         # Register callbacks if voice backend exists
-        if _voice_backend:
-            _voice_backend.on_status_change(on_status_change)
-            _voice_backend.on_speech_end(on_speech_end)
-            _voice_backend.on_response(on_response)
+        registered_backend = None
+
+        def _register_callbacks():
+            nonlocal registered_backend
+            if _voice_backend and _voice_backend is not registered_backend:
+                _voice_backend.on_status_change(on_status_change)
+                _voice_backend.on_speech_end(on_speech_end)
+                _voice_backend.on_response(on_response)
+                _voice_backend.on_audio_level(on_audio_level)
+                registered_backend = _voice_backend
+
+        _register_callbacks()
 
         try:
             # Send initial status
@@ -4760,6 +4863,8 @@ async def voice_stream():
                     yield f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
 
                 except asyncio.TimeoutError:
+                    # Re-register callbacks if voice backend was created after SSE connected
+                    _register_callbacks()
                     # Send keepalive ping
                     running = _voice_backend is not None and _voice_backend.is_active
                     yield f"event: ping\ndata: {json.dumps({'running': running})}\n\n"
@@ -8134,6 +8239,207 @@ async def slash_qa_last():
         data=report.to_dict(),
         formatted="\n".join(lines),
     )
+
+
+# ═══════════════════════════════════════════════════════════
+# ARCADE ENDPOINTS
+# ═══════════════════════════════════════════════════════════
+
+
+@app.get("/api/arcade/games")
+async def arcade_list_games():
+    """List available arcade games."""
+    try:
+        from luna.skills.arcade.game_registry import list_available, game_info_dict
+        games = list_available()
+        return {"games": [game_info_dict(g) for g in games]}
+    except ImportError:
+        return {"games": [], "error": "Arcade module not available"}
+
+
+@app.get("/api/arcade/status")
+async def arcade_status():
+    """Get current arcade game status."""
+    try:
+        from luna.skills.arcade.process_manager import ProcessManager
+        pm = ProcessManager.get()
+        status = pm.status()
+        return {"running": status is not None, "game": status}
+    except ImportError:
+        return {"running": False, "game": None, "error": "Arcade module not available"}
+
+
+@app.post("/api/arcade/launch")
+async def arcade_launch(body: dict = None):
+    """Launch an arcade game by ID."""
+    body = body or {}
+    game_id = body.get("game_id", "steve_j_savage")
+    try:
+        from luna.skills.arcade.game_registry import get_game, get_games_dir
+        from luna.skills.arcade.process_manager import ProcessManager
+        game = get_game(game_id)
+        if not game:
+            return {"success": False, "error": f"Unknown game: {game_id}"}
+        game_path = get_games_dir() / game.file
+        if not game_path.exists():
+            return {"success": False, "error": f"Game file not found: {game.file}"}
+        pm = ProcessManager.get()
+        gp = await pm.launch(game.id, game_path, game.title)
+        return {"success": True, "game": game.title, "pid": gp.pid}
+    except ImportError:
+        return {"success": False, "error": "Arcade module not available"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/arcade/stop")
+async def arcade_stop():
+    """Stop the running arcade game."""
+    try:
+        from luna.skills.arcade.process_manager import ProcessManager
+        pm = ProcessManager.get()
+        stopped = await pm.stop()
+        return {"success": True, "stopped": stopped}
+    except ImportError:
+        return {"success": False, "error": "Arcade module not available"}
+
+
+@app.get("/api/arcade/tune")
+async def arcade_get_tune():
+    """Read current tuning parameters."""
+    try:
+        from luna.skills.arcade.game_registry import get_games_dir
+        import json
+        tune_path = get_games_dir() / "tune.json"
+        if tune_path.exists():
+            return json.loads(tune_path.read_text())
+        return {}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/arcade/tune")
+async def arcade_set_tune(body: dict):
+    """Write tuning parameters (hot-reloaded by running game)."""
+    try:
+        from luna.skills.arcade.game_registry import get_games_dir
+        import json
+        tune_path = get_games_dir() / "tune.json"
+        # Merge with existing
+        existing = {}
+        if tune_path.exists():
+            try:
+                existing = json.loads(tune_path.read_text())
+            except Exception:
+                pass
+        existing.update(body)
+        tune_path.write_text(json.dumps(existing, indent=2))
+        return {"success": True, "tune": existing}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/arcade/presets")
+async def arcade_list_presets():
+    """List saved tuning presets."""
+    try:
+        from luna.skills.arcade.game_registry import get_games_dir
+        import json
+        presets_dir = get_games_dir() / "presets"
+        if not presets_dir.exists():
+            return {"presets": []}
+        presets = []
+        for f in sorted(presets_dir.glob("*.json")):
+            try:
+                data = json.loads(f.read_text())
+                presets.append({"name": f.stem, "tune": data})
+            except Exception:
+                pass
+        return {"presets": presets}
+    except Exception as e:
+        return {"presets": [], "error": str(e)}
+
+
+@app.post("/api/arcade/presets/save")
+async def arcade_save_preset(body: dict):
+    """Save current tune as a named preset. Body: {"name": "..."}"""
+    try:
+        from luna.skills.arcade.game_registry import get_games_dir
+        import json, re
+        name = body.get("name", "").strip()
+        if not name:
+            return {"success": False, "error": "Preset name required"}
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)[:40]
+        presets_dir = get_games_dir() / "presets"
+        presets_dir.mkdir(exist_ok=True)
+        tune_path = get_games_dir() / "tune.json"
+        current = {}
+        if tune_path.exists():
+            current = json.loads(tune_path.read_text())
+        preset_path = presets_dir / f"{safe_name}.json"
+        preset_path.write_text(json.dumps(current, indent=2))
+        return {"success": True, "name": safe_name}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/arcade/presets/load")
+async def arcade_load_preset(body: dict):
+    """Load a named preset into tune.json. Body: {"name": "..."}"""
+    try:
+        from luna.skills.arcade.game_registry import get_games_dir
+        import json
+        name = body.get("name", "")
+        presets_dir = get_games_dir() / "presets"
+        preset_path = presets_dir / f"{name}.json"
+        if not preset_path.exists():
+            return {"success": False, "error": f"Preset '{name}' not found"}
+        data = json.loads(preset_path.read_text())
+        tune_path = get_games_dir() / "tune.json"
+        tune_path.write_text(json.dumps(data, indent=2))
+        return {"success": True, "tune": data}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/arcade/presets/delete")
+async def arcade_delete_preset(body: dict):
+    """Delete a named preset. Body: {"name": "..."}"""
+    try:
+        from luna.skills.arcade.game_registry import get_games_dir
+        name = body.get("name", "")
+        presets_dir = get_games_dir() / "presets"
+        preset_path = presets_dir / f"{name}.json"
+        if preset_path.exists():
+            preset_path.unlink()
+            return {"success": True}
+        return {"success": False, "error": "Not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/arcade/all-games")
+async def arcade_all_games():
+    """List all games (including unavailable) with an 'available' flag."""
+    try:
+        from luna.skills.arcade.game_registry import list_all
+        return {"games": list_all()}
+    except ImportError:
+        return {"games": [], "error": "Arcade module not available"}
+
+
+@app.get("/api/arcade/last-score")
+async def arcade_last_score():
+    """Read the last game score written by a completed game."""
+    try:
+        from luna.skills.arcade.game_registry import get_games_dir
+        import json
+        score_path = get_games_dir() / "last_score.json"
+        if score_path.exists():
+            return json.loads(score_path.read_text())
+        return None
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ═══════════════════════════════════════════════════════════

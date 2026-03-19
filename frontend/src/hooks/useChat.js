@@ -512,6 +512,11 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
     setContext(null);
   }, []);
 
+  // Inject a message from an external source (e.g. voice transcription/response)
+  const addMessage = useCallback((role, content) => {
+    setMessages((prev) => [...prev, { id: nextId(role === 'user' ? 'voice-user' : 'voice-luna'), role, content, streaming: false, source: 'voice' }]);
+  }, []);
+
   return {
     messages,
     context,
@@ -521,5 +526,6 @@ pulse, pulse_fast, spin, spin_fast, flicker, wobble, drift, orbit, glow, split`;
     send,
     stop,
     clear,
+    addMessage,
   };
 }

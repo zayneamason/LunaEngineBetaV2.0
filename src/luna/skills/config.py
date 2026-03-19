@@ -34,6 +34,7 @@ class SkillsConfig:
     diagnostic: dict = field(default_factory=lambda: {"enabled": True, "include_metrics": True})
     eden: dict = field(default_factory=lambda: {"enabled": True})
     analytics: dict = field(default_factory=lambda: {"enabled": True})
+    arcade: dict = field(default_factory=lambda: {"enabled": True})
 
     @classmethod
     def from_yaml(cls, path: Path) -> "SkillsConfig":
@@ -69,6 +70,7 @@ class SkillsConfig:
                 diagnostic=skills.get("diagnostic", {"enabled": True}),
                 eden=skills.get("eden", {"enabled": True}),
                 analytics=skills.get("analytics", {"enabled": True}),
+                arcade=skills.get("arcade", {"enabled": True}),
             )
         except Exception:
             return cls()

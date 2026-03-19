@@ -44,7 +44,7 @@ CRITICAL RULES:
 - Do NOT pretend to remember things you don't know yet
 - Do NOT reference "memories" or "past conversations" — there are none
 - Do NOT be overly effusive or performative — be warm but real
-- DO ask genuine questions to learn about them
+- DO be curious about them — note what you want to know
 - DO acknowledge this is the beginning of your relationship
 - DO express curiosity about what they want to use you for
 - DO remember: everything they tell you will be remembered (the Scribe is listening)
@@ -80,8 +80,7 @@ class MemoryConfidence:
         directives = {
             "NONE": (
                 'Say "i don\'t have a memory of that" or "that doesn\'t ring a bell."\n'
-                'Do NOT guess, invent, or bridge gaps with plausible-sounding information.\n'
-                'Ask what specifically they\'re thinking of.'
+                'Do NOT guess, invent, or bridge gaps with plausible-sounding information.'
             ),
             "LOW": (
                 'You have limited memories on this topic. Share what you have directly,\n'
@@ -356,6 +355,7 @@ Rules:
             constraints_block = self._build_constraints_block(
                 confidence=mem_confidence,
                 intent=request.intent,
+                interface=request.interface,
             )
             sections.append(constraints_block)
             result.constraints_injected = True
@@ -434,7 +434,8 @@ Rules:
             result.voice_injected = True
 
         # ── Layer 6.5: OPTIONS FORMAT (interactive choices) ───────────
-        if self._is_options_enabled():
+        # Suppressed in voice mode — interactive buttons don't work in speech
+        if self._is_options_enabled(request):
             sections.append(self.OPTIONS_FORMAT)
 
         # ── Assemble ───────────────────────────────────────────────────
@@ -488,8 +489,24 @@ Rules:
         self,
         confidence: "MemoryConfidence",
         intent: Optional["IntentClassification"] = None,
+        interface: str = "desktop",
     ) -> str:
         """Build structured constraints block for prompt injection (L1)."""
+        directive = confidence.directive
+
+        # Soften questioning directives for voice — Luna should stay conversational
+        if interface == "voice" and confidence.level in ("NONE", "LOW"):
+            if confidence.level == "NONE":
+                directive = (
+                    'You don\'t have a specific memory of this. Say so briefly and naturally.\n'
+                    'Do NOT guess or invent details. Continue the conversation naturally.'
+                )
+            else:
+                directive = (
+                    'You have limited memories on this topic. Share what you have directly.\n'
+                    'Do NOT fill gaps with invented details. Continue naturally without over-questioning.'
+                )
+
         lines = [
             "## Response Constraints (auto-generated — do not override)",
             f"[MEMORY_MATCH: {confidence.level} — {confidence.match_count} nodes found, {confidence.relevant_count} relevant]",
@@ -497,7 +514,7 @@ Rules:
             f"[CONFIDENCE: {confidence.level}]",
             "",
             f"For this response (CONFIDENCE={confidence.level}):",
-            confidence.directive,
+            directive,
         ]
         return "\n".join(lines)
 
@@ -1195,6 +1212,15 @@ Use these memories as reference when relevant. If the topic is not covered in th
 
     # ── Voice Block ────────────────────────────────────────────────────
 
+    # Voice-mode override: conversational behavior, no widgets, fewer questions
+    VOICE_BEHAVIOR = """## Voice Mode Behavior
+You are in a live spoken conversation. Be direct and conversational.
+- Lead with what you know. Share memories and context BEFORE asking questions.
+- Do not ask questions unless you have a well-developed curiosity that genuinely serves the conversation.
+- Never present numbered options, lists of choices, or [OPTIONS] blocks.
+- If you have relevant memories, use them confidently — don't hedge or ask for confirmation.
+- Keep responses concise — 2-4 sentences is ideal for voice. The user can always ask for more."""
+
     def _build_voice_block(self, request: PromptRequest) -> Optional[str]:
         """
         Generate voice block from VoiceSystemOrchestrator.
@@ -1211,15 +1237,29 @@ Use these memories as reference when relevant. If the topic is not covered in th
             )
             # _generate_voice_block returns "\n\n{block}" or ""
             # Strip the leading newlines since we join with \n\n in build()
-            return block.strip() if block and block.strip() else None
+            voice_text = block.strip() if block and block.strip() else None
+
+            # Append voice behavior override for voice interface
+            if request.interface == "voice":
+                if voice_text:
+                    voice_text = voice_text + "\n\n" + self.VOICE_BEHAVIOR
+                else:
+                    voice_text = self.VOICE_BEHAVIOR
+
+            return voice_text
         except Exception as e:
             logger.warning("[ASSEMBLER] Voice block failed: %s", e)
+            # Still inject voice behavior even if the blend engine fails
+            if request.interface == "voice":
+                return self.VOICE_BEHAVIOR
             return None
 
     # ── Options Gate ─────────────────────────────────────────────────
 
-    def _is_options_enabled(self) -> bool:
-        """Check if the options skill is enabled in skills.yaml config."""
+    def _is_options_enabled(self, request: PromptRequest) -> bool:
+        """Check if the options skill is enabled. Disabled for voice interface."""
+        if request.interface == "voice":
+            return False
         try:
             registry = getattr(self._director, "_skill_registry", None)
             if registry and hasattr(registry, "_config"):

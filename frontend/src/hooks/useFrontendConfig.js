@@ -17,6 +17,7 @@ const DEFAULT_CONFIG = {
     prompt: true,
     debug: true,
     vk: true,
+    arcade: true,
     cache: true,
     thought: true,
     lunascript: true,
