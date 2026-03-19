@@ -335,14 +335,38 @@ Emojis can accompany gestures or stand alone.
             from luna.actors.history_manager import HistoryManagerActor
             self.register_actor(HistoryManagerActor())
 
-        # FaceID: Identity actor (optional)
-        if self.config.faceid_enabled and "identity" not in self.actors:
+        # Identity actor — ALWAYS register so bridge/memory scoping works.
+        # FaceID camera loop only runs when faceid_enabled=True.
+        if "identity" not in self.actors:
             try:
                 from luna.actors.identity import IdentityActor
-                self.register_actor(IdentityActor(enabled=True))
-                logger.info("IdentityActor registered (FaceID enabled)")
+                ia = IdentityActor(enabled=self.config.faceid_enabled)
+                self.register_actor(ia)
+
+                # When FaceID is off, auto-set identity to the owner so
+                # memories, bridge, and access layers work out of the box.
+                if not self.config.faceid_enabled:
+                    from luna.core.owner import get_owner, owner_configured
+                    if owner_configured():
+                        import time as _time
+                        owner = get_owner()
+                        ia.current.entity_id = owner.entity_id
+                        ia.current.entity_name = owner.display_name
+                        ia.current.confidence = 1.0
+                        ia.current.luna_tier = "admin"
+                        ia.current.dataroom_tier = 1
+                        ia.current.dataroom_categories = [1,2,3,4,5,6,7,8,9]
+                        ia.current.last_seen = _time.time()
+                        logger.info(
+                            "IdentityActor registered (FaceID off, default owner: %s/%s)",
+                            owner.entity_id, owner.display_name,
+                        )
+                    else:
+                        logger.info("IdentityActor registered (FaceID off, no owner configured)")
+                else:
+                    logger.info("IdentityActor registered (FaceID enabled)")
             except Exception as e:
-                logger.warning(f"FaceID initialization failed (non-fatal): {e}")
+                logger.warning(f"IdentityActor registration failed (non-fatal): {e}")
 
         # Phase 1.5: Eden adapter + bridge actor (optional)
         await self._init_eden()
@@ -1383,12 +1407,14 @@ Emojis can accompany gestures or stand alone.
         """Handle messages from actors."""
         payload = event.payload
         msg_type = payload.get("type", "")
+        print(f"🔔 [ACTOR_MSG] Received: type={msg_type} from={event.source}")
 
         match msg_type:
             case "generation_complete":
                 data = payload.get("data", {})
                 text = data.get("text", "")
 
+                print(f"🔔 [GEN_COMPLETE] {len(text)} chars, {len(self._on_response_callbacks)} callbacks registered")
                 logger.info(f"Generation complete: {len(text)} chars")
 
                 # Always add valid responses to revolving context
@@ -1415,10 +1441,14 @@ Emojis can accompany gestures or stand alone.
                 new_turn = self.context.advance_turn()
                 logger.debug(f"Turn {new_turn} complete")
 
-                for callback in self._on_response_callbacks:
+                print(f"🔔 [GEN_COMPLETE] Firing {len(self._on_response_callbacks)} callbacks...")
+                for i, callback in enumerate(self._on_response_callbacks):
                     try:
+                        print(f"🔔 [CALLBACK] Firing callback {i}: {callback}")
                         await callback(text, data)
+                        print(f"🔔 [CALLBACK] Callback {i} completed")
                     except Exception as e:
+                        print(f"⛔ [CALLBACK] Callback {i} FAILED: {e}")
                         logger.error(f"Callback error: {e}")
 
             case "generation_error":

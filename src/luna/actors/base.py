@@ -135,6 +135,9 @@ class Actor(ABC):
                 source=self.name,
             )
             await self.engine.input_buffer.put(event)
+            print(f"🔔 [SEND_TO_ENGINE] {self.name} → {event_type} (buffer size={self.engine.input_buffer.qsize() if hasattr(self.engine.input_buffer, 'qsize') else '?'})")
+        else:
+            print(f"⛔ [SEND_TO_ENGINE] {self.name} has NO engine ref! Cannot send {event_type}")
 
     # =========================================================================
     # Abstract methods - subclasses must implement

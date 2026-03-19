@@ -2674,14 +2674,15 @@ Be warm, helpful, and specific — reference actual content from the documents."
 User question: {user_message}
 
 IMPORTANT: Your memory context is provided in the system prompt above. When you have memory context
-about the topic, LEAD with what you know. Share the information first — do not ask clarifying
-questions before sharing what you already have.
+about the topic, LEAD with what you know. Share the information directly and confidently.
 
 Stick to what the memory actually contains — do not add details, embellish, or extrapolate beyond
-what is written there. You can ask follow-up questions AFTER sharing what you know.
+what is written there.
 
 If your memories do NOT contain relevant information about this topic, say honestly that you don't
-have a memory of it. Do not guess or fabricate."""
+have a memory of it. Do not guess or fabricate.
+
+QUESTION RULE: Do NOT end your response with a question. Do NOT ask follow-up questions. Just share what you know and stop."""
 
             elif is_relational_query:
                 # Relational/emotional queries - NOT research, needs warmth
@@ -2695,7 +2696,9 @@ above to respond. If you have specific memories of interactions, reference them.
 have memories about this aspect of your relationship, be honest about that rather than inventing
 shared experiences.
 
-Be warm and genuine, but grounded in what you actually know from your context."""
+Be warm and genuine, but grounded in what you actually know from your context.
+
+QUESTION RULE: Do NOT end your response with a question. Just share what you feel and stop."""
 
             else:
                 # Research/factual queries or follow-ups
@@ -2706,8 +2709,9 @@ THE USER IS ASKING YOU THIS QUESTION (answer it directly):
 "{user_message}"
 
 Your memory context is in the system prompt above. LEAD with what you know — share information
-first, then ask follow-ups only after you've given substance. Do not ask clarifying questions
-before sharing what you already have. Keep your response focused and conversational."""
+directly and confidently. Keep your response focused and conversational.
+
+QUESTION RULE: Do NOT end your response with a question. Do NOT ask follow-up questions. Just respond and stop."""
                 else:
                     luna_prompt = f"""You are Luna, a warm and direct AI companion.
 
@@ -2716,7 +2720,9 @@ THE USER IS ASKING YOU THIS QUESTION (answer it directly):
 
 Respond naturally as Luna - be warm, helpful, and direct.
 If you don't have current information, say so honestly.
-Keep your response focused and conversational."""
+Keep your response focused and conversational.
+
+QUESTION RULE: Do NOT end your response with a question. Do NOT ask follow-up questions. Just respond and stop."""
 
             # Add current message
             messages.append({"role": "user", "content": luna_prompt})

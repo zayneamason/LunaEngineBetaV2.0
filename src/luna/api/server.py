@@ -1513,11 +1513,13 @@ async def send_message(request: MessageRequest):
     response_future: asyncio.Future = asyncio.Future()
 
     async def on_response(text: str, data: dict) -> None:
+        print(f"🔔 [/message] on_response FIRED: {len(text)} chars, future_done={response_future.done()}")
         if not response_future.done():
             response_future.set_result((text, data))
 
     # Register callback
     _engine.on_response(on_response)
+    print(f"🔔 [/message] Callback registered, total callbacks: {len(_engine._on_response_callbacks)}")
 
     try:
         # Send message with source tag
