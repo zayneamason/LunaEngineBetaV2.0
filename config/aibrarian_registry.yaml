@@ -21,24 +21,9 @@ defaults:
   embedding_model: "local-minilm"
   embedding_dim: 384
   schema_type: "standard"
+  grounding_priority: "supplemental"
 
 collections:
-
-  dataroom:
-    name: "Project Eclipse Data Room"
-    description: "Investor-facing documents organized by category"
-    db_path: "data/local/dataroom.db"
-    project_key: "eclipse-dataroom"
-    ingestion_pattern: "utilitarian"
-    enabled: true
-    create_if_missing: true
-    source_dir: "../LUNA-DATAROOM"
-    extract_on_ingest: true
-    extraction_model: "claude-haiku"
-    read_only: false
-    tags: ["investor", "eclipse", "dataroom"]
-
-  # maxwell_case and thiel_investigation removed — external drive refs (/Volumes/ZDrive-1/)
 
   kinoni_knowledge:
     name: "Kinoni Community Knowledge"
@@ -48,6 +33,7 @@ collections:
     ingestion_pattern: "ceremonial"
     enabled: true
     create_if_missing: true
+    reflection_mode: "relational"
     tags: ["kinoni", "uganda", "community", "ceremonial"]
     chunk_size: 300
     chunk_overlap: 75
@@ -60,10 +46,28 @@ collections:
     read_only: true
     create_if_missing: false
     schema_type: "standard"
+    reflection_mode: "precision"
     tags: ["system", "help", "features", "navigation", "settings", "troubleshooting"]
     chunk_size: 300
     chunk_overlap: 50
     ingestion_pattern: "emergent"
+
+  research_library:
+    name: "Research Library"
+    description: "Academic papers, books, and research documents for deep reference"
+    db_path: "data/local/research_library.db"
+    project_key: "research-library"
+    ingestion_pattern: "utilitarian"
+    enabled: true
+    create_if_missing: true
+    extract_on_ingest: true
+    extraction_model: "claude-sonnet"
+    read_only: false
+    reflection_mode: "reflective"
+    grounding_priority: "primary"
+    tags: ["research", "academic", "papers", "books"]
+    chunk_size: 500
+    chunk_overlap: 75
 
   # bombay_beach:
   #   name: "Bombay Beach Biennale Archive"

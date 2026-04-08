@@ -34,9 +34,56 @@ from typing import Any, Optional
 
 import yaml
 
-from .aibrarian_schema import EMBEDDING_TABLE_SQL, INVESTIGATION_SCHEMA, STANDARD_SCHEMA
+from .aibrarian_schema import CARTRIDGE_SCHEMA, EMBEDDING_TABLE_SQL, INVESTIGATION_SCHEMA, STANDARD_SCHEMA
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Document Comprehension Prompt (used by extract() at ingest time)
+# ---------------------------------------------------------------------------
+
+DOCUMENT_EXTRACTION_PROMPT = """
+You are extracting structured knowledge from a document for a
+long-term memory system. Your output will be stored and searched
+later when someone asks questions about this document.
+
+Extract the following from the provided text:
+
+1. SUMMARY: A comprehensive summary of what this section covers.
+   Write it as if explaining to someone who hasn't read it.
+   Include specific names, places, systems, and arguments.
+   200-400 words.
+
+2. CLAIMS: Key arguments, assertions, or findings the author makes.
+   Each claim should be a standalone sentence that captures a
+   specific point. Include 3-10 claims per section.
+
+3. ENTITIES: People, places, systems, organizations, and concepts
+   mentioned. For each entity, note its type and a brief
+   description of its role in the text.
+
+Return ONLY valid JSON in this exact format:
+{
+  "summary": "Comprehensive summary of the section...",
+  "claims": [
+    "Specific claim or argument from the text",
+    "Another specific claim or finding"
+  ],
+  "entities": [
+    {"name": "Entity Name", "type": "person|place|system|org|concept",
+     "description": "Brief role in the text"}
+  ]
+}
+
+RULES:
+- Write summaries and claims in neutral third person
+- Be specific: include names, numbers, dates when present
+- Claims must be attributable to the text, not your inference
+- If the text is a title page, table of contents, or index,
+  return {"summary": "", "claims": [], "entities": []}
+- Return ONLY JSON. No markdown, no explanation.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +103,130 @@ class DocumentChunk:
     end_char: int
     source_id: str = ""
     word_count: int = 0
+    section_label: str = ""
+    section_level: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Document Structure Detection
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StructuralMarker:
+    """A detected chapter or section boundary in a document."""
+
+    heading: str  # "Chapter 2: The Powers of Water"
+    level: int  # 1 = chapter, 2 = section, 3 = subsection
+    start_char: int  # Character offset where this section begins
+    end_char: int  # Character offset where next section begins (or end of doc)
+    page_hint: str = ""  # Page number if detected (e.g., "37")
+
+
+# Common heading patterns for structure detection
+STRUCTURE_PATTERNS = [
+    # "Chapter 1: Title" or "CHAPTER 1" or "Chapter One"
+    re.compile(
+        r"^(?:CHAPTER|Chapter)\s+(\d+|[A-Z][a-z]+)(?:\s*[:.]\s*(.+))?$",
+        re.MULTILINE,
+    ),
+    # "1. Title" or "I. Title" (numbered sections at line start)
+    re.compile(
+        r"^(\d+|[IVXLC]+)\.\s+([A-Z][A-Za-z\s:]+)$",
+        re.MULTILINE,
+    ),
+    # "Part I" / "Part 1"
+    re.compile(
+        r"^(?:PART|Part)\s+(\d+|[IVXLC]+)(?:\s*[:.]\s*(.+))?$",
+        re.MULTILINE,
+    ),
+    # "Introduction" / "Conclusion" / "Preface" / "Epilogue" (standalone)
+    re.compile(
+        r"^(Introduction|Conclusion|Preface|Epilogue|Foreword|Afterword|Appendix(?:\s+[A-Z])?)(?:\s*[:.]\s*(.+))?$",
+        re.MULTILINE,
+    ),
+    # ALL CAPS heading on its own line (≤ 60 chars, ≥ 5 chars)
+    re.compile(
+        r"^([A-Z][A-Z\s]{4,60})$",
+        re.MULTILINE,
+    ),
+]
+
+# Page number patterns (pdftotext often inserts these)
+PAGE_NUMBER_PATTERN = re.compile(r"^\s*(\d{1,4})\s*$", re.MULTILINE)
+
+
+def detect_document_structure(text: str) -> list[StructuralMarker]:
+    """
+    Detect chapter/section structure from document text.
+
+    Scans for heading patterns and returns ordered list of
+    structural markers with character offsets. Works best with
+    text extracted via pdftotext which preserves line breaks.
+
+    Returns empty list if no structure detected (short docs, etc.)
+    """
+    if len(text) < 5000:
+        return []  # Too short to have meaningful structure
+
+    markers: list[StructuralMarker] = []
+
+    for pattern in STRUCTURE_PATTERNS:
+        for match in pattern.finditer(text):
+            heading = match.group(0).strip()
+            start = match.start()
+
+            # Determine level
+            full = heading.lower()
+            if full.startswith(("chapter", "part")):
+                level = 1
+            elif full.startswith((
+                "introduction", "conclusion", "preface",
+                "epilogue", "foreword", "afterword", "appendix",
+            )):
+                level = 1
+            elif heading.isupper():
+                level = 2
+            else:
+                level = 2
+
+            # Find nearest page number (look backward up to 200 chars)
+            page_hint = ""
+            lookback = text[max(0, start - 200):start]
+            page_matches = list(PAGE_NUMBER_PATTERN.finditer(lookback))
+            if page_matches:
+                page_hint = page_matches[-1].group(1)
+
+            markers.append(StructuralMarker(
+                heading=heading,
+                level=level,
+                start_char=start,
+                end_char=len(text),  # Will be corrected below
+                page_hint=page_hint,
+            ))
+
+    if not markers:
+        return []
+
+    # Sort by position, deduplicate overlapping matches
+    markers.sort(key=lambda m: m.start_char)
+
+    # Remove duplicates (overlapping patterns matching same heading)
+    deduped: list[StructuralMarker] = []
+    for m in markers:
+        if deduped and abs(m.start_char - deduped[-1].start_char) < 50:
+            # Keep the one with more specific level
+            if m.level < deduped[-1].level:
+                deduped[-1] = m
+            continue
+        deduped.append(m)
+
+    # Set end_char to next marker's start
+    for i in range(len(deduped) - 1):
+        deduped[i].end_char = deduped[i + 1].start_char
+    # Last marker extends to end of document (already set)
+
+    return deduped
 
 
 def chunk_document(
@@ -64,6 +235,7 @@ def chunk_document(
     overlap: int = 50,
     source_id: str = "",
     preserve_sentences: bool = True,
+    structure: list[StructuralMarker] | None = None,
 ) -> list[DocumentChunk]:
     """
     Split document text into overlapping word-based chunks.
@@ -109,16 +281,24 @@ def chunk_document(
         start_char = len(" ".join(words[:start_word])) + (1 if start_word > 0 else 0)
         end_char = start_char + len(chunk_text)
 
-        chunks.append(
-            DocumentChunk(
-                text=chunk_text,
-                index=chunk_index,
-                start_char=start_char,
-                end_char=end_char,
-                source_id=source_id,
-                word_count=len(chunk_words),
-            )
+        chunk = DocumentChunk(
+            text=chunk_text,
+            index=chunk_index,
+            start_char=start_char,
+            end_char=end_char,
+            source_id=source_id,
+            word_count=len(chunk_words),
         )
+
+        # Tag chunk with structural section
+        if structure:
+            for marker in reversed(structure):
+                if chunk.start_char >= marker.start_char:
+                    chunk.section_label = marker.heading
+                    chunk.section_level = marker.level
+                    break
+
+        chunks.append(chunk)
 
         chunk_index += 1
         if end_word >= len(words):
@@ -233,6 +413,8 @@ class AiBrarianConfig:
     metadata: dict = field(default_factory=dict)
     project_key: str = ""
     ingestion_pattern: str = "utilitarian"
+    reflection_mode: str = ""                # "precision" | "reflective" | "relational"
+    grounding_priority: str = "supplemental" # "primary" | "supplemental" | "background"
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +484,7 @@ class AiBrarianConnection:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=15000")
         self._conn.execute("PRAGMA foreign_keys=ON")
 
         # Try loading sqlite-vec
@@ -321,12 +504,22 @@ class AiBrarianConnection:
         except Exception as e:
             logger.warning("sqlite-vec not available for %s: %s", self.config.key, e)
 
+        # Auto-migrate: apply cartridge schema if not present
+        try:
+            self._conn.execute("SELECT 1 FROM cartridge_meta LIMIT 1")
+        except sqlite3.OperationalError:
+            self._conn.executescript(CARTRIDGE_SCHEMA)
+            self._conn.commit()
+            logger.info("Applied cartridge schema to %s", self.config.key)
+
     def _create_database(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA busy_timeout=15000")
         conn.executescript(STANDARD_SCHEMA)
         if self.config.schema_type == "investigation":
             conn.executescript(INVESTIGATION_SCHEMA)
+        conn.executescript(CARTRIDGE_SCHEMA)
         conn.close()
         logger.info("Created AiBrarian database: %s", self.db_path)
 
@@ -478,6 +671,10 @@ class AiBrarianEngine:
                     embedding_dim=coll_cfg.get("embedding_dim", self.registry.defaults.get("embedding_dim", 384)),
                     tags=coll_cfg.get("tags", []),
                     metadata={"plugin": True, "plugin_dir": str(entry)},
+                    ingestion_pattern=coll_cfg.get("ingestion_pattern", "utilitarian"),
+                    reflection_mode=coll_cfg.get("reflection_mode", ""),
+                    grounding_priority=coll_cfg.get("grounding_priority",
+                                                     self.registry.defaults.get("grounding_priority", "supplemental")),
                 )
 
                 conn = AiBrarianConnection(config, db_path)
@@ -634,17 +831,27 @@ class AiBrarianEngine:
         """
         conn = self._get_conn(collection)
 
+        # Phase 1: Search understanding layer (extractions — claims, summaries)
+        extraction_results = self._extraction_search(conn, query, limit=limit // 2)
+        chunk_limit = limit - len(extraction_results)
+
+        # Phase 2: Search evidence layer (chunks — raw text)
         if search_type == "keyword":
-            results = self._fts_search(conn, query, limit)
+            chunk_results = self._fts_search(conn, query, chunk_limit)
         elif search_type == "semantic":
-            results = await self._vec_search(conn, query, limit)
+            chunk_results = await self._vec_search(conn, query, chunk_limit)
         else:
-            kw = self._fts_search(conn, query, limit)
-            sem = await self._vec_search(conn, query, limit)
-            if not sem:
-                results = kw  # graceful fallback
+            kw = self._fts_search(conn, query, chunk_limit)
+            sem = await self._vec_search(conn, query, chunk_limit)
+            # Filter dead semantics (score ≤ 0.01 = noise from bad embeddings)
+            sem_alive = [r for r in sem if r.get("score", 0) > 0.01]
+            if not sem_alive:
+                chunk_results = kw  # graceful fallback to keyword-only
             else:
-                results = self._rrf_fuse(kw, sem, limit)
+                chunk_results = self._rrf_fuse(kw, sem_alive, chunk_limit)
+
+        # Combine: understanding first, evidence second
+        results = extraction_results + chunk_results
 
         # Lock-in hook: bump access on every search
         await self._bump_collection_access(collection)
@@ -653,13 +860,75 @@ class AiBrarianEngine:
 
     @staticmethod
     def _sanitize_fts_query(query: str) -> str:
-        """Escape special FTS5 characters to prevent syntax errors."""
+        """Sanitize query for FTS5: strip punctuation, remove stop words, join with OR."""
         import re
-        # Remove FTS5 special chars: ? * " ( ) : ^ { } ~
-        sanitized = re.sub(r'[?*"():^{}~]', ' ', query)
+        # Remove FTS5 special chars and general punctuation that breaks MATCH syntax
+        sanitized = re.sub(r'[?*"\'():^{}~.,;!@#$%&\[\]\u2018\u2019\u201C\u201D\u2014\u2013]', ' ', query)
         # Collapse whitespace
         sanitized = re.sub(r'\s+', ' ', sanitized).strip()
-        return sanitized or query
+        if not sanitized:
+            return query
+        # Strip stop words — conversational filler that kills FTS5 implicit-AND matching
+        _STOP = {
+            'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'do', 'does', 'did', 'have', 'has', 'had', 'having',
+            'i', 'me', 'my', 'you', 'your', 'we', 'our', 'they', 'them', 'their',
+            'he', 'she', 'it', 'its', 'his', 'her',
+            'what', 'which', 'who', 'whom', 'that', 'this', 'these', 'those',
+            'am', 'will', 'would', 'shall', 'should', 'can', 'could', 'may', 'might',
+            'to', 'of', 'in', 'for', 'on', 'at', 'by', 'with', 'from', 'about',
+            'into', 'through', 'during', 'before', 'after', 'above', 'below',
+            'and', 'but', 'or', 'nor', 'not', 'so', 'if', 'then',
+            'tell', 'know', 'think', 'like', 'just', 'also', 'very', 'really',
+            'how', 'when', 'where', 'why', 'there', 'here', 'some', 'any', 'all',
+            'more', 'most', 'other', 'than', 'too', 'only', 'each', 'every',
+        }
+        tokens = [t for t in sanitized.lower().split() if t not in _STOP and len(t) > 1]
+        if not tokens:
+            # All tokens were stop words — fall back to original minus punctuation
+            tokens = sanitized.split()
+        # Join with OR so FTS5 matches any keyword, not all of them
+        result = ' OR '.join(tokens)
+        logger.info("[FTS5] Input: '%s' → Output: '%s'", query[:60], result[:80])
+        return result
+
+    def _extraction_search(
+        self, conn: AiBrarianConnection, query: str, limit: int
+    ) -> list[dict]:
+        """Search the extractions FTS index for comprehension artifacts."""
+        try:
+            fts_query = self._sanitize_fts_query(query)
+            cursor = conn.conn.execute(
+                """
+                SELECT
+                    e.id, e.doc_id, e.node_type, e.content,
+                    e.confidence, d.title, d.filename, rank
+                FROM extractions_fts
+                JOIN extractions e ON extractions_fts.rowid = e.rowid
+                JOIN documents d ON e.doc_id = d.id
+                WHERE extractions_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (fts_query, limit),
+            )
+            return [
+                {
+                    "doc_id": row["doc_id"],
+                    "title": row["title"],
+                    "filename": row["filename"],
+                    "category": row["node_type"],
+                    "snippet": row["content"],
+                    "score": abs(row["rank"]),
+                    "search_type": f"extraction:{row['node_type'].lower()}",
+                    "confidence": row["confidence"],
+                    "extraction_id": row["id"],
+                }
+                for row in cursor.fetchall()
+            ]
+        except sqlite3.OperationalError as e:
+            logger.warning("Extraction search failed for '%s': %s", query, e)
+            return []
 
     def _fts_search(
         self, conn: AiBrarianConnection, query: str, limit: int
@@ -670,7 +939,8 @@ class AiBrarianEngine:
                 """
                 SELECT
                     d.id, d.title, d.filename, d.category,
-                    snippet(chunks_fts, 0, '>>>', '<<<', '...', 32) AS snippet,
+                    c.chunk_text,
+                    snippet(chunks_fts, 0, '>>>', '<<<', '...', 32) AS match_highlight,
                     bm25(chunks_fts) AS score
                 FROM chunks_fts
                 JOIN chunks c ON chunks_fts.rowid = c.rowid
@@ -687,7 +957,7 @@ class AiBrarianEngine:
                     "title": row["title"],
                     "filename": row["filename"],
                     "category": row["category"],
-                    "snippet": row["snippet"],
+                    "snippet": row["chunk_text"],
                     "score": -row["score"],
                     "search_type": "keyword",
                 }
@@ -757,7 +1027,7 @@ class AiBrarianEngine:
                             "title": doc_row["title"],
                             "filename": doc_row["filename"],
                             "category": doc_row["category"],
-                            "snippet": doc_row["chunk_text"][:200],
+                            "snippet": doc_row["chunk_text"],
                             "score": max(0.0, 1.0 - distance),
                             "search_type": "semantic",
                         }
@@ -948,20 +1218,31 @@ class AiBrarianEngine:
         conn.conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
         conn.conn.execute("DELETE FROM extractions WHERE doc_id = ?", (doc_id,))
 
+        # 3.5 Detect document structure
+        structure = detect_document_structure(content)
+        if structure:
+            logger.info(
+                "Detected %d structural markers in %s",
+                len(structure), file_path.name,
+            )
+
         # 4. Chunk
         chunks = chunk_document(
             content,
             chunk_size=conn.config.chunk_size,
             overlap=conn.config.chunk_overlap,
             source_id=doc_id,
+            structure=structure,
         )
 
         for chunk in chunks:
             chunk_id = f"{doc_id}:chunk:{chunk.index}"
             conn.conn.execute(
                 """
-                INSERT INTO chunks (id, doc_id, chunk_index, chunk_text, word_count, start_char, end_char)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO chunks
+                    (id, doc_id, chunk_index, chunk_text, word_count,
+                     start_char, end_char, section_label, section_level)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk_id,
@@ -971,6 +1252,8 @@ class AiBrarianEngine:
                     chunk.word_count,
                     chunk.start_char,
                     chunk.end_char,
+                    chunk.section_label or None,
+                    chunk.section_level or None,
                 ),
             )
 
@@ -982,6 +1265,25 @@ class AiBrarianEngine:
         # 6. Run extraction if enabled for this collection
         if conn.config.extract_on_ingest:
             await self.extract(collection, doc_id)
+
+        # 6.5 Generate TABLE_OF_CONTENTS extraction from structure
+        # (inserted AFTER extract() so it doesn't trigger the "already extracted" guard)
+        if structure:
+            toc_lines = []
+            for marker in structure:
+                indent = "  " * (marker.level - 1)
+                page = f" (p. {marker.page_hint})" if marker.page_hint else ""
+                toc_lines.append(f"{indent}{marker.heading}{page}")
+
+            toc_content = "Document Structure:\n" + "\n".join(toc_lines)
+            toc_id = f"{doc_id}:ext:toc:0"
+            conn.conn.execute(
+                "INSERT OR REPLACE INTO extractions "
+                "(id, doc_id, chunk_index, node_type, content, confidence) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (toc_id, doc_id, 0, "TABLE_OF_CONTENTS", toc_content, 1.0),
+            )
+            conn.conn.commit()
 
         logger.info(
             "Ingested %s → %s (%d words, %d chunks)",
@@ -1574,11 +1876,12 @@ class AiBrarianEngine:
         self, collection: str, doc_id: str, force: bool = False
     ) -> list[dict]:
         """
-        Run extraction on a document.
-
-        Deletes old extractions first (latest-wins).
-        Currently a stub — wire to Scribe actor when ready.
+        Run document comprehension extraction via Haiku.
+        Reads document chunks, processes in batches, stores
+        summaries + claims + entities in collection DB.
         """
+        import asyncio
+
         conn = self._get_conn(collection)
         if conn.config.read_only:
             raise PermissionError(f"Collection '{collection}' is read-only")
@@ -1588,28 +1891,228 @@ class AiBrarianEngine:
                 "SELECT COUNT(*) FROM extractions WHERE doc_id = ?", (doc_id,)
             ).fetchone()[0]
             if existing > 0:
-                logger.info("Doc %s already has %d extractions (use force=True to re-extract)", doc_id, existing)
+                logger.info(
+                    "Doc %s already has %d extractions", doc_id, existing
+                )
                 return []
 
-        # Delete old extractions
-        conn.conn.execute("DELETE FROM extractions WHERE doc_id = ?", (doc_id,))
+        # Delete old extractions + entities
+        conn.conn.execute(
+            "DELETE FROM extractions WHERE doc_id = ?", (doc_id,)
+        )
+        conn.conn.execute(
+            "DELETE FROM entities WHERE doc_id = ?", (doc_id,)
+        )
 
-        # Get document text
-        row = conn.conn.execute(
-            "SELECT full_text FROM documents WHERE id = ?", (doc_id,)
-        ).fetchone()
-        if not row:
+        # Get chunks for this document
+        rows = conn.conn.execute(
+            "SELECT chunk_index, chunk_text FROM chunks "
+            "WHERE doc_id = ? ORDER BY chunk_index",
+            (doc_id,),
+        ).fetchall()
+        if not rows:
+            logger.warning("No chunks found for doc %s", doc_id)
             return []
 
-        # TODO: Wire to Scribe actor via message interface:
-        #   msg = Message(type="extract_text", payload={
-        #       "text": row["full_text"],
-        #       "source_id": f"aibrarian:{collection}:{doc_id}",
-        #       "immediate": True,
-        #   })
-        #   await scribe.handle(msg)
-        logger.info("Extraction stub for doc %s — wire Scribe actor when ready", doc_id)
-        return []
+        # Build section label lookup from chunks
+        section_rows = conn.conn.execute(
+            "SELECT chunk_index, section_label FROM chunks "
+            "WHERE doc_id = ? AND section_label IS NOT NULL "
+            "ORDER BY chunk_index",
+            (doc_id,),
+        ).fetchall()
+        section_lookup = {r["chunk_index"]: r["section_label"] for r in section_rows}
+
+        # Initialize Anthropic client
+        try:
+            import anthropic
+
+            client = anthropic.Anthropic()
+        except Exception as e:
+            logger.error(
+                "Document extraction failed — no Anthropic client: %s", e
+            )
+            return []
+
+        # Map config model names to API model strings
+        model_map = {
+            "claude-haiku": "claude-haiku-4-5-20251001",
+            "claude-sonnet": "claude-sonnet-4-5-20250929",
+        }
+        api_model = model_map.get(
+            conn.config.extraction_model, conn.config.extraction_model
+        )
+
+        # Batch chunks (5 per batch ~ 2500 words)
+        BATCH_SIZE = 5
+        batches: list[tuple[str, list[int]]] = []
+        for i in range(0, len(rows), BATCH_SIZE):
+            batch_rows = rows[i : i + BATCH_SIZE]
+            batch_text = "\n\n".join(r["chunk_text"] for r in batch_rows)
+            batch_indices = [r["chunk_index"] for r in batch_rows]
+            batches.append((batch_text, batch_indices))
+
+        all_extractions: list[dict] = []
+
+        for batch_idx, (batch_text, chunk_indices) in enumerate(batches):
+            # Skip very short batches (title pages, etc.)
+            if len(batch_text.strip()) < 100:
+                continue
+
+            is_first = batch_idx == 0
+
+            # Determine section context for this batch
+            batch_section = ""
+            for ci in chunk_indices:
+                if ci in section_lookup:
+                    batch_section = section_lookup[ci]
+                    break
+            # If no direct match, find nearest preceding section
+            if not batch_section and section_lookup:
+                preceding = [
+                    (idx, label) for idx, label in section_lookup.items()
+                    if idx <= chunk_indices[0]
+                ]
+                if preceding:
+                    batch_section = max(preceding, key=lambda x: x[0])[1]
+
+            section_hint = (
+                f"\n\nDOCUMENT LOCATION: This text is from \"{batch_section}\".\n"
+                f"Include this section name in your summary.\n"
+                if batch_section else ""
+            )
+
+            user_msg = (
+                (
+                    "This is the OPENING section of the document. "
+                    "Provide a thorough summary of the document's subject, "
+                    "scope, and main argument as best you can determine. "
+                    "Also extract claims and entities.\n\n"
+                )
+                if is_first
+                else f"Extract knowledge from this section of the document:{section_hint}\n\n"
+            ) + batch_text
+
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda msg=user_msg: client.messages.create(
+                        model=api_model,
+                        max_tokens=16384,
+                        temperature=0.2,
+                        system=DOCUMENT_EXTRACTION_PROMPT,
+                        messages=[{"role": "user", "content": msg}],
+                    ),
+                )
+                response_text = response.content[0].text
+            except Exception as e:
+                logger.warning(
+                    "Extraction batch %d failed: %s", batch_idx, e
+                )
+                continue
+
+            # Parse JSON response
+            try:
+                text = response_text.strip()
+                if text.startswith("```"):
+                    lines = text.split("\n")
+                    end_idx = len(lines) - 1
+                    for i in range(len(lines) - 1, 0, -1):
+                        if lines[i].strip().startswith("```"):
+                            end_idx = i
+                            break
+                    text = "\n".join(lines[1:end_idx])
+                json_start = text.find("{")
+                json_end = text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    text = text[json_start:json_end]
+                text = re.sub(r",\s*([}\]])", r"\1", text)
+                data = json.loads(text)
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning(
+                    "Extraction JSON parse failed batch %d: %s", batch_idx, e
+                )
+                continue
+
+            chunk_ref = chunk_indices[0]  # Reference first chunk in batch
+
+            # Store summary
+            ext_metadata = json.dumps({"section": batch_section}) if batch_section else None
+            summary = data.get("summary", "").strip()
+            if summary:
+                ext_id = f"{doc_id}:ext:summary:{batch_idx}"
+                node_type = (
+                    "DOCUMENT_SUMMARY" if is_first else "SECTION_SUMMARY"
+                )
+                conn.conn.execute(
+                    "INSERT OR REPLACE INTO extractions "
+                    "(id, doc_id, chunk_index, node_type, content, confidence, metadata) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (ext_id, doc_id, chunk_ref, node_type, summary, 0.9, ext_metadata),
+                )
+                all_extractions.append(
+                    {"type": node_type, "content": summary}
+                )
+
+            # Store claims
+            for ci, claim in enumerate(data.get("claims", [])):
+                if isinstance(claim, str) and claim.strip():
+                    ext_id = f"{doc_id}:ext:claim:{batch_idx}:{ci}"
+                    conn.conn.execute(
+                        "INSERT OR REPLACE INTO extractions "
+                        "(id, doc_id, chunk_index, node_type, content, confidence, metadata) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            ext_id,
+                            doc_id,
+                            chunk_ref,
+                            "CLAIM",
+                            claim.strip(),
+                            0.85,
+                            ext_metadata,
+                        ),
+                    )
+                    all_extractions.append(
+                        {"type": "CLAIM", "content": claim}
+                    )
+
+            # Store entities
+            for ei, ent in enumerate(data.get("entities", [])):
+                if isinstance(ent, dict) and ent.get("name"):
+                    ent_id = f"{doc_id}:ent:{batch_idx}:{ei}"
+                    desc = ent.get("description", "")
+                    conn.conn.execute(
+                        "INSERT OR REPLACE INTO entities "
+                        "(id, doc_id, entity_type, entity_value, confidence) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            ent_id,
+                            doc_id,
+                            ent.get("type", "concept"),
+                            f"{ent['name']}: {desc}" if desc else ent["name"],
+                            0.85,
+                        ),
+                    )
+
+            conn.conn.commit()
+            logger.info(
+                "Extraction batch %d/%d: %s + %d claims + %d entities",
+                batch_idx + 1,
+                len(batches),
+                "DOCUMENT_SUMMARY" if is_first else "SECTION_SUMMARY",
+                len(data.get("claims", [])),
+                len(data.get("entities", [])),
+            )
+
+        conn.conn.commit()
+        logger.info(
+            "Document extraction complete: %s → %d extractions across %d batches",
+            doc_id,
+            len(all_extractions),
+            len(batches),
+        )
+        return all_extractions
 
     # =====================================================================
     # Internal Helpers
