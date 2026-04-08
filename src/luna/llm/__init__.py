@@ -28,7 +28,7 @@ from .base import (
 )
 from .registry import get_registry, get_provider, ProviderRegistry
 from .config import get_config, reload_config, set_current_provider, LLMConfig
-from .providers import GroqProvider, GeminiProvider, ClaudeProvider
+from .providers import GroqProvider, GeminiProvider, ClaudeProvider, OllamaProvider
 
 
 def init_providers():
@@ -39,6 +39,7 @@ def init_providers():
     registry.register("groq", GroqProvider())
     registry.register("gemini", GeminiProvider())
     registry.register("claude", ClaudeProvider())
+    registry.register("ollama", OllamaProvider())
 
     return registry
 
@@ -64,6 +65,7 @@ __all__ = [
     'GroqProvider',
     'GeminiProvider',
     'ClaudeProvider',
+    'OllamaProvider',
     # Init
     'init_providers',
 ]
