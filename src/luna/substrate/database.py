@@ -7,7 +7,10 @@ Uses WAL mode for concurrent access and aiosqlite for async operations.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -58,6 +61,7 @@ class MemoryDatabase:
 
         self.db_path = db_path
         self._connection: Optional[aiosqlite.Connection] = None
+        self._wal_checkpoint_counter: int = 0
         # Resolve schema.sql — check multiple locations for dev vs compiled mode.
         _candidates = [
             project_root() / "data" / "schema.sql",                        # compiled binary
@@ -326,6 +330,57 @@ class MemoryDatabase:
         self._connection = None
 
         logger.info("Database connection closed")
+
+    async def checkpoint_wal(self) -> None:
+        """Periodic WAL checkpoint to prevent unbounded WAL growth.
+
+        Uses PASSIVE mode so it never blocks writers — it only checkpoints
+        pages that don't require blocking. Call this periodically from the
+        engine tick loop.
+        """
+        if self._connection is None:
+            return
+        try:
+            result = await self._connection.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            row = await result.fetchone()
+            if row:
+                # row = (busy, log_pages, checkpointed_pages)
+                logger.debug(f"WAL checkpoint: busy={row[0]}, log={row[1]}, checkpointed={row[2]}")
+        except Exception as e:
+            logger.debug(f"WAL checkpoint skipped: {e}")
+
+    async def execute_with_retry(
+        self,
+        sql: str,
+        params: Optional[Sequence[Any]] = None,
+        max_retries: int = 3,
+    ) -> aiosqlite.Cursor:
+        """Execute a write statement with exponential backoff on database lock.
+
+        Backoff schedule: 0.5s, 1s, 2s. Use for hot-path writes where
+        contention with background tasks is likely (e.g. record_conversation_turn).
+        """
+        conn = self._ensure_connected()
+        delays = [0.5, 1.0, 2.0]
+        for attempt in range(max_retries + 1):
+            try:
+                t0 = time.monotonic()
+                cursor = await conn.execute(sql, params or ())
+                await conn.commit()
+                elapsed = time.monotonic() - t0
+                if elapsed > 1.0:
+                    logger.warning(f"Slow DB write ({elapsed:.1f}s): {sql[:80]}")
+                return cursor
+            except sqlite3.OperationalError as e:
+                if "database is locked" not in str(e) or attempt >= max_retries:
+                    raise
+                delay = delays[min(attempt, len(delays) - 1)]
+                logger.warning(
+                    f"DB lock (attempt {attempt + 1}/{max_retries}), "
+                    f"retrying in {delay}s: {sql[:60]}"
+                )
+                await asyncio.sleep(delay)
+        raise RuntimeError("execute_with_retry: unreachable")
 
     def _ensure_connected(self) -> aiosqlite.Connection:
         """Ensure we have an active connection."""

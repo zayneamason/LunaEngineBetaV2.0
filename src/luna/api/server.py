@@ -2357,11 +2357,21 @@ async def stream_message(request: MessageRequest):
                     logger.warning(f"[STREAM] collection context failed: {e}")
 
             # Record user turn through unified API (extraction + history + matrix)
-            await _engine.record_conversation_turn(
-                role="user",
-                content=request.message,
-                source="stream",
-            )
+            import sqlite3 as _sqlite3_s
+            for _srec_attempt in range(3):
+                try:
+                    await _engine.record_conversation_turn(
+                        role="user",
+                        content=request.message,
+                        source="stream",
+                    )
+                    break
+                except _sqlite3_s.OperationalError as _srec_err:
+                    if "database is locked" in str(_srec_err) and _srec_attempt < 2:
+                        logger.warning(f"[STREAM] DB lock on user turn record (attempt {_srec_attempt + 1}/3), retrying...")
+                        await asyncio.sleep([0.5, 1.0, 2.0][_srec_attempt])
+                    else:
+                        raise
 
             # Send streaming generation request
             msg = Message(
@@ -2584,11 +2594,22 @@ async def persona_stream(request: MessageRequest):
                 ]
 
             # Record user turn through unified API (extraction + history + matrix)
-            await _engine.record_conversation_turn(
-                role="user",
-                content=request.message,
-                source="stream",
-            )
+            # Retry on DB lock — this write contends with background extraction tasks
+            import sqlite3 as _sqlite3
+            for _rec_attempt in range(3):
+                try:
+                    await _engine.record_conversation_turn(
+                        role="user",
+                        content=request.message,
+                        source="stream",
+                    )
+                    break
+                except _sqlite3.OperationalError as _rec_err:
+                    if "database is locked" in str(_rec_err) and _rec_attempt < 2:
+                        logger.warning(f"[PERSONA-STREAM] DB lock on user turn record (attempt {_rec_attempt + 1}/3), retrying...")
+                        await asyncio.sleep([0.5, 1.0, 2.0][_rec_attempt])
+                    else:
+                        raise
 
             # Build state summary
             state_summary = {
@@ -2881,16 +2902,30 @@ async def persona_stream(request: MessageRequest):
             # Record assistant turn (Scribe skips assistant turns by design,
             # but this feeds HistoryManager + matrix storage)
             if response_text:
-                await _engine.record_conversation_turn(
-                    role="assistant",
-                    content=response_text,
-                    source="stream",
-                    tokens=final_metadata.get("output_tokens"),
-                )
+                for _arec_attempt in range(3):
+                    try:
+                        await _engine.record_conversation_turn(
+                            role="assistant",
+                            content=response_text,
+                            source="stream",
+                            tokens=final_metadata.get("output_tokens"),
+                        )
+                        break
+                    except _sqlite3.OperationalError as _arec_err:
+                        if "database is locked" in str(_arec_err) and _arec_attempt < 2:
+                            logger.warning(f"[PERSONA-STREAM] DB lock on assistant turn record (attempt {_arec_attempt + 1}/3), retrying...")
+                            await asyncio.sleep([0.5, 1.0, 2.0][_arec_attempt])
+                        else:
+                            logger.error(f"[PERSONA-STREAM] Failed to record assistant turn after retries: {_arec_err}")
+                            break  # Non-fatal for assistant recording
 
         except Exception as e:
             logger.error(f"Persona stream error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            # Surface a user-friendly message for DB lock instead of raw error
+            _msg = str(e)
+            if "database is locked" in _msg:
+                _msg = "I'm still processing something — try again in a moment."
+            yield f"data: {json.dumps({'type': 'error', 'message': _msg})}\n\n"
 
         finally:
             # Release stream ownership so engine handles non-streaming paths normally

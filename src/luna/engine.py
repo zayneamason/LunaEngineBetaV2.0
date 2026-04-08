@@ -1016,6 +1016,12 @@ Emojis can accompany gestures or stand alone.
         if self.metrics.cognitive_ticks > 0 and self.metrics.cognitive_ticks % 10 == 0:
             await self.consciousness.save()
 
+        # 7. WAL checkpoint periodically (every 120 ticks ≈ 60s at 500ms interval)
+        if self.metrics.cognitive_ticks > 0 and self.metrics.cognitive_ticks % 120 == 0:
+            matrix = self.get_actor("matrix")
+            if matrix and hasattr(matrix, "_matrix") and matrix._matrix:
+                await matrix._matrix.db.checkpoint_wal()
+
     async def _dispatch_event(self, event: InputEvent) -> None:
         """Route event to appropriate actor(s).
 
@@ -1091,7 +1097,22 @@ Emojis can accompany gestures or stand alone.
                 # Simple query - can answer while working on other task
                 logger.info(f"Concurrent simple query: {user_message[:30]}...")
                 await self._emit_progress(f"(Working on your previous request... but I can answer this quickly)")
-                await self._process_direct(user_message, correlation_id)
+                try:
+                    await self._process_direct(user_message, correlation_id)
+                except Exception as _direct_err:
+                    import sqlite3 as _sqlite3
+                    if isinstance(_direct_err, _sqlite3.OperationalError) and "database is locked" in str(_direct_err):
+                        logger.warning(f"DB lock on concurrent direct query — retrying in 1s: {_direct_err}")
+                        await asyncio.sleep(1)
+                        try:
+                            await self._process_direct(user_message, correlation_id)
+                        except Exception:
+                            await self._emit_response(
+                                "I'm still thinking about something — try again in a moment.",
+                                {"error": True},
+                            )
+                    else:
+                        raise
             else:
                 # Queue for later
                 self._pending_messages.append(user_message)
@@ -1104,7 +1125,7 @@ Emojis can accompany gestures or stand alone.
         # Not currently processing - handle normally with agentic routing
         await self._process_message_agentic(user_message, correlation_id, source=source)
 
-    async def _process_message_agentic(self, user_message: str, correlation_id: str, source: str = "text", _db_retry: bool = False) -> None:
+    async def _process_message_agentic(self, user_message: str, correlation_id: str, source: str = "text", _db_retry: int = 0) -> None:
         """Process message through the agentic pipeline (subtasks → router → planner → loop)."""
         self._is_processing = True
         self._current_goal = user_message
@@ -1325,16 +1346,17 @@ Emojis can accompany gestures or stand alone.
             raise
 
         except Exception as e:
-            # Retry once on SQLite lock contention
+            # Retry with exponential backoff on SQLite lock contention
             import sqlite3 as _sqlite3
-            if not _db_retry and isinstance(e, _sqlite3.OperationalError) and "database is locked" in str(e):
-                logger.warning(f"DB lock hit — retrying after 2s: {e}")
-                await asyncio.sleep(2)
+            if isinstance(e, _sqlite3.OperationalError) and "database is locked" in str(e) and _db_retry < 3:
+                _delay = [1, 2, 4][min(_db_retry, 2)]
+                logger.warning(f"DB lock (attempt {_db_retry + 1}/3) — retrying in {_delay}s: {e}")
+                await asyncio.sleep(_delay)
                 try:
-                    await self._process_message_agentic(user_message, correlation_id, source=source, _db_retry=True)
+                    await self._process_message_agentic(user_message, correlation_id, source=source, _db_retry=_db_retry + 1)
                     return
                 except Exception as e2:
-                    logger.error(f"Agentic processing error (retry): {e2}")
+                    logger.error(f"Agentic processing error (retry {_db_retry + 1}): {e2}")
                     await self._emit_response(f"I ran into an issue: {e2}", {"error": True})
             else:
                 logger.error(f"Agentic processing error: {e}")
