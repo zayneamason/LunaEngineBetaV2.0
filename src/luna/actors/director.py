@@ -39,6 +39,13 @@ try:
 except ImportError:
     FALLBACK_CHAIN_AVAILABLE = False
 
+# LLM-based Intent Router (qwen3:8b) — comes in via 45ad0f8 WIP snapshot later
+try:
+    from luna.llm.intent_router import IntentRouter
+    INTENT_ROUTER_AVAILABLE = True
+except ImportError:
+    INTENT_ROUTER_AVAILABLE = False
+
 # QA System (live inference validation)
 try:
     from luna.qa import InferenceContext
@@ -303,6 +310,22 @@ class DirectorActor(Actor):
         # Initialize fallback chain for resilient inference
         if FALLBACK_CHAIN_AVAILABLE:
             await self._init_fallback_chain()
+
+        # Initialize LLM-based intent router (qwen3:8b)
+        self._intent_router = None
+        self._last_intent = None
+        if INTENT_ROUTER_AVAILABLE and LLM_REGISTRY_AVAILABLE:
+            try:
+                registry = get_registry()
+                ollama = registry.get("ollama")
+                if ollama and ollama.is_available:
+                    self._intent_router = IntentRouter.from_config(provider=ollama)
+                    if self._intent_router:
+                        logger.info("[INTENT-ROUTER] Initialized with Ollama provider")
+                else:
+                    logger.info("[INTENT-ROUTER] Ollama not available, using keyword classification")
+            except Exception as e:
+                logger.warning(f"[INTENT-ROUTER] Init failed: {e}")
 
         # Pre-compute acknowledgment intent clusters (runs in background)
         if ACKNOWLEDGMENT_ROUTER_AVAILABLE:
@@ -839,12 +862,17 @@ class DirectorActor(Actor):
         self._last_denied_count = 0  # Reset per-request
         self._last_injected_memories = memories  # Expose for GroundingLink
 
-        # Auto-fetch memories when caller provided none (e.g. voice/PersonaAdapter)
-        if not memories:
-            memory_text = await self._fetch_memory_context(message, max_tokens=1500)
-            if memory_text:
-                memories = [{"content": memory_text, "node_type": "context"}]
-                logger.info(f"[PROCESS] Auto-fetched memory context ({len(memory_text)} chars)")
+        # Always fetch fresh memory context for the current message
+        memory_text = await self._fetch_memory_context(message, max_tokens=1500)
+        if memory_text:
+            fresh_memory = {"content": memory_text, "node_type": "context"}
+            if memories:
+                # Supplement caller-provided memories with fresh fetch
+                memories = [fresh_memory] + memories
+                logger.info(f"[PROCESS] Fresh memory context ({len(memory_text)} chars) + {len(memories)-1} caller memories")
+            else:
+                memories = [fresh_memory]
+                logger.info(f"[PROCESS] Fresh memory context ({len(memory_text)} chars)")
 
         # [TRACE] Entity System Verification Logging
         logger.info("=" * 60)
@@ -939,7 +967,16 @@ class DirectorActor(Actor):
             logger.info("[TRACE] WARNING: No _entity_context available!")
 
         # ── L2: Classify intent BEFORE routing ──────────────────────
-        intent = self._classify_intent(message, conversation_history)
+        # Prefer LLM router (qwen3:8b) over keyword classification
+        if getattr(self, '_intent_router', None) is not None:
+            try:
+                intent = await self._intent_router.classify(message)
+            except Exception as e:
+                logger.warning(f"[INTENT-ROUTER] classify() failed: {e}, using keyword fallback")
+                intent = self._classify_intent(message, conversation_history)
+        else:
+            intent = self._classify_intent(message, conversation_history)
+        self._last_intent = intent  # Store for _should_delegate routing
         logger.info(
             "[INTENT] mode=%s confidence=%.2f signals=%s continuation=%s",
             intent.mode.value, intent.confidence,
@@ -1182,14 +1219,38 @@ class DirectorActor(Actor):
                 self._last_prompt_meta = assembler_result.to_dict()
 
             try:
-                result = await self._local.generate(
-                    message,
-                    system_prompt=system_prompt,
-                    max_tokens=256,
-                )
-                response_text = result.text if hasattr(result, 'text') else str(result)
+                # Use Ollama provider with full conversation history (preferred)
+                ollama_provider = None
+                if LLM_REGISTRY_AVAILABLE:
+                    try:
+                        ollama_provider = get_registry().get("ollama")
+                    except Exception:
+                        pass
+
+                if ollama_provider and getattr(ollama_provider, 'is_available', False):
+                    # Build messages array with history (same format as delegated path)
+                    msgs = [LLMMessage(role="system", content=system_prompt)]
+                    for turn in conversation_history:
+                        role = turn.get("role", "user") if isinstance(turn, dict) else "user"
+                        content = turn.get("content", "") if isinstance(turn, dict) else str(turn)
+                        if role in ("user", "assistant") and content:
+                            msgs.append(LLMMessage(role=role, content=content))
+                    msgs.append(LLMMessage(role="user", content=message))
+
+                    result = await ollama_provider.complete(messages=msgs, max_tokens=512)
+                    response_text = result.content
+                    logger.info(f"[PROCESS-LOCAL] Ollama complete with {len(msgs)} messages, used_retrieval={used_retrieval}")
+                else:
+                    # Fallback to MLX local inference (no conversation history)
+                    result = await self._local.generate(
+                        message,
+                        system_prompt=system_prompt,
+                        max_tokens=512,
+                    )
+                    response_text = result.text if hasattr(result, 'text') else str(result)
+                    logger.info(f"[PROCESS-LOCAL] MLX fallback, used_retrieval={used_retrieval}")
+
                 self._local_generations += 1
-                logger.info(f"[PROCESS-LOCAL] Generation complete, used_retrieval={used_retrieval}")
             except Exception as e:
                 logger.error(f"Director.process local failed: {e}")
                 response_text = "I'm having trouble with that."
@@ -1601,20 +1662,33 @@ class DirectorActor(Actor):
         """
         Planning step: Decide if this query should be delegated to fallback chain.
 
-        CHANGED: Always delegate to fallback chain (groq → local → claude).
-        This ensures Groq is tried first for speed, with local as voice narration.
-        The complexity check is preserved for logging/metrics only.
+        Routes based on intent classification + complexity:
+        - CHAT / REFLECT with low complexity → local Qwen (fast, personality-driven)
+        - ASSIST / RECALL or high complexity → delegated (Haiku / fallback chain)
         """
         query_preview = user_message[:50] + "..." if len(user_message) > 50 else user_message
 
-        # Log complexity for metrics (but don't use it for routing)
+        # Estimate complexity
+        complexity = 0.0
         if hasattr(self, '_hybrid') and self._hybrid is not None:
             complexity = self._hybrid.estimate_complexity(user_message)
-            logger.info(f"🔀 DELEGATE: '{query_preview}' (complexity={complexity:.2f}, always delegating)")
-        else:
-            logger.info(f"🔀 DELEGATE: '{query_preview}' (always delegating)")
 
-        # Always delegate - fallback chain handles provider selection
+        # Check intent — casual chat and reflection stay local
+        intent = getattr(self, '_last_intent', None)
+        intent_mode = getattr(intent, 'mode', None)
+        mode_val = intent_mode.value if intent_mode and hasattr(intent_mode, 'value') else "CHAT"
+
+        # Local-first: casual chat and reflection with low complexity stay on Qwen
+        threshold = 0.35
+        if hasattr(self, '_hybrid') and self._hybrid is not None:
+            threshold = getattr(self._hybrid, '_complexity_threshold', 0.35)
+
+        if mode_val in ("CHAT", "REFLECT") and complexity < threshold:
+            logger.info(f"🔀 LOCAL: '{query_preview}' (mode={mode_val}, complexity={complexity:.2f} < {threshold})")
+            return False
+
+        # Everything else delegates
+        logger.info(f"🔀 DELEGATE: '{query_preview}' (mode={mode_val}, complexity={complexity:.2f} >= {threshold})")
         return True
 
     def _check_delegation_signals(self, user_message: str) -> bool:
