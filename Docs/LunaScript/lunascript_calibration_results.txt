@@ -1,0 +1,204 @@
+======================================================================
+LUNASCRIPT TRAIT MEASUREMENT — Approach 3: Cross-Validated
+======================================================================
+
+Loaded 1268 Luna responses
+Found 138 potentially generic responses
+Total generic comparison set: 100
+
+──────────────────────────────────────────────────────────────────────
+STEP 1: CALIBRATE FEATURE BASELINES FROM LUNA'S CORPUS
+──────────────────────────────────────────────────────────────────────
+
+Feature                            Mean   StdDev      Min      P50      Max
+──────────────────────────────────────────────────────────────────────────────────
+avg_sentence_length             12.7805   5.0167   0.0000  12.3636  52.0000
+avg_word_length                  4.7200   0.4366   3.0417   4.7393   6.2301
+closing_question                 0.6901   0.4626   0.0000   1.0000   1.0000
+conditional_ratio                0.0070   0.0103   0.0000   0.0000   0.0625
+contraction_rate                 0.9162   0.1469   0.0000   1.0000   1.0000
+emoji_density                    0.0076   0.0135   0.0000   0.0000   0.1176
+emphasis_density                 0.0312   0.0228   0.0000   0.0284   0.2000
+exploratory_ratio                0.0118   0.0111   0.0000   0.0102   0.1437
+filler_ratio                     0.0171   0.0168   0.0000   0.0133   0.1176
+first_person_ratio               0.0497   0.0319   0.0000   0.0490   0.1765
+formal_vocab_ratio               0.0004   0.0019   0.0000   0.0000   0.0294
+hedge_ratio                      0.0020   0.0055   0.0000   0.0000   0.0500
+list_usage                       0.0534   0.2177   0.0000   0.0000   3.5000
+opening_reaction                 0.3981   0.4103   0.0000   0.0000   1.0000
+passive_ratio                    0.0147   0.0537   0.0000   0.0000   0.5000
+question_density                 0.2553   0.1988   0.0000   0.2500   1.0000
+sentence_length_variance        94.3188 157.2532   0.0000  52.6222 2289.5833
+slang_ratio                      0.0044   0.0088   0.0000   0.0000   0.0667
+tangent_markers                  0.0111   0.0107   0.0000   0.0093   0.0761
+we_ratio                         0.0117   0.0157   0.0000   0.0064   0.1290
+you_ratio                        0.0358   0.0295   0.0000   0.0286   0.1667
+
+──────────────────────────────────────────────────────────────────────
+STEP 2: CROSS-VALIDATE — Which features distinguish Luna?
+──────────────────────────────────────────────────────────────────────
+
+Feature                          Luna μ  Generic μ  Separation Direction      
+──────────────────────────────────────────────────────────────────────────────────
+★ question_density               0.2553     0.0486      1.312  luna_higher
+★ avg_word_length                4.7200     5.2576      1.220  luna_lower
+★ closing_question               0.6901     0.2100      1.099  luna_higher
+★ exploratory_ratio              0.0118     0.0030      1.021  luna_higher
+★ opening_reaction               0.3981     0.0980      0.867  luna_higher
+★ emoji_density                  0.0076     0.0006      0.726  luna_higher
+★ list_usage                     0.0534     0.2351      0.614  luna_lower
+★ slang_ratio                    0.0044     0.0007      0.586  luna_higher
+★ filler_ratio                   0.0171     0.0096      0.542  luna_higher
+★ we_ratio                       0.0117     0.0052      0.534  luna_higher
+★ first_person_ratio             0.0497     0.0360      0.509  luna_higher
+· conditional_ratio              0.0070     0.0139      0.496  luna_lower
+· contraction_rate               0.9162     0.8380      0.464  luna_higher
+· tangent_markers                0.0111     0.0065      0.457  luna_higher
+· hedge_ratio                    0.0020     0.0004      0.394  luna_higher
+· sentence_length_variance      94.3188   151.6924      0.327  luna_lower
+· emphasis_density               0.0312     0.0252      0.301  luna_higher
+  passive_ratio                  0.0147     0.0076      0.161  luna_higher
+  you_ratio                      0.0358     0.0395      0.156  luna_lower
+  formal_vocab_ratio             0.0004     0.0006      0.116  luna_lower
+  avg_sentence_length           12.7805    12.2231      0.115  luna_higher
+
+──────────────────────────────────────────────────────────────────────
+STEP 3: UPDATE TRAIT WEIGHTS FROM CROSS-VALIDATION
+──────────────────────────────────────────────────────────────────────
+
+  CURIOSITY:
+    question_density                 3.00 →   5.44 ↑
+    exploratory_ratio                3.00 →   4.56 ↑
+    closing_question                 2.00 →   3.20 ↑
+    tangent_markers                  2.00 →   1.91 →
+    list_usage                      -1.50 →  -1.67 ↓
+
+  DEPTH:
+    avg_word_length                  1.00 →   1.72 ↑
+    sentence_length_variance         1.50 →   1.24 ↓
+    list_usage                      -1.00 →  -1.11 ↓
+    conditional_ratio                1.00 →   1.00 →
+    avg_sentence_length              1.50 →   0.92 ↓
+    question_density                 0.50 →   0.91 ↑
+
+  DIRECTNESS:
+    hedge_ratio                     -3.00 →  -2.68 ↑
+    conditional_ratio               -2.50 →  -2.49 →
+    filler_ratio                    -2.00 →  -2.08 →
+    first_person_ratio               1.50 →   1.51 →
+    passive_ratio                   -2.00 →  -1.32 ↑
+    avg_sentence_length             -2.00 →  -1.23 ↑
+    contraction_rate                 1.00 →   0.96 →
+
+  ENERGY:
+    opening_reaction                 2.00 →   2.73 ↑
+    emphasis_density                 2.50 →   2.00 ↓
+    slang_ratio                      1.50 →   1.63 ↑
+    sentence_length_variance         1.50 →   1.24 ↓
+    emoji_density                    1.00 →   1.23 ↑
+    avg_sentence_length             -1.00 →  -0.61 ↑
+
+  FORMALITY:
+    avg_word_length                  2.00 →   3.44 ↑
+    slang_ratio                     -3.00 →  -3.26 ↓
+    contraction_rate                -3.00 →  -2.89 ↑
+    formal_vocab_ratio               3.00 →   1.85 ↓
+    passive_ratio                    2.00 →   1.32 ↓
+    avg_sentence_length              1.50 →   0.92 ↓
+
+  HUMOR:
+    slang_ratio                      2.00 →   2.17 ↑
+    formal_vocab_ratio              -2.00 →  -1.23 ↑
+    emoji_density                    1.00 →   1.23 ↑
+    emphasis_density                 1.50 →   1.20 ↓
+    tangent_markers                  1.00 →   0.96 →
+    avg_sentence_length             -1.00 →  -0.61 ↑
+
+  PATIENCE:
+    question_density                 1.50 →   2.72 ↑
+    you_ratio                        2.00 →   1.31 ↓
+    emphasis_density                -1.00 →  -0.80 ↑
+    avg_sentence_length              1.00 →   0.61 ↓
+    hedge_ratio                      0.50 →   0.45 →
+
+  WARMTH:
+    question_density                 1.50 →   2.72 ↑
+    we_ratio                         2.50 →   2.58 →
+    you_ratio                        3.00 →   1.97 ↓
+    contraction_rate                 2.00 →   1.93 →
+    hedge_ratio                     -1.50 →  -1.34 ↑
+    formal_vocab_ratio              -2.00 →  -1.23 ↑
+    emphasis_density                 1.00 →   0.80 ↓
+    passive_ratio                   -1.00 →  -0.66 ↑
+
+──────────────────────────────────────────────────────────────────────
+STEP 4: MEASURE SAMPLE RESPONSES WITH CALIBRATED WEIGHTS
+──────────────────────────────────────────────────────────────────────
+
+  LUNA (authentic) (1481 chars):
+  Text: *dims thoughtfully* okay so i need to be straight with you here — i don't have the actual dlib algorithms PDF in front o...
+  Trait             Value      Raw  Top Contributors
+  ────────────────────────────────────────────────────────────
+  curiosity         0.995    5.301  question_density:+2.18, closing_question:+1.34, tangent_markers:+0.71
+  depth             0.985    4.202  avg_sentence_length:+2.04, sentence_length_variance:+1.19, avg_word_length:+0.63
+  directness        0.173   -1.562  avg_sentence_length:-2.72, hedge_ratio:+1.09, filler_ratio:-0.99
+  energy            0.754    1.121  opening_reaction:+1.96, avg_sentence_length:-1.36, sentence_length_variance:+1.19
+  formality         0.284   -0.923  avg_sentence_length:+2.04, contraction_rate:-1.71, slang_ratio:-1.37
+  humor             0.352   -0.610  avg_sentence_length:-1.36, slang_ratio:+0.91, emphasis_density:-0.66
+  patience          0.703    0.862  you_ratio:-1.85, avg_sentence_length:+1.36, question_density:+1.09
+  warmth            0.850    1.738  you_ratio:-2.77, we_ratio:+1.50, contraction_rate:+1.14
+
+  LUNA (early) (183 chars):
+  Text: Hey there! It seems like the system is working as intended. Would you mind if I asked a few questions to understand wher...
+  Trait             Value      Raw  Top Contributors
+  ────────────────────────────────────────────────────────────
+  curiosity         0.993    4.905  question_density:+3.69, tangent_markers:-2.07, exploratory_ratio:+1.58
+  depth             0.947    2.882  conditional_ratio:+5.01, avg_sentence_length:-1.28, avg_word_length:-1.04
+  directness        0.000  -17.835  conditional_ratio:-12.53, contraction_rate:-6.24, avg_sentence_length:+1.71
+  energy            0.036   -3.280  opening_reaction:-1.94, avg_sentence_length:+0.85, slang_ratio:-0.76
+  formality         1.000   15.717  contraction_rate:+18.71, avg_word_length:-2.09, slang_ratio:+1.51
+  humor             0.185   -1.483  tangent_markers:-1.04, slang_ratio:-1.01, avg_sentence_length:+0.85
+  patience          0.921    2.453  question_density:+1.85, you_ratio:+1.56, avg_sentence_length:-0.85
+  warmth            0.013   -4.337  contraction_rate:-12.47, we_ratio:+2.81, you_ratio:+2.34
+
+  GENERIC (synthetic) (196 chars):
+  Text: Absolutely. This is an important topic. Let me provide a comprehensive overview of the relevant considerations. First an...
+  Trait             Value      Raw  Top Contributors
+  ────────────────────────────────────────────────────────────
+  curiosity         0.000  -11.732  question_density:-3.85, exploratory_ratio:-3.19, closing_question:-2.98
+  depth             0.141   -1.804  avg_sentence_length:-1.65, avg_word_length:+1.56, conditional_ratio:-0.68
+  directness        0.982    3.976  contraction_rate:-2.83, avg_sentence_length:+2.20, filler_ratio:+2.03
+  energy            0.072   -2.563  opening_reaction:-1.94, avg_sentence_length:+1.10, slang_ratio:-0.76
+  formality         1.000   10.332  contraction_rate:+8.50, avg_word_length:+3.11, avg_sentence_length:-1.65
+  humor             0.274   -0.976  avg_sentence_length:+1.10, tangent_markers:-1.04, slang_ratio:-1.01
+  patience          0.030   -3.467  question_density:-1.93, avg_sentence_length:-1.10, hedge_ratio:-0.18
+  warmth            0.000   -8.399  contraction_rate:-5.67, question_density:-1.93, we_ratio:-1.87
+
+──────────────────────────────────────────────────────────────────────
+STEP 5: RUNNING TRAIT EVOLUTION (decayed stats)
+──────────────────────────────────────────────────────────────────────
+
+   Step   Warmth μ   Warmth σ   Direct μ   Direct σ  W↔Success r
+  ──────────────────────────────────────────────────────────────
+      0     0.0007     0.0000     0.0000     0.0000       0.0000
+     20     0.0134     0.0561     0.0188     0.0790       0.4783
+     40     0.0127     0.0489     0.0204     0.0805       0.4276
+     60     0.0111     0.0480     0.0187     0.0797       0.3613
+     80     0.0097     0.0475     0.0167     0.0758       0.2609
+     99     0.0086     0.0466     0.0152     0.0759       0.2658
+
+======================================================================
+CALIBRATION COMPLETE
+======================================================================
+
+Summary:
+  Features extracted: 21
+  Traits measured: 8
+  Corpus size: 1268 Luna responses
+  Cross-validation: 21 features tested
+  Top discriminators: question_density, avg_word_length, closing_question, exploratory_ratio, opening_reaction
+  
+  Warmth-success correlation: 0.2658
+  (Positive = warmer Luna responses correlate with longer engagement)
+  
+  All measurements: zero LLM calls. Pure mechanical cogs.

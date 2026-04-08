@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eclissi — Option C + Guardian Luna</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --bg2: #161b22;
+  --bg3: #1c2128;
+  --surface: #21262d;
+  --border: rgba(255,255,255,0.08);
+  --border2: rgba(255,255,255,0.14);
+  --text: #e6edf3;
+  --text2: #8b949e;
+  --text3: #484f58;
+  --accent: #c084fc;
+  --accent-dim: rgba(192,132,252,0.15);
+  --accent-border: rgba(192,132,252,0.25);
+  --guard: #c4975a;
+  --guard-dim: rgba(196,151,90,0.12);
+  --guard-border: rgba(196,151,90,0.2);
+  --personal: #5b8fa8;
+  --project: #7a9e6d;
+  --bridge: #c4975a;
+  --mixed: #9a7fb5;
+  --emerald: #34d399;
+  --coral: #f0997b;
+  --amber: #fbbf24;
+  --red: #f87171;
+  --blue: #85b7eb;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'SF Mono', 'Fira Code', monospace;
+  --r: 12px;
+  --rs: 8px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:var(--font); height:100vh; display:flex; overflow:hidden; }
+
+/* ── Dock ── */
+.dock { width:52px; background:var(--bg2); border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; padding:12px 0; gap:6px; flex-shrink:0; }
+.dock-btn { width:36px; height:36px; border-radius:var(--rs); border:1px solid var(--border); background:transparent; color:var(--text3); font-size:12px; font-weight:500; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all .15s; position:relative; }
+.dock-btn:hover { border-color:var(--border2); color:var(--text2); }
+.dock-btn.on { background:var(--accent-dim); border-color:var(--accent-border); color:var(--accent); }
+.dock-btn .dot { position:absolute; top:4px; right:4px; width:5px; height:5px; border-radius:50%; }
+.dock-sep { width:24px; height:1px; background:var(--border); margin:4px 0; }
+
+/* ── Layout ── */
+.layout { flex:1; display:flex; min-width:0; }
+.chat-col { flex:1; display:flex; flex-direction:column; min-width:0; transition:flex .3s ease; }
+.guard-col { width:0; overflow:hidden; border-left:1px solid transparent; transition:all .3s cubic-bezier(0.16,1,0.3,1); display:flex; flex-direction:column; }
+.guard-col.open { width:380px; border-left-color:var(--border); }
+
+/* ── Header ── */
+.header { padding:10px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-shrink:0; }
+.orb { width:12px; height:12px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px rgba(192,132,252,0.5); animation:pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{box-shadow:0 0 10px rgba(192,132,252,0.5)} 50%{box-shadow:0 0 16px rgba(192,132,252,0.7)} }
+.header h2 { font-size:15px; font-weight:500; }
+.project-tag { font-size:10px; color:var(--project); background:rgba(122,158,109,0.12); padding:3px 10px; border-radius:12px; font-weight:500; }
+.scrubber { display:flex; align-items:center; gap:2px; margin-left:auto; }
+.scrub-seg { height:6px; border-radius:3px; cursor:pointer; transition:all .2s; }
+.scrub-seg:hover { filter:brightness(1.3); }
+.scrub-seg.on { outline:1.5px solid var(--text2); outline-offset:1px; }
+.scrub-label { font-size:10px; color:var(--text3); margin-left:8px; min-width:56px; text-align:right; }
+
+/* ── Context strip ── */
+.ctx-strip { padding:6px 20px; border-bottom:1px solid var(--border); display:flex; gap:6px; align-items:center; flex-shrink:0; flex-wrap:wrap; }
+.ctx-tag { font-size:10px; padding:3px 9px; border-radius:10px; font-weight:500; cursor:default; }
+.ctx-tag.personal { background:rgba(91,143,168,0.12); color:var(--personal); }
+.ctx-tag.project { background:rgba(122,158,109,0.12); color:var(--project); }
+.ctx-tag.bridge { background:rgba(196,151,90,0.12); color:var(--bridge); }
+.ctx-tag.neutral { background:var(--surface); color:var(--text3); }
+.ctx-tag.entity { background:rgba(133,183,235,0.1); color:var(--blue); cursor:pointer; }
+.ctx-tag.entity:hover { background:rgba(133,183,235,0.2); }
+.ctx-sep { width:1px; height:14px; background:var(--border); }
+
+/* ── Messages ── */
+.messages { flex:1; overflow-y:auto; padding:16px 20px 8px; display:flex; flex-direction:column; gap:4px; scroll-behavior:smooth; }
+.messages::-webkit-scrollbar { width:4px; } .messages::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+
+.date-div { display:flex; align-items:center; gap:12px; padding:14px 0 6px; }
+.date-div .line { flex:1; height:1px; background:var(--border); }
+.date-div .date { font-size:10px; color:var(--text3); letter-spacing:1px; white-space:nowrap; font-weight:500; }
+
+.msg { display:flex; flex-direction:column; max-width:78%; animation:fadeIn .25s ease; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+.msg.user { align-self:flex-end; }
+.msg.luna { align-self:flex-start; }
+.msg .bubble { padding:10px 14px; font-size:13px; line-height:1.55; border-radius:var(--r); position:relative; cursor:pointer; transition:all .15s; }
+.msg .bubble:hover { filter:brightness(1.05); }
+.msg.user .bubble { background:var(--accent-dim); border:1px solid var(--accent-border); border-radius:var(--r) var(--r) 4px var(--r); }
+.msg.luna .bubble { background:var(--surface); border:1px solid var(--border); border-radius:var(--r) var(--r) var(--r) 4px; }
+.msg.luna .bubble[data-state="personal"] { border-left:2.5px solid var(--personal); }
+.msg.luna .bubble[data-state="project"] { border-left:2.5px solid var(--project); }
+.msg.luna .bubble[data-state="bridge"] { border-left:2.5px solid var(--bridge); }
+.msg.luna .bubble[data-state="mixed"] { border-left:2.5px solid var(--mixed); }
+.entity-hl { color:var(--blue); cursor:pointer; border-bottom:1px dotted rgba(133,183,235,0.3); }
+.entity-hl:hover { border-bottom-color:var(--blue); }
+.k-dot { width:5px; height:5px; border-radius:50%; background:var(--bridge); display:inline-block; margin-left:5px; vertical-align:middle; opacity:0.7; }
+
+/* Badge row */
+.badge-row { display:flex; align-items:center; gap:6px; margin-top:4px; padding:0 4px; flex-wrap:wrap; }
+.badge { font-size:10px; padding:2px 7px; border-radius:4px; font-weight:500; white-space:nowrap; }
+.badge-resonance { background:rgba(52,211,153,0.12); color:var(--emerald); }
+.badge-drift { background:rgba(248,113,113,0.12); color:var(--red); }
+.badge-expansion { background:rgba(91,143,168,0.12); color:var(--personal); }
+.badge-route { display:flex; align-items:center; gap:3px; }
+.badge-route.delegated { color:#e879f9; } .badge-route.local { color:var(--emerald); } .badge-route.cloud { color:var(--amber); }
+.badge-tokens { color:var(--text3); } .badge-latency { color:var(--text3); }
+.badge-filtered { color:rgba(251,191,36,0.6); }
+
+/* Knowledge bar */
+.kbar { display:flex; align-items:center; gap:4px; padding:3px 8px; margin:2px 0; opacity:0.4; transition:opacity .2s; cursor:pointer; }
+.kbar:hover { opacity:1; }
+.kbar-line { flex:1; height:2px; border-radius:1px; }
+.kbar-pill { font-size:9px; padding:1px 6px; border-radius:3px; font-weight:600; letter-spacing:0.5px; }
+
+/* Activity card */
+.activity { display:flex; align-items:center; gap:8px; padding:5px 12px; margin:4px 0; border-radius:var(--rs); font-size:11px; color:var(--text2); cursor:pointer; transition:all .15s; border:1px solid transparent; }
+.activity:hover { border-color:var(--border2); }
+.act-icon { width:16px; height:16px; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:8px; flex-shrink:0; }
+.act-icon.fact { background:rgba(91,143,168,0.15); color:var(--personal); }
+.act-icon.entity { background:rgba(133,183,235,0.15); color:var(--blue); }
+.act-icon.edge { background:rgba(122,158,109,0.15); color:var(--project); }
+.act-icon.membrane { background:rgba(196,151,90,0.15); color:var(--bridge); }
+.act-text { flex:1; } .act-text strong { color:var(--text); font-weight:500; }
+.act-detail { font-size:10px; color:var(--text3); white-space:nowrap; }
+
+/* Confirmation card */
+.confirm { display:flex; align-items:center; gap:10px; padding:9px 14px; margin:6px 0; border-radius:var(--rs); background:var(--accent-dim); border:1px solid var(--accent-border); }
+.conf-icon { width:28px; height:28px; border-radius:50%; background:rgba(192,132,252,0.1); border:1px solid var(--accent-border); display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--accent); flex-shrink:0; }
+.conf-body { flex:1; }
+.conf-q { font-size:12px; line-height:1.4; } .conf-q strong { color:var(--accent); }
+.conf-sub { font-size:10px; color:var(--text3); margin-top:2px; }
+.conf-actions { display:flex; gap:6px; flex-shrink:0; }
+.confirm button { padding:5px 14px; border-radius:6px; font:11px/1 var(--font); font-weight:500; cursor:pointer; border:1px solid; background:transparent; transition:all .15s; }
+.btn-yes { border-color:rgba(52,211,153,0.35); color:var(--emerald); } .btn-yes:hover { background:rgba(52,211,153,0.1); }
+.btn-no { border-color:rgba(248,113,113,0.35); color:var(--red); } .btn-no:hover { background:rgba(248,113,113,0.1); }
+.btn-later { border-color:var(--border); color:var(--text3); } .btn-later:hover { background:var(--surface); }
+.confirm-resolved { font-size:11px; padding:4px 12px; margin:4px 0; color:var(--text3); }
+
+/* Attention / Thread / Quest cards */
+.attention { display:flex; align-items:center; gap:10px; padding:8px 14px; margin:4px 0; border-radius:var(--rs); background:rgba(91,143,168,0.08); border:1px solid rgba(91,143,168,0.15); }
+.attention .att-text { flex:1; font-size:12px; color:var(--text2); } .attention .att-text strong { color:var(--text); font-weight:500; }
+.attention button { padding:4px 12px; border-radius:6px; font:11px var(--font); cursor:pointer; border:1px solid rgba(91,143,168,0.3); background:transparent; color:var(--personal); transition:all .15s; }
+.attention button:hover { background:rgba(91,143,168,0.1); }
+
+.thread-card { display:flex; align-items:center; gap:10px; padding:8px 14px; margin:6px 0; border-radius:var(--rs); background:rgba(122,158,109,0.06); border:1px solid rgba(122,158,109,0.12); cursor:pointer; transition:all .15s; }
+.thread-card:hover { border-color:rgba(122,158,109,0.25); }
+.thr-icon { width:20px; height:20px; border-radius:50%; background:rgba(122,158,109,0.15); display:flex; align-items:center; justify-content:center; font-size:10px; color:var(--project); }
+.thr-body { flex:1; } .thr-title { font-size:12px; font-weight:500; } .thr-sub { font-size:10px; color:var(--text3); }
+.thr-status { font-size:10px; padding:2px 8px; border-radius:4px; background:rgba(122,158,109,0.12); color:var(--project); }
+
+/* ── T-bar (Knowledge trigger) ── */
+.tbar { padding:0 20px; flex-shrink:0; }
+.tbar-inner { display:flex; align-items:center; gap:6px; padding:6px 0; cursor:pointer; transition:all .2s; border-top:1px solid var(--border); }
+.tbar-inner:hover { border-top-color:var(--guard); }
+.tbar-inner.open { border-top-color:var(--guard); }
+.tbar-line { flex:1; height:2px; border-radius:1px; background:linear-gradient(90deg, var(--personal) 0%, var(--project) 40%, var(--bridge) 70%, var(--accent) 100%); opacity:0.25; transition:opacity .2s; }
+.tbar-inner:hover .tbar-line { opacity:0.5; }
+.tbar-inner.open .tbar-line { opacity:0.6; }
+.tbar-label { font-size:9px; color:var(--text3); letter-spacing:1px; font-weight:500; transition:color .2s; white-space:nowrap; }
+.tbar-inner:hover .tbar-label { color:var(--guard); }
+.tbar-inner.open .tbar-label { color:var(--guard); }
+.tbar-count { font-size:9px; color:var(--text3); background:var(--surface); padding:1px 6px; border-radius:4px; }
+.tbar-arrow { font-size:10px; color:var(--text3); transition:transform .2s; }
+.tbar-inner.open .tbar-arrow { transform:rotate(180deg); }
+
+/* ── Input bar ── */
+.input-bar { padding:8px 20px 12px; display:flex; gap:10px; flex-shrink:0; }
+.input-bar input { flex:1; background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:10px 14px; font:13px var(--font); color:var(--text); outline:none; transition:border-color .15s; }
+.input-bar input:focus { border-color:var(--accent-border); }
+.input-bar .mic { width:40px; height:40px; border-radius:var(--rs); border:1px solid var(--border); background:transparent; color:var(--text3); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:14px; }
+.input-bar .mic:hover { border-color:var(--accent-border); color:var(--accent); }
+.input-bar .send { padding:10px 20px; border-radius:var(--r); background:var(--accent-dim); border:1px solid var(--accent-border); color:var(--accent); font:13px var(--font); font-weight:500; cursor:pointer; }
+.input-bar .send:hover { background:rgba(192,132,252,0.25); }
+
+/* ═══════════════════════════════════════════════════════════ */
+/* GUARDIAN LUNA PANEL                                         */
+/* ═══════════════════════════════════════════════════════════ */
+.guard-header { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; flex-shrink:0; background:var(--bg2); }
+.guard-orb { width:10px; height:10px; border-radius:50%; background:var(--guard); box-shadow:0 0 8px rgba(196,151,90,0.4); }
+.guard-header h3 { font-size:13px; font-weight:500; color:var(--guard); }
+.guard-header .guard-mode { font-size:9px; color:var(--text3); background:var(--surface); padding:2px 8px; border-radius:4px; margin-left:auto; letter-spacing:0.5px; }
+.guard-close { background:transparent; border:none; color:var(--text3); cursor:pointer; font-size:14px; padding:4px; }
+.guard-close:hover { color:var(--text); }
+
+.guard-messages { flex:1; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:6px; }
+.guard-messages::-webkit-scrollbar { width:3px; } .guard-messages::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
+
+.g-msg { max-width:95%; animation:fadeIn .25s ease; }
+.g-msg.system { align-self:flex-start; }
+.g-msg.user { align-self:flex-end; }
+.g-msg .g-bubble { padding:10px 12px; font-size:12px; line-height:1.5; border-radius:var(--rs); }
+.g-msg.system .g-bubble { background:var(--guard-dim); border:1px solid var(--guard-border); border-left:2.5px solid var(--guard); color:var(--text); }
+.g-msg.user .g-bubble { background:var(--surface); border:1px solid var(--border); }
+
+/* Source chips in guardian messages */
+.g-sources { margin-top:8px; padding-top:8px; border-top:1px solid rgba(196,151,90,0.1); }
+.g-sources-label { font-size:9px; color:var(--text3); letter-spacing:1px; text-transform:uppercase; margin-bottom:6px; }
+.g-source { display:inline-flex; align-items:center; gap:4px; font-size:10px; padding:3px 8px; border-radius:4px; margin:2px; cursor:pointer; transition:all .15s; }
+.g-source:hover { filter:brightness(1.2); }
+.g-source.memory { background:rgba(192,132,252,0.1); color:var(--accent); border:1px solid rgba(192,132,252,0.15); }
+.g-source.config { background:rgba(122,158,109,0.1); color:var(--project); border:1px solid rgba(122,158,109,0.12); }
+.g-source.metric { background:rgba(91,143,168,0.1); color:var(--personal); border:1px solid rgba(91,143,168,0.12); }
+.g-source-dot { width:4px; height:4px; border-radius:50%; }
+.g-source.memory .g-source-dot { background:var(--accent); }
+.g-source.config .g-source-dot { background:var(--project); }
+.g-source.metric .g-source-dot { background:var(--personal); }
+
+/* Action cards in guardian */
+.g-action { padding:10px 12px; margin:6px 0; border-radius:var(--rs); border:1px solid var(--guard-border); background:rgba(196,151,90,0.04); }
+.g-action-title { font-size:11px; font-weight:500; color:var(--guard); margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+.g-action-body { font-size:11px; color:var(--text2); line-height:1.5; }
+.g-action code { font-family:var(--mono); font-size:10px; background:var(--surface); padding:1px 4px; border-radius:3px; color:var(--text); }
+.g-action-buttons { display:flex; gap:6px; margin-top:8px; }
+.g-action-buttons button { padding:4px 12px; border-radius:4px; font:10px var(--font); font-weight:500; cursor:pointer; border:1px solid; background:transparent; transition:all .15s; }
+.g-action-buttons .approve { border-color:rgba(52,211,153,0.35); color:var(--emerald); }
+.g-action-buttons .approve:hover { background:rgba(52,211,153,0.1); }
+.g-action-buttons .dismiss { border-color:var(--border); color:var(--text3); }
+
+/* Guardian stats bar */
+.g-stats { padding:10px 16px; border-top:1px solid var(--border); background:var(--bg2); display:flex; gap:12px; flex-shrink:0; }
+.g-stat { text-align:center; flex:1; }
+.g-stat .num { font-size:14px; font-weight:500; color:var(--text); }
+.g-stat .lbl { font-size:9px; color:var(--text3); text-transform:uppercase; letter-spacing:0.5px; }
+
+/* Guardian input */
+.guard-input { padding:10px 16px; border-top:1px solid var(--border); display:flex; gap:8px; flex-shrink:0; background:var(--bg2); }
+.guard-input input { flex:1; background:var(--surface); border:1px solid var(--border); border-radius:var(--rs); padding:8px 12px; font:12px var(--font); color:var(--text); outline:none; }
+.guard-input input:focus { border-color:var(--guard-border); }
+.guard-input input::placeholder { color:var(--text3); }
+.guard-input button { padding:8px 14px; border-radius:var(--rs); background:var(--guard-dim); border:1px solid var(--guard-border); color:var(--guard); font:12px var(--font); font-weight:500; cursor:pointer; }
+</style>
+</head>
+<body>
+
+<!-- Dock -->
+<div class="dock">
+  <div class="dock-btn on" title="Engine">E</div>
+  <div class="dock-btn" title="Memory"><div class="dot" style="background:var(--emerald)"></div>M</div>
+  <div class="dock-btn" title="Voice">V</div>
+  <div class="dock-btn" title="QA">Q</div>
+  <div class="dock-sep"></div>
+  <div class="dock-btn" title="Prompt">P</div>
+  <div class="dock-btn" title="Debug">D</div>
+</div>
+
+<div class="layout">
+
+<!-- ═══ MAIN CHAT COLUMN ═══ -->
+<div class="chat-col">
+  <div class="header">
+    <div class="orb"></div>
+    <h2>Chat</h2>
+    <span class="project-tag">Luna Engine</span>
+    <div class="scrubber">
+      <div class="scrub-seg" style="width:14px;background:var(--text3);opacity:0.4" title="Oct"></div>
+      <div class="scrub-seg" style="width:20px;background:var(--personal);opacity:0.4" title="Nov"></div>
+      <div class="scrub-seg" style="width:28px;background:var(--project);opacity:0.4" title="Dec"></div>
+      <div class="scrub-seg" style="width:36px;background:var(--project);opacity:0.4" title="Jan"></div>
+      <div class="scrub-seg" style="width:44px;background:var(--mixed);opacity:0.4" title="Feb"></div>
+      <div class="scrub-seg on" style="width:32px;background:var(--bridge);opacity:1" title="Mar"></div>
+      <span class="scrub-label">Mar 2026</span>
+    </div>
+  </div>
+
+  <div class="ctx-strip">
+    <span class="ctx-tag project">project</span>
+    <span class="ctx-sep"></span>
+    <span class="ctx-tag entity">Luna Engine</span>
+    <span class="ctx-tag entity">Observatory</span>
+    <span class="ctx-sep"></span>
+    <span class="ctx-tag neutral">session 42m</span>
+  </div>
+
+  <div class="messages" id="msgs"></div>
+
+  <!-- T-bar: knowledge trigger -->
+  <div class="tbar">
+    <div class="tbar-inner" id="tbar" onclick="toggleGuardian()">
+      <div class="tbar-line"></div>
+      <span class="tbar-label">GUARDIAN LUNA</span>
+      <span class="tbar-count">3 extractions</span>
+      <span class="tbar-arrow">&#9662;</span>
+    </div>
+  </div>
+
+  <div class="input-bar">
+    <input placeholder="Message Luna... (type / for commands)" id="chatInput" onkeydown="if(event.key==='Enter'){sendMain();event.preventDefault()}">
+    <button class="mic">M</button>
+    <button class="send" onclick="sendMain()">Send</button>
+  </div>
+</div>
+
+<!-- ═══ GUARDIAN LUNA PANEL ═══ -->
+<div class="guard-col" id="guardPanel">
+  <div class="guard-header">
+    <div class="guard-orb"></div>
+    <h3>Guardian Luna</h3>
+    <span class="guard-mode">OPERATIONAL</span>
+    <button class="guard-close" onclick="toggleGuardian()">&times;</button>
+  </div>
+
+  <div class="guard-messages" id="gmsgs"></div>
+
+  <div class="g-stats">
+    <div class="g-stat"><div class="num">25K</div><div class="lbl">Nodes</div></div>
+    <div class="g-stat"><div class="num">115</div><div class="lbl">Entities</div></div>
+    <div class="g-stat"><div class="num">26K</div><div class="lbl">Edges</div></div>
+    <div class="g-stat"><div class="num">0.42</div><div class="lbl">Avg L.I.</div></div>
+  </div>
+
+  <div class="guard-input">
+    <input placeholder="Ask Guardian Luna..." id="guardInput" onkeydown="if(event.key==='Enter'){sendGuard();event.preventDefault()}">
+    <button onclick="sendGuard()">Send</button>
+  </div>
+</div>
+
+</div><!-- /layout -->
+
+<script>
+const msgs = document.getElementById('msgs');
+const gmsgs = document.getElementById('gmsgs');
+
+// ── Toggle Guardian Panel ──
+function toggleGuardian() {
+  const panel = document.getElementById('guardPanel');
+  const tbar = document.getElementById('tbar');
+  panel.classList.toggle('open');
+  tbar.classList.toggle('open');
+}
+
+// ── Main Chat Data ──
+const CONVO = [
+  { type:'date', text:'Monday, March 17' },
+  { type:'msg', role:'user', text:'hey Luna, can you look at the Observatory? It shows no data in builds.' },
+  { type:'msg', role:'luna', state:'project', text:'The <span class="entity-hl">Observatory</span> frontend hits /observatory/api/* but those routes don\'t exist on the engine. The old separate server at :8100 was never merged.', classification:'EXPANSION', route:'local', latency:'340', tokens:'142', knowledge:{ type:'FACT', content:'Observatory routes not merged', color:'var(--personal)' } },
+  { type:'activity', icon:'fact', text:'Extracted: <strong>Observatory routes not merged</strong>', detail:'FACT' },
+  { type:'msg', role:'user', text:'what about entity detection?' },
+  { type:'msg', role:'luna', state:'project', text:'Two paths: the <span class="entity-hl">Scribe</span>\'s LLM extraction creates entities, and the entity resolver\'s detect_mentions finds existing ones. Five creation gates: stoplist, min length, capitalization, single word, tech identifier.', classification:'RESONANCE', route:'local', latency:'520', tokens:'186', knowledge:{ type:'FACT', content:'Entity detection dual pipeline', color:'var(--personal)' } },
+  { type:'activity', icon:'fact', text:'Extracted: <strong>Entity detection dual pipeline</strong>', detail:'FACT' },
+  { type:'activity', icon:'edge', text:'Edge: <strong>Scribe</strong> \u2192 Entity Resolver', detail:'DEPENDS_ON' },
+  { type:'msg', role:'user', text:'Corey Smith is going to help with fabrication in LA' },
+  { type:'confirm', name:'Corey Smith', entityType:'person', sub:'Not in memory. Mentioned with fabrication context.' },
+  { type:'msg', role:'luna', state:'bridge', text:'Got it. I\'ll track <span class="entity-hl">Corey</span> as a collaborator. Fabrication in LA \u2014 is this for the <span class="entity-hl">Bombay Beach Biennale</span> arcade cabinet?', classification:'RESONANCE', route:'delegated', latency:'890', tokens:'64', knowledge:{ type:'FACT', content:'Corey Smith: fabrication, LA', color:'var(--bridge)' }, membrane:true },
+  { type:'activity', icon:'entity', text:'Entity created: <strong>Corey Smith</strong> (person)', detail:'pending' },
+  { type:'activity', icon:'membrane', text:'Membrane: personal \u2192 project', detail:'bridge' },
+  { type:'attention', text:'<strong>Fabrication</strong> mentioned 3 times this week. Track as a thread?' },
+  { type:'msg', role:'user', text:'yeah the arcade cabinet. also how is voice coming along?' },
+  { type:'msg', role:'luna', state:'project', text:'The prosody gap is still P0 \u2014 <span class="entity-hl">ProsodyMapper</span> computes rate/pitch correctly but VoiceBackend never passes those params to tts.synthesize(). Luna\'s emotional state doesn\'t reach her voice yet.', classification:'EXPANSION', route:'cloud', latency:'1200', tokens:'124', knowledge:{ type:'PROBLEM', content:'Prosody gap: emotions don\'t reach TTS', color:'var(--red)' } },
+  { type:'thread', title:'Fabrication pipeline', sub:'3 mentions, 2 entities, 1 action', status:'active' },
+];
+
+function renderMain() {
+  msgs.innerHTML = '';
+  CONVO.forEach((item, i) => {
+    if (item.type === 'date') {
+      msgs.innerHTML += `<div class="date-div"><div class="line"></div><div class="date">${item.text}</div><div class="line"></div></div>`;
+    }
+    else if (item.type === 'msg') {
+      const isLuna = item.role === 'luna';
+      let badges = '';
+      if (isLuna) {
+        badges = '<div class="badge-row">';
+        if (item.route === 'delegated') badges += '<span class="badge badge-route delegated">\u26A1 delegated</span>';
+        else if (item.route === 'local') badges += '<span class="badge badge-route local">\u25CF local</span>';
+        else if (item.route === 'cloud') badges += '<span class="badge badge-route cloud">\u2601 cloud</span>';
+        if (item.tokens) badges += `<span class="badge badge-tokens">${item.tokens} tok</span>`;
+        if (item.latency) badges += `<span class="badge badge-latency">${item.latency}ms</span>`;
+        if (item.classification) {
+          const cls = item.classification === 'RESONANCE' ? 'badge-resonance' : item.classification === 'DRIFT' ? 'badge-drift' : 'badge-expansion';
+          badges += `<span class="badge ${cls}">${item.classification}</span>`;
+        }
+        badges += '</div>';
+      }
+      let kbar = '';
+      if (isLuna && item.knowledge) {
+        kbar = `<div class="kbar" title="${item.knowledge.content}"><div class="kbar-line" style="background:${item.knowledge.color};opacity:0.25"></div><span class="kbar-pill" style="background:${item.knowledge.color}18;color:${item.knowledge.color}">${item.knowledge.type[0]}</span></div>`;
+      }
+      const kdot = (isLuna && item.knowledge) ? '<span class="k-dot"></span>' : '';
+      const st = isLuna ? ` data-state="${item.state}"` : '';
+      msgs.innerHTML += `<div class="msg ${item.role}"><div class="bubble"${st}>${item.text}${kdot}</div>${badges}</div>${kbar}`;
+    }
+    else if (item.type === 'activity') {
+      msgs.innerHTML += `<div class="activity"><div class="act-icon ${item.icon}">\u25C6</div><span class="act-text">${item.text}</span><span class="act-detail">${item.detail}</span></div>`;
+    }
+    else if (item.type === 'confirm') {
+      msgs.innerHTML += `<div class="confirm" id="conf-${i}"><div class="conf-icon">?</div><div class="conf-body"><div class="conf-q">Is <strong>${item.name}</strong> a new ${item.entityType}?</div><div class="conf-sub">${item.sub}</div></div><div class="conf-actions"><button class="btn-yes" onclick="resolveConf(${i},true)">Yes, track</button><button class="btn-no" onclick="resolveConf(${i},false)">No</button><button class="btn-later" onclick="resolveConf(${i},null)">Later</button></div></div>`;
+    }
+    else if (item.type === 'attention') {
+      msgs.innerHTML += `<div class="attention"><span style="font-size:14px">\u25CE</span><div class="att-text">${item.text}</div><button onclick="this.parentElement.innerHTML='<span style=\\'color:var(--project);font-size:11px;padding:8px\\'>Thread created</span>'">Track</button></div>`;
+    }
+    else if (item.type === 'thread') {
+      msgs.innerHTML += `<div class="thread-card"><div class="thr-icon">\u2261</div><div class="thr-body"><div class="thr-title">${item.title}</div><div class="thr-sub">${item.sub}</div></div><span class="thr-status">${item.status}</span></div>`;
+    }
+  });
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function resolveConf(i, v) {
+  const el = document.getElementById('conf-'+i);
+  if (v === true) el.outerHTML = '<div class="confirm-resolved">\u2713 <strong>Corey Smith</strong> confirmed \u2014 tracking</div>';
+  else if (v === false) el.outerHTML = '<div class="confirm-resolved">\u2717 Dismissed</div>';
+  else el.outerHTML = '<div class="confirm-resolved">\u23F8 Queued for review</div>';
+}
+
+function sendMain() {
+  const input = document.getElementById('chatInput');
+  if (!input.value.trim()) return;
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.innerHTML = `<div class="bubble">${input.value}</div>`;
+  msgs.appendChild(div);
+  input.value = '';
+  msgs.scrollTop = msgs.scrollHeight;
+  setTimeout(() => {
+    const d = document.createElement('div');
+    d.className = 'msg luna';
+    d.innerHTML = '<div class="bubble" data-state="project" style="display:flex;gap:4px;padding:14px"><div style="width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse .8s ease infinite"></div><div style="width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse .8s ease .15s infinite"></div><div style="width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse .8s ease .3s infinite"></div></div>';
+    msgs.appendChild(d);
+    msgs.scrollTop = msgs.scrollHeight;
+  }, 300);
+}
+
+// ── Guardian Luna Data ──
+const GUARD = [
+  { role:'system', html:`
+    <div style="margin-bottom:8px">Session summary for this conversation:</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      <span style="font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(91,143,168,0.12);color:var(--personal)">3 facts extracted</span>
+      <span style="font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(133,183,235,0.1);color:var(--blue)">1 new entity</span>
+      <span style="font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(122,158,109,0.1);color:var(--project)">3 edges created</span>
+      <span style="font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(196,151,90,0.1);color:var(--bridge)">1 membrane event</span>
+    </div>
+    <div style="font-size:11px;color:var(--text2)">The Scribe is performing well this session. Extraction confidence averaging 0.89. One entity pending confirmation (Corey Smith).</div>
+    <div class="g-sources">
+      <div class="g-sources-label">Sources</div>
+      <span class="g-source metric"><span class="g-source-dot"></span>Scribe stats</span>
+      <span class="g-source metric"><span class="g-source-dot"></span>Session metrics</span>
+    </div>
+  ` },
+  { role:'system', html:`
+    <div class="g-action">
+      <div class="g-action-title">\u26A0 Recommendation</div>
+      <div class="g-action-body">
+        The <strong>prosody gap</strong> was flagged as P0 in this conversation. The <code>ProsodyMapper</code> output isn't reaching <code>tts.synthesize()</code>. This is a one-line fix in <code>voice/backend.py</code> \u2014 pass the prosody params through.
+        <br><br>
+        I can write a handoff for Claude Code, or you can tell me to fix it directly.
+      </div>
+      <div class="g-action-buttons">
+        <button class="approve" onclick="this.parentElement.parentElement.innerHTML='<div style=\\'color:var(--emerald);font-size:11px;padding:8px\\'>Handoff queued for Claude Code</div>'">Write handoff</button>
+        <button class="dismiss">Dismiss</button>
+      </div>
+    </div>
+  ` },
+  { role:'system', html:`
+    <div style="margin-bottom:6px">Entity health check:</div>
+    <div style="font-size:11px;color:var(--text2);line-height:1.6">
+      \u2022 <strong>Corey Smith</strong> \u2014 pending confirmation, 0 edges yet<br>
+      \u2022 <strong>Bombay Beach Biennale</strong> \u2014 settled (L.I. 0.71), 8 edges<br>
+      \u2022 <strong>Observatory</strong> \u2014 fluid (L.I. 0.52), heavily discussed today<br>
+      \u2022 <strong>ProsodyMapper</strong> \u2014 drifting (L.I. 0.18), just created
+    </div>
+    <div class="g-sources">
+      <div class="g-sources-label">Sources</div>
+      <span class="g-source memory"><span class="g-source-dot"></span>Memory Matrix</span>
+      <span class="g-source config"><span class="g-source-dot"></span>Entity resolver</span>
+    </div>
+  ` },
+];
+
+function renderGuard() {
+  gmsgs.innerHTML = '';
+  GUARD.forEach(m => {
+    const div = document.createElement('div');
+    div.className = `g-msg ${m.role}`;
+    div.innerHTML = `<div class="g-bubble">${m.html}</div>`;
+    gmsgs.appendChild(div);
+  });
+}
+
+function sendGuard() {
+  const input = document.getElementById('guardInput');
+  if (!input.value.trim()) return;
+  const div = document.createElement('div');
+  div.className = 'g-msg user';
+  div.innerHTML = `<div class="g-bubble">${input.value}</div>`;
+  gmsgs.appendChild(div);
+  input.value = '';
+  gmsgs.scrollTop = gmsgs.scrollHeight;
+  setTimeout(() => {
+    const r = document.createElement('div');
+    r.className = 'g-msg system';
+    r.innerHTML = `<div class="g-bubble">Analyzing... I'll look into that and report back with sources.<div class="g-sources" style="margin-top:8px"><div class="g-sources-label">Checking</div><span class="g-source metric"><span class="g-source-dot"></span>Pipeline state</span><span class="g-source memory"><span class="g-source-dot"></span>Memory Matrix</span></div></div>`;
+    gmsgs.appendChild(r);
+    gmsgs.scrollTop = gmsgs.scrollHeight;
+  }, 500);
+}
+
+renderMain();
+renderGuard();
+</script>
+</body>
+</html>

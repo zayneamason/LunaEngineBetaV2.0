@@ -1,0 +1,226 @@
+# config/projects/kinoni-ict-hub.yaml
+# ====================================
+# Search chain + Study Context for the Guardian Kinoni project.
+# When this project is active, Luna loads the study_context into her
+# system prompt BEFORE any retrieval happens. This gives her the
+# complete picture upfront — she reasons from knowledge, not fragments.
+#
+# The study_context is the "briefing packet" — what Luna would know
+# if she sat down and read all the source documents cover to cover.
+# It gets updated as the project progresses.
+#
+# Total study_context target: ~4000 tokens (~16K chars)
+# Combined with search chain results: ~9000 tokens of project context
+
+# ── Search Chain (existing, unchanged) ──────────────────────────────
+search_chain:
+  max_total_tokens: 5000
+  sources:
+    - type: matrix
+      max_tokens: 2500
+    - type: aibrarian
+      collection: kinoni_knowledge
+      max_tokens: 2000
+      limit: 5
+
+# ── Study Context ───────────────────────────────────────────────────
+# Pre-loaded into system prompt when project is active.
+# Luna reads this BEFORE she searches. It's her working knowledge.
+# Updated by the team as the project progresses.
+#
+# Format: structured YAML that gets rendered into natural prose
+# for the system prompt. Not raw text — structured so sections
+# can be enabled/disabled and updated independently.
+
+study_context:
+  version: "2026-03-07"        # Update this when content changes
+  token_budget: 4000           # Max tokens for study context injection
+  enabled: true                # Toggle study context on/off
+
+  # ── Project Overview ──────────────────────────────────────────────
+  project:
+    name: "Nakaseke Restoration Collective"
+    location: "Nakaseke District, Uganda"
+    partner: "Rotary Club of Kinoni"
+    scope: "Spring restoration, water infrastructure, indigenous knowledge preservation"
+    status: "Active — field work in progress, Rotary Global Grant v3 submitted"
+    demo: "ROSA Energy Conference, March 2026 — Ancestral Wisdom & Technology Virtual Track"
+
+  # ── People ────────────────────────────────────────────────────────
+  # Luna should know these people as well as a team member would.
+  # Each entry becomes part of her working knowledge.
+  people:
+
+    amara_kabejja:
+      role: "Youth Environmental Leader, Community Research Lead"
+      age: 22
+      clan: "Nkima (Baganda)"
+      summary: |
+        Appointed youth leader October 2025, succeeding Tendo Mukasa.
+        GPS-surveyed 3 springs in Lwengo area (Nakayima, Kabaka, River Road SE).
+        Led water quality testing coordination with NWSC.
+        Formally credited as Community Research Lead — Water Quality Assessment
+        in the Rotary grant acknowledgments (December 2025).
+        Recognized by Council Decision #19 for community engagement work.
+        Featured in Rotary Club of Kinoni newsletter for International Women's Day.
+      household:
+        - "Grace — mother, sells tomatoes and onions at Kinoni market, watches Tendo"
+        - "Tendo — son, age 2, named after grandfather"
+        - "David Ssemakula — fiancé, mechanic, saving for April wedding"
+        - "Florence Namusoke — aunt, bridge to Elder Musoke, knowledge broker"
+      key_relationships:
+        - "Elder Musoke — mentorship, traditional knowledge transfer"
+        - "Wasswa — youth crew co-leadership, treasurer partnership"
+        - "Prossy — field work partner, spring verification"
+        - "John — youth crew member, GPS survey team"
+      arc: |
+        Spring discovery → GPS surveys → water quality testing →
+        community presentations → grant co-authorship → ROSA panel preparation.
+        The contamination insight: not a source problem but an infrastructure gap —
+        the "last 10 meters" problem. Recognized early that approaching Wasswa's
+        land spring needed relational work, not just procedural steps.
+
+    elder_musoke:
+      role: "Council Elder — Governance & Conflict Resolution"
+      age: "Late 60s"
+      clan: "Baganda clan elder"
+      summary: |
+        Primary authority on governance protocols and conflict resolution.
+        Developed and teaches the Three Hearings principle.
+        Drew the original hand map identifying 5 historical springs in
+        the Nakazadde area (October 15, 2025). Three assessed as possibly active.
+        Prefers face-to-face meetings (confirmed by Florence Namusoke).
+        Sharp memory. Uses Guardian deliberately, not casually.
+        Aware that his knowledge needs to be recorded.
+      key_knowledge:
+        - "Three Hearings principle — governance protocol"
+        - "Hand-drawn spring map — 5 historical sites"
+        - "Olukomera — traditional water stewardship protocols"
+        - "Upstream-downstream agreements between clans"
+
+    wasswa:
+      role: "Community Treasurer"
+      summary: |
+        Manages project finances. Family land contains one of the mapped springs.
+        Committed at youth crew meeting to personally take the group to the
+        family land spring site. Budget oversight for Rotary grant.
+        Key partner for Amara in youth crew leadership.
+
+    jjajja_nakato:
+      role: "Senior Elder, Oral Historian"
+      summary: |
+        Community's most respected elder. Keeper of intergenerational
+        agricultural knowledge and stewardship philosophy. Her grandmother's
+        teachings are frequently referenced in council deliberations.
+        Grounds governance decisions in historical precedent and storytelling.
+
+    florence_namusoke:
+      role: "Community Connector"
+      summary: |
+        Amara's aunt. Bridge between Amara and Elder Musoke.
+        Knowledge broker — casually drops "upstream-downstream agreements
+        between clans" and shifts Amara's understanding of water governance.
+        Gathering point for community information flows.
+
+    hai_dai:
+      role: "Jero Wiku — Spiritual & Strategic Leadership"
+      summary: |
+        Center of the Project Eclipse network. Conducts elder governance
+        reviews. Compass for alignment when things get murky.
+        Will narrate the ROSA demo. Wants to hear Luna demonstrate
+        knowledge of the Kinoni community's work.
+
+  # ── Springs ───────────────────────────────────────────────────────
+  # The physical geography Luna needs to know
+  springs:
+    surveyed:
+      - name: "Spring 1 — River Road SE"
+        gps: "0.2847°S, 31.7312°E"
+        status: "Active — steady flow, old pipe fragments, overgrown catchment"
+        surveyed_by: "Amara, Prossy, John"
+        date: "2025-11-05"
+
+      - name: "Spring 2 — Kabaka"
+        gps: "0.2831°S, 31.7298°E"
+        status: "Active — seasonal variation, banana plantation seepage concern"
+        surveyed_by: "Amara, Prossy, John"
+        date: "2025-11-06"
+
+      - name: "Spring 3 — Nakayima"
+        gps: "0.2788°S, 31.7341°E"
+        status: "Active — strong flow from rock face into natural pool"
+        surveyed_by: "Amara, Prossy, John"
+        date: "2025-11-07"
+        cultural_note: "Council formally recognized as Olukomera site (January 2026)"
+
+    pending:
+      - "Nakaseke road spring — field verified Oct 21 (active), full GPS survey pending"
+      - "Wasswa's family land spring — access requires relational groundwork"
+
+  # ── Governance ────────────────────────────────────────────────────
+  governance:
+    council_decisions:
+      - id: "Decision #19"
+        date: "2026-01-15"
+        summary: "Formal recognition of youth crew contributions. Amara credited for community engagement."
+      - id: "Grant strategy"
+        summary: "TK labels adopted for traditional knowledge protection. Succession planning initiated."
+
+    protocols:
+      - "Olukomera — traditional water stewardship, community-based spring management"
+      - "Three Hearings — Elder Musoke's conflict resolution framework"
+      - "TK Labels — Traditional Knowledge labeling for data sovereignty"
+      - "Consent protocols — documented in membrane/consent_events.json"
+
+  # ── Grant ─────────────────────────────────────────────────────────
+  grant:
+    type: "Rotary Foundation Global Grant"
+    amount: "$22,000"
+    previous_amount: "$16,680"  # superseded, not contradicted
+    status: "Submitted — v3 includes water quality testing data"
+    key_milestones:
+      - "December 2025: Wasswa caught draft corrections, grant amount updated"
+      - "December 2025: Amara credited as contributor (Community Research Lead)"
+      - "December 31, 2025: LOI signed between Rotary and Continental Council"
+      - "Pending: Water quality testing data integration"
+
+  # ── Active Work ───────────────────────────────────────────────────
+  # What's happening RIGHT NOW — updated frequently
+  active_work:
+    field:
+      - "Field verification on remaining mapped springs"
+      - "Water quality testing — coordinate with NWSC or district water office"
+      - "Wasswa leading site visit to family land spring"
+    grant:
+      - "Rotary grant v3 — water quality testing data integration"
+      - "LOI signed Dec 31, 2025 — institutional integration active"
+    demo:
+      - "ROSA Conference — March 2026"
+      - "Hai Dai narrates, Tarcila drives interface, Ahab runs engine"
+      - "Luna demonstrates knowledge of Kinoni community work"
+
+  # ── Narrative Arc ─────────────────────────────────────────────────
+  # The story Luna should be able to tell coherently
+  narrative: |
+    The Nakaseke Restoration Collective started with Elder Musoke's hand-drawn
+    map of 5 historical springs. Amara Kabejja, a 22-year-old youth leader,
+    took that map and turned it into systematic field work — GPS surveys,
+    water quality assessments, community presentations. She discovered that
+    contamination isn't usually a source problem but an infrastructure gap
+    (the "last 10 meters" problem).
+
+    The work grew from one person's field verification into a community-wide
+    initiative with formal governance recognition (Council Decision #19),
+    international funding (Rotary Global Grant at $22,000), and integration
+    of traditional water stewardship protocols (Olukomera) with modern
+    environmental science.
+
+    Florence Namusoke — Amara's aunt — became an unexpected knowledge broker,
+    bridging Elder Musoke's traditional governance wisdom with the youth
+    crew's field operations. The upstream-downstream agreements between clans
+    that Florence mentioned casually reshaped how Amara understood the
+    political landscape of water governance.
+
+    The project is now preparing for the ROSA Energy Conference, where Luna
+    will demonstrate to Hai Dai and the broader community that sovereign AI
+    can serve indigenous knowledge preservation — not extract from it.

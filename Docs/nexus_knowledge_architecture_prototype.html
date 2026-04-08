@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Knowledge Architecture Prototype</title>
+<style>
+  :root {
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #f5f4f0;
+    --color-background-tertiary: #eae8e3;
+    --color-background-info: #E6F1FB;
+    --color-background-danger: #FCEBEB;
+    --color-background-success: #EAF3DE;
+    --color-background-warning: #FAEEDA;
+    --color-text-primary: #1a1a1a;
+    --color-text-secondary: #6b6b6b;
+    --color-text-tertiary: #9a9a9a;
+    --color-text-info: #185FA5;
+    --color-text-danger: #A32D2D;
+    --color-text-success: #3B6D11;
+    --color-text-warning: #854F0B;
+    --color-border-tertiary: rgba(0,0,0,0.12);
+    --color-border-secondary: rgba(0,0,0,0.25);
+    --color-border-primary: rgba(0,0,0,0.4);
+    --color-border-info: #85B7EB;
+    --color-border-danger: #F09595;
+    --color-border-success: #97C459;
+    --color-border-warning: #EF9F27;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', monospace;
+    --font-serif: Georgia, 'Times New Roman', serif;
+    --border-radius-md: 8px;
+    --border-radius-lg: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-background-primary: #1a1a1a;
+      --color-background-secondary: #2a2a28;
+      --color-background-tertiary: #333331;
+      --color-background-info: #042C53;
+      --color-background-danger: #501313;
+      --color-background-success: #173404;
+      --color-background-warning: #412402;
+      --color-text-primary: #e8e6e0;
+      --color-text-secondary: #a0a098;
+      --color-text-tertiary: #73726c;
+      --color-text-info: #85B7EB;
+      --color-text-danger: #F09595;
+      --color-text-success: #C0DD97;
+      --color-text-warning: #FAC775;
+      --color-border-tertiary: rgba(255,255,255,0.12);
+      --color-border-secondary: rgba(255,255,255,0.25);
+      --color-border-primary: rgba(255,255,255,0.4);
+      --color-border-info: #378ADD;
+      --color-border-danger: #E24B4A;
+      --color-border-success: #639922;
+      --color-border-warning: #BA7517;
+    }
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: var(--font-sans); background: var(--color-background-tertiary); color: var(--color-text-primary); padding: 24px; line-height: 1.5; }
+  h1 { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
+  .subtitle { font-size: 14px; color: var(--color-text-secondary); margin-bottom: 24px; }
+  .nav { display:flex; gap:2px; margin-bottom:20px; overflow-x:auto; }
+  .nav-btn { padding:8px 14px; font-size:12px; font-weight:500; border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-md); background:var(--color-background-secondary); color:var(--color-text-secondary); cursor:pointer; white-space:nowrap; transition:all 0.15s; }
+  .nav-btn:hover { border-color:var(--color-border-secondary); }
+  .nav-btn.active { background:var(--color-background-primary); color:var(--color-text-primary); border-color:var(--color-border-primary); }
+  .panel { display:none; }
+  .panel.active { display:block; }
+  .chunk { border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-lg); padding:14px 16px; margin-bottom:8px; cursor:pointer; transition:border-color 0.15s; background:var(--color-background-primary); }
+  .chunk:hover { border-color:var(--color-border-secondary); }
+  .chunk.selected { border-color:var(--color-border-info); border-width:1.5px; }
+  .chunk-id { font-family:var(--font-mono); font-size:11px; color:var(--color-text-tertiary); margin-bottom:2px; }
+  .chunk-title { font-size:14px; font-weight:500; color:var(--color-text-primary); margin-bottom:3px; }
+  .chunk-desc { font-size:12px; color:var(--color-text-secondary); line-height:1.5; }
+  .chunk-meta { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .tag { font-size:11px; padding:2px 8px; border-radius:4px; }
+  .tag-claim { background:var(--color-background-info); color:var(--color-text-info); }
+  .tag-entity { background:var(--color-background-success); color:var(--color-text-success); }
+  .tag-theme { background:var(--color-background-warning); color:var(--color-text-warning); }
+  .tag-parallel { background:#EEEDFE; color:#534AB7; }
+  .tag-method { background:var(--color-background-secondary); color:var(--color-text-secondary); }
+  .tag-section { background:var(--color-background-secondary); color:var(--color-text-secondary); }
+  .extraction { border-left:3px solid var(--color-border-tertiary); padding:8px 12px; margin-bottom:6px; border-radius:0; font-size:13px; line-height:1.6; color:var(--color-text-secondary); }
+  .extraction .ex-type { font-family:var(--font-mono); font-size:10px; font-weight:500; margin-bottom:3px; }
+  .extraction .ex-id { font-family:var(--font-mono); font-size:10px; color:var(--color-text-tertiary); float:right; }
+  .ex-claim { border-left-color:var(--color-border-info); }
+  .ex-claim .ex-type { color:var(--color-text-info); }
+  .ex-entity { border-left-color:var(--color-border-success); }
+  .ex-entity .ex-type { color:var(--color-text-success); }
+  .ex-theme { border-left-color:var(--color-border-warning); }
+  .ex-theme .ex-type { color:var(--color-text-warning); }
+  .ex-parallel { border-left-color:#534AB7; }
+  .ex-parallel .ex-type { color:#534AB7; }
+  .ex-method { border-left-color:var(--color-border-secondary); }
+  .ex-method .ex-type { color:var(--color-text-secondary); }
+  .detail-box { background:var(--color-background-secondary); border-radius:var(--border-radius-lg); padding:16px; margin:12px 0; }
+  .detail-label { font-size:11px; font-weight:500; color:var(--color-text-tertiary); letter-spacing:0.3px; margin-bottom:6px; text-transform:uppercase; }
+  .quote-block { font-family:var(--font-serif); font-size:13px; color:var(--color-text-secondary); line-height:1.7; font-style:italic; padding:8px 0; }
+  .graph-node { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; border-radius:20px; font-size:12px; margin:3px; cursor:pointer; transition:all 0.15s; }
+  .graph-node:hover { opacity:0.8; }
+  .gn-entity { background:var(--color-background-success); color:var(--color-text-success); border:0.5px solid var(--color-border-success); }
+  .gn-theme { background:var(--color-background-warning); color:var(--color-text-warning); border:0.5px solid var(--color-border-warning); }
+  .gn-memory { background:var(--color-background-info); color:var(--color-text-info); border:0.5px solid var(--color-border-info); }
+  .gn-project { background:#EEEDFE; color:#534AB7; border:0.5px solid #AFA9EC; }
+  .edge { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--color-text-tertiary); padding:4px 0; }
+  .edge-line { flex:1; height:0.5px; background:var(--color-border-secondary); }
+  .edge-label { font-family:var(--font-mono); font-size:10px; white-space:nowrap; }
+  .cite-path { background:var(--color-background-primary); border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-lg); padding:14px 16px; margin-bottom:8px; }
+  .cite-step { display:flex; gap:10px; align-items:flex-start; margin-bottom:10px; }
+  .cite-num { font-family:var(--font-mono); font-size:11px; color:var(--color-text-tertiary); min-width:20px; padding-top:2px; }
+  .cite-content { font-size:13px; color:var(--color-text-secondary); line-height:1.5; }
+  .cite-content code { font-family:var(--font-mono); font-size:11px; background:var(--color-background-secondary); padding:1px 5px; border-radius:3px; }
+  .arrow-down { text-align:center; color:var(--color-text-tertiary); font-size:12px; padding:2px 0; }
+  .section-label { font-size:11px; font-weight:500; color:var(--color-text-tertiary); letter-spacing:0.5px; text-transform:uppercase; margin:16px 0 8px; }
+  .response-mock { background:var(--color-background-primary); border:0.5px solid var(--color-border-tertiary); border-radius:var(--border-radius-lg); padding:16px; margin-top:12px; }
+  .response-mock .rm-label { font-size:11px; font-weight:500; color:var(--color-text-tertiary); margin-bottom:8px; }
+  .response-mock .rm-text { font-size:13px; color:var(--color-text-primary); line-height:1.7; }
+  .grounded { background:var(--color-background-success); color:var(--color-text-success); font-size:11px; padding:1px 6px; border-radius:3px; }
+  .inferred { background:var(--color-background-warning); color:var(--color-text-warning); font-size:11px; padding:1px 6px; border-radius:3px; }
+  .dim { font-size:12px; color:var(--color-text-tertiary); margin-top:6px; }
+</style>
+</head>
+<body>
+
+<h1>Nexus knowledge architecture prototype</h1>
+<p class="subtitle">How Luna should chunk, extract, index, and cite documents — using Priests and Programmers as the test case</p>
+
+<div class="nav" id="nav"></div>
+<div id="panels"></div>
+
+<script>
+const steps = [
+  { id:'doc', label:'1. Document structure', content: function() {
+    return `
+    <div class="detail-label">How the book decomposes into searchable sections</div>
+    <div class="chunk selected">
+      <div class="chunk-id">DOC: priests-and-programmers</div>
+      <div class="chunk-title">Priests and Programmers: Technologies of Power in the Engineered Landscape of Bali</div>
+      <div class="chunk-desc">J. Stephen Lansing, 2007 edition. Anthropology/ecology. 8 sections detected.</div>
+      <div class="chunk-meta"><span class="tag tag-section">academic monograph</span><span class="tag tag-section">~45,000 words</span></div>
+    </div>
+    <div class="arrow-down">sections detected by structural parser</div>
+    <div class="chunk">
+      <div class="chunk-id">SEC-00</div>
+      <div class="chunk-title">Preface to the 2007 edition</div>
+      <div class="chunk-desc">Lansing's retrospective. Origin story, simulation results, Borneo parallel, Daisyworld, current state.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">11 claims</span><span class="tag tag-entity">9 entities</span><span class="tag tag-theme">4 themes</span><span class="tag tag-parallel">2 parallels</span></div>
+    </div>
+    <div class="chunk">
+      <div class="chunk-id">SEC-01</div>
+      <div class="chunk-title">Introduction: the gods of the countryside</div>
+      <div class="chunk-desc">Discovery of water temple system. Green Revolution context. Ritual technology concept. Hawaiian comparison.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">8 claims</span><span class="tag tag-entity">12 entities</span><span class="tag tag-theme">3 themes</span></div>
+    </div>
+    <div class="chunk" style="opacity:0.5">
+      <div class="chunk-id">SEC-02</div>
+      <div class="chunk-title">Chapter 2: the powers of water</div>
+      <div class="chunk-desc">Content not yet ingested.</div>
+    </div>
+    <div class="chunk" style="opacity:0.5">
+      <div class="chunk-id">SEC-03 ... SEC-07</div>
+      <div class="chunk-title">Chapters 3-7</div>
+      <div class="chunk-desc">Content not yet ingested.</div>
+    </div>
+    <div class="detail-box">
+      <div class="detail-label">Chunking rule</div>
+      <div class="chunk-desc">Sections split at structural markers: chapter headings, ALL-CAPS questions in text, page breaks. Within sections, thematic chunks of 300-800 tokens split at argument boundaries, not arbitrary character counts. Each chunk should be a self-contained idea that answers a question.</div>
+    </div>`;
+  }},
+  { id:'chunks', label:'2. Thematic chunks', content: function() {
+    return `
+    <div class="detail-label">Preface decomposed into argument-level chunks (7 detected)</div>
+    <div class="chunk" onclick="showChunkDetail(this, 0)">
+      <div class="chunk-id">PP-P-001 &middot; ~380 tokens</div>
+      <div class="chunk-title">Origin: how Lansing found the water temples</div>
+      <div class="chunk-desc">Agricultural rituals disrupted by Green Revolution. Temple calendar no longer matched rice growth. Farmers wondered about consequences.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">2</span><span class="tag tag-entity">3</span></div>
+    </div>
+    <div class="chunk" onclick="showChunkDetail(this, 1)">
+      <div class="chunk-id">PP-P-002 &middot; ~520 tokens</div>
+      <div class="chunk-title">The simulation: temple networks as coordination algorithms</div>
+      <div class="chunk-desc">Collaboration with Kremer. Computer model of irrigation at watershed scale. Simulated removal of temples. Results matched actual pest outbreaks.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">4</span><span class="tag tag-entity">3</span><span class="tag tag-method">1</span></div>
+    </div>
+    <div class="chunk" onclick="showChunkDetail(this, 2)">
+      <div class="chunk-id">PP-P-003 &middot; ~280 tokens</div>
+      <div class="chunk-title">Why wasn't the functional role common knowledge?</div>
+      <div class="chunk-desc">The very success of the temple networks made them invisible. Only visible when disrupted.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">2</span><span class="tag tag-theme">1</span></div>
+    </div>
+    <div class="chunk" onclick="showChunkDetail(this, 3)">
+      <div class="chunk-id">PP-P-004 &middot; ~680 tokens</div>
+      <div class="chunk-title">The Borneo parallel: dipterocarp forests and mast fruiting</div>
+      <div class="chunk-desc">Same pattern in Borneo timber industry. Trees used reproductive synchrony for pest control. Logging fragmented forests, synchrony lost, regeneration failed.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">3</span><span class="tag tag-entity">4</span><span class="tag tag-parallel">1</span></div>
+    </div>
+    <div class="chunk" onclick="showChunkDetail(this, 4)">
+      <div class="chunk-id">PP-P-005 &middot; ~600 tokens</div>
+      <div class="chunk-title">Daisyworld: emergence of self-regulating systems</div>
+      <div class="chunk-desc">Lovelock's model. Daisies didn't adapt to the planet's temperature; they adapted the planet. Planners would miss this. Clear-cutting creates irreversible failure.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">2</span><span class="tag tag-entity">2</span><span class="tag tag-parallel">1</span><span class="tag tag-theme">1</span></div>
+    </div>
+    <div class="chunk" onclick="showChunkDetail(this, 5)">
+      <div class="chunk-id">PP-P-006 &middot; ~450 tokens</div>
+      <div class="chunk-title">What's happening now: restoration and the fertilizer problem</div>
+      <div class="chunk-desc">Temple networks restored control. Pesticide use declined. But chemical fertilizer persists, damaging soil and coral reefs. $69.60 of $101 per hectare is wasted.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">3</span><span class="tag tag-entity">3</span></div>
+    </div>
+    <div class="chunk" onclick="showChunkDetail(this, 6)">
+      <div class="chunk-id">PP-P-007 &middot; ~420 tokens</div>
+      <div class="chunk-title">Why haven't we noticed? Metis vs. emergence</div>
+      <div class="chunk-desc">Scott's concept of metis (local, ad hoc knowledge) vs. emergent multi-scale systems. Temples are more than accumulated lore. Pattern recognition requires a learning process.</div>
+      <div class="chunk-meta"><span class="tag tag-claim">2</span><span class="tag tag-entity">3</span><span class="tag tag-theme">2</span></div>
+    </div>
+    <div class="detail-box" id="chunk-detail" style="display:none"></div>
+    <div class="detail-box">
+      <div class="detail-label">Chunking strategy</div>
+      <div class="chunk-desc">Chunks split at argument transitions, not token counts. Each chunk answers "what is this section arguing?" The ALL-CAPS questions in the preface are natural boundaries. Chunk boundaries preserved in metadata so Luna can say "in the section on..." not just "in the document."</div>
+    </div>`;
+  }},
+  { id:'extract', label:'3. Extractions', content: function() {
+    return `
+    <div class="detail-label">What gets extracted from chunk PP-P-002 (the simulation)</div>
+    <div class="detail-box">
+      <div class="detail-label">Source passage (abbreviated)</div>
+      <div class="quote-block">"Together we built a computer simulation model of irrigation at the watershed scale, which enabled us to mimic the patterns of coordination created by networks of water temples... the temple networks sustain good harvests by finding planting schedules that provide enough water for everyone, but also permit pest control by synchronizing fallow periods..."</div>
+    </div>
+    <div class="section-label">Extracted nodes</div>
+    <div class="extraction ex-claim">
+      <div class="ex-id">E-007</div>
+      <div class="ex-type">CLAIM</div>
+      Temple networks sustain harvests by finding planting schedules that balance water sharing with pest control through synchronized fallow periods.
+    </div>
+    <div class="extraction ex-claim">
+      <div class="ex-id">E-008</div>
+      <div class="ex-type">CLAIM</div>
+      The Green Revolution functioned as an unintentional experimental test of water temple networks: remove them from control and observe the consequences.
+    </div>
+    <div class="extraction ex-claim">
+      <div class="ex-id">E-009</div>
+      <div class="ex-type">CLAIM</div>
+      Simulations of temple removal closely matched actual patterns of pest outbreaks and water shortages observed in the field.
+    </div>
+    <div class="extraction ex-claim">
+      <div class="ex-id">E-010</div>
+      <div class="ex-type">CLAIM</div>
+      The very success of the temple networks in balancing needs made them nearly invisible before their disruption.
+    </div>
+    <div class="extraction ex-entity">
+      <div class="ex-id">E-011</div>
+      <div class="ex-type">ENTITY</div>
+      James Kremer &mdash; systems ecologist, collaborator on watershed simulation (1983+)
+    </div>
+    <div class="extraction ex-entity">
+      <div class="ex-id">E-012</div>
+      <div class="ex-type">ENTITY</div>
+      Water temple networks &mdash; distributed coordination system managing irrigation across subaks via ritual scheduling
+    </div>
+    <div class="extraction ex-method">
+      <div class="ex-id">E-013</div>
+      <div class="ex-type">METHOD</div>
+      Computer simulation model of irrigation at watershed scale. Mimics coordination patterns. Can simulate removal of temple control.
+    </div>
+    <div class="extraction ex-theme">
+      <div class="ex-id">E-014</div>
+      <div class="ex-type">THEME</div>
+      Invisible coordination: successful self-organizing systems become invisible because their success removes evidence of their function.
+    </div>
+    <div class="detail-box">
+      <div class="detail-label">Extraction schema</div>
+      <div class="chunk-desc">Each extraction carries: <code>id</code>, <code>type</code> (CLAIM / ENTITY / THEME / PARALLEL / METHOD / FINDING), <code>content</code> (the extracted statement), <code>chunk_id</code> (source chunk), <code>section_id</code> (parent section), <code>doc_id</code> (source document), <code>confidence</code> (extraction quality score). This is what the grounding evaluator needs to see. Currently it only sees Memory Matrix nodes.</div>
+    </div>`;
+  }},
+  { id:'graph', label:'4. Memory graph', content: function() {
+    return `
+    <div class="detail-label">How Nexus extractions connect to the Memory Matrix</div>
+    <div class="section-label">Nexus extraction nodes (from the document)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:12px">
+      <span class="graph-node gn-entity">Water temple networks</span>
+      <span class="graph-node gn-entity">James Kremer</span>
+      <span class="graph-node gn-entity">Green Revolution</span>
+      <span class="graph-node gn-entity">Subak</span>
+      <span class="graph-node gn-entity">Daisyworld</span>
+      <span class="graph-node gn-entity">Dipterocarp forests</span>
+      <span class="graph-node gn-entity">James Scott</span>
+      <span class="graph-node gn-entity">Clifford Geertz</span>
+      <span class="graph-node gn-entity">Condominas</span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:12px">
+      <span class="graph-node gn-theme">Invisible coordination</span>
+      <span class="graph-node gn-theme">Reproductive synchrony</span>
+      <span class="graph-node gn-theme">Emergence from local to global</span>
+      <span class="graph-node gn-theme">Metis vs. systems</span>
+    </div>
+    <div class="section-label">Memory Matrix nodes (from conversations)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:12px">
+      <span class="graph-node gn-memory">Luna design philosophy</span>
+      <span class="graph-node gn-memory">Sovereignty principle</span>
+      <span class="graph-node gn-memory">Ahab's observation: P&amp;P parallel</span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:2px;margin-bottom:12px">
+      <span class="graph-node gn-project">Project Tapestry</span>
+      <span class="graph-node gn-project">Kinoni ICT Hub</span>
+      <span class="graph-node gn-project">Nakaseke springs</span>
+    </div>
+    <div class="section-label">Edges (connections that should exist)</div>
+    <div class="edge">
+      <span class="graph-node gn-entity" style="font-size:11px">Water temples</span>
+      <span class="edge-line"></span>
+      <span class="edge-label">PARALLEL_TO</span>
+      <span class="edge-line"></span>
+      <span class="graph-node gn-memory" style="font-size:11px">Luna design</span>
+    </div>
+    <div class="dim">User-drawn parallel. "Complex system evolved over centuries, nearly destroyed by overconfident intervention."</div>
+    <div class="edge">
+      <span class="graph-node gn-entity" style="font-size:11px">Green Revolution</span>
+      <span class="edge-line"></span>
+      <span class="edge-label">WARNS_ABOUT</span>
+      <span class="edge-line"></span>
+      <span class="graph-node gn-project" style="font-size:11px">Kinoni ICT Hub</span>
+    </div>
+    <div class="dim">Tapestry context. Don't be the next wave of programmers who think they know better than the priests.</div>
+    <div class="edge">
+      <span class="graph-node gn-theme" style="font-size:11px">Invisible coordination</span>
+      <span class="edge-line"></span>
+      <span class="edge-label">INSTANTIATED_BY</span>
+      <span class="edge-line"></span>
+      <span class="graph-node gn-entity" style="font-size:11px">Dipterocarp forests</span>
+    </div>
+    <div class="dim">Cross-document: same pattern, different substrate. Explicit in Lansing's text.</div>
+    <div class="edge">
+      <span class="graph-node gn-theme" style="font-size:11px">Metis vs. systems</span>
+      <span class="edge-line"></span>
+      <span class="edge-label">CHALLENGES</span>
+      <span class="edge-line"></span>
+      <span class="graph-node gn-memory" style="font-size:11px">Sovereignty</span>
+    </div>
+    <div class="dim">Metis is local and ad hoc. But the temples are emergent and multi-scale. Sovereignty must account for both.</div>
+    <div class="detail-box">
+      <div class="detail-label">The bridge problem (Step 5 handoff)</div>
+      <div class="chunk-desc">Right now these two systems don't talk. Nexus extractions live in the extractions table. Memory Matrix nodes live in the memory DB. There's no edge between them. When Luna gives a grounded answer from the book, nothing persists to conversation memory. Next session, same blind spot. The Nexus-Matrix Bridge (handoff #5) creates these edges.</div>
+    </div>`;
+  }},
+  { id:'cite', label:'5. Citation path', content: function() {
+    return `
+    <div class="detail-label">Query: "What happened when the Green Revolution removed temple control?"</div>
+    <div class="cite-path">
+      <div class="cite-step">
+        <div class="cite-num">1</div>
+        <div class="cite-content">FTS5 search: <code>"Green Revolution" AND "temple"</code> against extractions table</div>
+      </div>
+      <div class="cite-step">
+        <div class="cite-num">2</div>
+        <div class="cite-content">Matches: E-008, E-009, E-010 from chunk <code>PP-P-002</code> (the simulation section)</div>
+      </div>
+      <div class="cite-step">
+        <div class="cite-num">3</div>
+        <div class="cite-content">Chunk text + extraction metadata injected into system prompt as labeled context: <code>[Source: Priests &amp; Programmers, Preface 2007, "The simulation"]</code></div>
+      </div>
+      <div class="cite-step">
+        <div class="cite-num">4</div>
+        <div class="cite-content">LLM (Sonnet 4.6) reads labeled context, generates response grounded in specific extractions</div>
+      </div>
+      <div class="cite-step">
+        <div class="cite-num">5</div>
+        <div class="cite-content">Grounding evaluator compares response sentences against extraction IDs E-008, E-009, E-010. Marks each claim as <span class="grounded">GROUNDED</span> or <span class="inferred">INFERRED</span></div>
+      </div>
+    </div>
+    <div class="section-label">What Luna should say</div>
+    <div class="response-mock">
+      <div class="rm-label">Luna's response (projected, post-fix)</div>
+      <div class="rm-text">
+        <span class="grounded">GROUNDED</span> Lansing describes the Green Revolution as an unintentional experiment: when the temples lost control of planting schedules, pest populations exploded across the terraces.
+        <br><br>
+        <span class="grounded">GROUNDED</span> His simulation with Kremer showed that the temple networks had been finding planting schedules that balanced water sharing with pest control through synchronized fallow periods.
+        <br><br>
+        <span class="grounded">GROUNDED</span> The results closely matched actual field observations of outbreaks and water shortages.
+        <br><br>
+        <span class="inferred">INFERRED</span> The architects of the Green Revolution were not pleased to see simulations showing their policies drove down harvests.
+      </div>
+      <div class="dim" style="margin-top:10px">Projected grounding: 3 grounded, 1 inferred, 0 ungrounded, avg 0.82</div>
+      <div class="dim">Compare to current: 0 grounded, 2 inferred, 8 ungrounded, avg 0.29</div>
+    </div>
+    <div class="detail-box">
+      <div class="detail-label">What makes this work</div>
+      <div class="chunk-desc">Every sentence Luna speaks traces back to a specific extraction ID, which traces to a chunk, which traces to a section, which traces to the document. The grounding evaluator can see the extraction IDs because they're wired into the Director's memory payload (handoff #4). Luna can say "from the preface" because the chunk metadata carries the section name.</div>
+    </div>`;
+  }}
+];
+
+const nav = document.getElementById('nav');
+const panels = document.getElementById('panels');
+let active = 0;
+
+steps.forEach((s, i) => {
+  const btn = document.createElement('button');
+  btn.className = 'nav-btn' + (i===0?' active':'');
+  btn.textContent = s.label;
+  btn.onclick = () => showPanel(i);
+  nav.appendChild(btn);
+  const panel = document.createElement('div');
+  panel.className = 'panel' + (i===0?' active':'');
+  panel.id = 'panel-'+s.id;
+  panel.innerHTML = s.content();
+  panels.appendChild(panel);
+});
+
+function showPanel(i) {
+  active = i;
+  document.querySelectorAll('.nav-btn').forEach((b,j) => b.classList.toggle('active', j===i));
+  document.querySelectorAll('.panel').forEach((p,j) => p.classList.toggle('active', j===i));
+}
+
+const chunkDetails = [
+  `<div class="detail-label">PP-P-001: Origin chunk</div><div class="quote-block">"The timing of these agricultural rites had been thrown off by the Green Revolution, which required them to plant new hybrid rice varieties as often as field conditions would permit..."</div><div class="dim">Chunk boundary: starts at "It was in these luxurious circumstances" — ends at "farmers wondered what the consequences might be."</div>`,
+  `<div class="detail-label">PP-P-002: Simulation chunk</div><div class="quote-block">"Together we built a computer simulation model of irrigation at the watershed scale... the temple networks sustain good harvests by finding planting schedules..."</div><div class="dim">This is the densest chunk. 4 claims, 3 entities, 1 method. Key section for retrieval on most queries about the book's argument.</div>`,
+  `<div class="detail-label">PP-P-003: Invisibility thesis</div><div class="quote-block">"Before the Green Revolution, the very success of the temple networks in balancing water needs and sustaining good harvests made them nearly invisible."</div><div class="dim">Short but critical. This is Lansing's answer to his own central question. High-priority extraction.</div>`,
+  `<div class="detail-label">PP-P-004: Borneo parallel</div><div class="quote-block">"The parallel with the Balinese case is exact. In the rice terraces of Bali, disruption of the synchronized planting schedules formerly organized by water temple networks led to crop failure..."</div><div class="dim">Cross-reference chunk. Creates PARALLEL edges between Bali entities and Borneo entities.</div>`,
+  `<div class="detail-label">PP-P-005: Daisyworld</div><div class="quote-block">"The daisies did not adapt to the temperature of the planet; instead they adapted the planet to suit themselves."</div><div class="dim">Theoretical frame chunk. Creates edges to emergence theme and connects to both Bali and Borneo parallels.</div>`,
+  `<div class="detail-label">PP-P-006: Current state</div><div class="quote-block">"The cost of fertilizer for one hectare of rice in 2004 was approximately $101, of which $69.60 is superfluous..."</div><div class="dim">Most recent data. Contains specific dollar figures. High-confidence factual extractions.</div>`,
+  `<div class="detail-label">PP-P-007: Metis critique</div><div class="quote-block">"Metis is ad hoc, local, ingenious, and colorful. But it is not systematic, patterned, or emergent."</div><div class="dim">Theoretical chunk. Creates edges to James Scott entity and challenges metis framing directly.</div>`
+];
+
+function showChunkDetail(el, idx) {
+  document.querySelectorAll('.chunk').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  const d = document.getElementById('chunk-detail');
+  d.style.display = 'block';
+  d.innerHTML = chunkDetails[idx];
+}
+</script>
+</body>
+</html>
