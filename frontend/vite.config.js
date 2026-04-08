@@ -2,9 +2,19 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // Read from env vars (set by launcher) or fall back to defaults
+const BACKEND_HOST = process.env.LUNA_BACKEND_HOST || 'localhost';
 const BACKEND_PORT = process.env.LUNA_BACKEND_PORT || 8000;
 
-const backendTarget = 'http://localhost:' + BACKEND_PORT;
+const backendTarget = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+const wsTarget = `ws://${BACKEND_HOST}:${BACKEND_PORT}`;
+
+// Shared error handler — prevents Vite crash on backend restart
+const wsErrorHandler = (proxy) => {
+  proxy.on('error', (err, _req, socket) => {
+    console.warn(`[vite-proxy] ${err.message}`);
+    if (socket && socket.writable) socket.end();
+  });
+};
 
 export default defineConfig({
   plugins: [react()],
@@ -20,6 +30,7 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
         ws: true,
+        configure: wsErrorHandler,
       },
       '/kozmo-assets': {
         target: backendTarget,
@@ -37,6 +48,7 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
         ws: true,
+        configure: wsErrorHandler,
       },
       '/persona': {
         target: backendTarget,
@@ -50,10 +62,26 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
       },
-      // --- added routes ---
-      '/ws': {
-        target: `ws://localhost:${BACKEND_PORT}`,
+      // --- WebSocket routes (with error handling) ---
+      '/ws/chat': {
+        target: wsTarget,
         ws: true,
+        configure: wsErrorHandler,
+      },
+      '/ws/orb': {
+        target: wsTarget,
+        ws: true,
+        configure: wsErrorHandler,
+      },
+      '/ws/identity': {
+        target: wsTarget,
+        ws: true,
+        configure: wsErrorHandler,
+      },
+      '/ws/knowledge': {
+        target: wsTarget,
+        ws: true,
+        configure: wsErrorHandler,
       },
       '/health': { target: backendTarget, changeOrigin: true },
       '/status': { target: backendTarget, changeOrigin: true },

@@ -233,6 +233,9 @@ def main():
 
     # Run in appropriate mode
     if args.server:
+        # Enable diagnostics for key engine modules (default WARNING is too quiet)
+        logging.getLogger("luna.engine").setLevel(logging.INFO)
+        logging.getLogger("luna.substrate.aibrarian_engine").setLevel(logging.INFO)
         run_server(args.host, args.port)
     elif args.message:
         logging.getLogger().setLevel(logging.INFO)
