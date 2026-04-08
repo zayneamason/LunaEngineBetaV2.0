@@ -939,11 +939,15 @@ class DirectorActor(Actor):
                     if isinstance(m, dict):
                         memory_dicts.append(m)
                     elif hasattr(m, 'content'):
-                        memory_dicts.append({
+                        d = {
                             "content": m.content,
                             "created_at": getattr(m, 'created_at', None),
                             "node_type": getattr(m, 'node_type', 'memory'),
-                        })
+                        }
+                        # Preserve retrieval score from Geometric L1 scoring
+                        if hasattr(m, '_retrieval_score'):
+                            d["_retrieval_score"] = m._retrieval_score
+                        memory_dicts.append(d)
                     else:
                         memory_dicts.append({"content": str(m)})
 

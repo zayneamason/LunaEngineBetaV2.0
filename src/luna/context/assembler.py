@@ -973,8 +973,19 @@ HONESTY: Distinguish "The document states..." (from collection) vs "From what I 
             lines = []
             lock_in_order = {"settled": 3, "fluid": 2, "drifting": 1, "none": 0, "unknown": 0}
             best_lock_in = "none"
+            retrieval_scores: list[float] = []
 
-            for m in request.memories[:5]:  # Cap at 5
+            # Sort by retrieval score (Geometric L1) if available
+            sorted_memories = list(request.memories)
+            sorted_memories.sort(
+                key=lambda m: (
+                    m.get("_retrieval_score", 0.0) if isinstance(m, dict)
+                    else getattr(m, "_retrieval_score", 0.0)
+                ),
+                reverse=True,
+            )
+
+            for m in sorted_memories[:5]:  # Cap at 5
                 if isinstance(m, dict):
                     content = m.get("content", str(m))
                     lock_in_state = m.get("lock_in_state", "unknown")
@@ -983,10 +994,20 @@ HONESTY: Distinguish "The document states..." (from collection) vs "From what I 
                     # Track best lock-in
                     if lock_in_order.get(lock_in_state, 0) > lock_in_order.get(best_lock_in, 0):
                         best_lock_in = lock_in_state
+                    # Collect retrieval scores for confidence
+                    if "_retrieval_score" in m:
+                        retrieval_scores.append(m["_retrieval_score"])
                 else:
                     lines.append(f"- {str(m)}")
+                    score = getattr(m, "_retrieval_score", None)
+                    if score is not None:
+                        retrieval_scores.append(score)
 
             if lines:
+                avg_sim = (
+                    sum(retrieval_scores) / len(retrieval_scores)
+                    if retrieval_scores else 0.0
+                )
                 block = (
                     "## Relevant Memory Context\n"
                     "Provenance key: [settled] = well-established, [fluid] = moderately certain, "
@@ -1002,7 +1023,7 @@ HONESTY: Distinguish "The document states..." (from collection) vs "From what I 
                         1 for m in request.memories
                         if isinstance(m, dict) and m.get("lock_in", 0) > 0.3
                     ),
-                    avg_similarity=0.0,
+                    avg_similarity=avg_sim,
                     best_lock_in=best_lock_in,
                     has_entity_match=False,
                     query=request.message,

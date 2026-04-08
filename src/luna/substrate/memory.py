@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Optional, Union
 import json
 import logging
+import math
 import uuid
 
 from .database import MemoryDatabase
@@ -23,6 +24,20 @@ logger = logging.getLogger(__name__)
 
 # Lazy-loaded entity resolver for mention detection
 _entity_resolver = None
+
+
+# =============================================================================
+# RETRIEVAL SCORING HELPERS (Geometric Layer 1)
+# =============================================================================
+
+def _recency_decay(created_at: Optional[datetime], half_life: float = 30.0) -> float:
+    """Exponential decay: ~1.0 for today, ~0.37 at half_life days, ~0.05 at 3x."""
+    if created_at is None:
+        return 0.5  # unknown age → neutral
+    age_days = (datetime.now() - created_at).total_seconds() / 86400
+    if age_days < 0:
+        return 1.0  # future timestamp → treat as fresh
+    return math.exp(-age_days / half_life)
 
 
 # =============================================================================
@@ -259,6 +274,16 @@ class MemoryMatrix:
         self._embedding_store: Optional[EmbeddingStore] = None
         self._embedding_generator: Optional[EmbeddingGenerator] = None
         logger.info("MemoryMatrix initialized")
+
+    # =========================================================================
+    # RETRIEVAL SCORING (Geometric Layer 1)
+    # =========================================================================
+
+    def _get_degree(self, node_id: str) -> int:
+        """Get edge count from in-memory NetworkX graph (O(1))."""
+        if self.graph and hasattr(self.graph, '_graph') and node_id in self.graph._graph:
+            return self.graph._graph.degree(node_id)
+        return 0
 
     # =========================================================================
     # NODE OPERATIONS
@@ -982,11 +1007,13 @@ class MemoryMatrix:
             type_set = set(node_types)
             scored_results = [(n, s) for n, s in scored_results if n.node_type in type_set]
 
-        # ─── Collect within token budget with lightweight filters ───
-        results = []
-        total_chars = 0
+        # ─── Three-signal composite scoring (Geometric Layer 1) ───
+        # score = similarity * (1 + log(1 + degree)) * recency_decay
+        from ..core.owner import owner_entity_id
+        owner_eid = owner_entity_id()
 
-        for node, _score in scored_results:
+        scored_with_composite: list[tuple[MemoryNode, float]] = []
+        for node, rrf_score in scored_results:
             content_lower = node.content.lower()
 
             # Filter: system prompt dumps (not knowledge)
@@ -1002,11 +1029,39 @@ class MemoryMatrix:
             if stripped.startswith("User (desktop):") or stripped.startswith("User (mobile):"):
                 continue
 
+            # Composite score: similarity × frequency boost × recency decay
+            degree = self._get_degree(node.id)
+            freq_boost = 1 + math.log(1 + degree)
+            decay = _recency_decay(node.created_at)
+            composite = rrf_score * freq_boost * decay
+
+            # Owner entity boost — structurally prevents identity confusion
+            if owner_eid and node.id == owner_eid:
+                composite *= 2.0
+
+            scored_with_composite.append((node, composite))
+
+        # Re-sort by composite score (strongest first)
+        scored_with_composite.sort(key=lambda x: x[1], reverse=True)
+
+        if scored_with_composite:
+            top = scored_with_composite[0]
+            logger.debug(
+                "COMPOSITE_TOP: id=%s score=%.4f (of %d candidates)",
+                top[0].id[:20], top[1], len(scored_with_composite),
+            )
+
+        # ─── Fill token budget ───
+        results = []
+        total_chars = 0
+
+        for node, composite in scored_with_composite:
             node_chars = len(node.content) + (len(node.summary) if node.summary else 0)
 
             if total_chars + node_chars > max_chars:
                 break
 
+            node._retrieval_score = composite  # transient attr for assembler
             results.append(node)
             total_chars += node_chars
 
