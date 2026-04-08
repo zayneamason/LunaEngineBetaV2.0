@@ -16,6 +16,7 @@ Luna doesn't respond to events. Luna *lives* through a continuous heartbeat.
 
 import asyncio
 import logging
+import re as _re
 import signal
 import uuid
 from dataclasses import dataclass, field
@@ -35,7 +36,7 @@ from luna.consciousness import ConsciousnessState
 
 # Agentic Architecture (Phase XIV)
 from luna.agentic.loop import AgentLoop, AgentStatus, AgentResult
-from luna.agentic.router import QueryRouter, ExecutionPath
+from luna.agentic.router import QueryRouter, ExecutionPath, RoutingDecision
 from luna.agentic.planner import Planner
 
 # Local subtask runner (Qwen 3B lightweight agentic dispatch)
@@ -46,6 +47,110 @@ except ImportError:
     SUBTASK_RUNNER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Query Expansion for Retrieval Retry Cascade ─────────────────────────────
+
+_EXPANSION_STOPWORDS = frozenset(
+    "the a an is are was were in on at to for of and or but with by from "
+    "that this it as be has have had not no do does did will would can could "
+    "may might about what how why when where who which tell me please "
+    "your my our you they she he i we".split()
+)
+
+
+def _expand_and_search_extractions(conn, query: str) -> list:
+    """
+    Tier 2: Extract content words from query, search extractions
+    with progressively broader FTS5 queries.
+
+    Strategy:
+    1. Extract meaningful words (remove stopwords)
+    2. Try OR-joined query (any word matches)
+    3. Try individual high-value words
+    """
+    from luna.substrate.aibrarian_engine import AiBrarianEngine
+
+    # Extract content words
+    words = _re.findall(r"[a-zA-Z]{3,}", query.lower())
+    content_words = [w for w in words if w not in _EXPANSION_STOPWORDS]
+
+    if not content_words:
+        return []
+
+    results = []
+    seen_ids: set = set()
+
+    # Strategy A: OR-joined query (any content word matches)
+    or_query = " OR ".join(content_words)
+    try:
+        sanitized = AiBrarianEngine._sanitize_fts_query(or_query)
+        rows = conn.conn.execute(
+            "SELECT e.node_type, e.content, e.confidence "
+            "FROM extractions_fts "
+            "JOIN extractions e ON extractions_fts.rowid = e.rowid "
+            "WHERE extractions_fts MATCH ? "
+            "ORDER BY e.confidence DESC "
+            "LIMIT 10",
+            (sanitized,),
+        ).fetchall()
+        for row in rows:
+            if not isinstance(row, dict):
+                try:
+                    row = dict(row)
+                except (TypeError, ValueError):
+                    continue
+            content = row["content"]
+            cid = content[:80]
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                results.append(row)
+    except Exception:
+        pass
+
+    if len(results) >= 3:
+        return results
+
+    # Strategy B: Individual content words (most specific first)
+    for word in sorted(content_words, key=len, reverse=True):
+        if len(results) >= 5:
+            break
+        try:
+            sanitized = AiBrarianEngine._sanitize_fts_query(word)
+            rows = conn.conn.execute(
+                "SELECT e.node_type, e.content, e.confidence "
+                "FROM extractions_fts "
+                "JOIN extractions e ON extractions_fts.rowid = e.rowid "
+                "WHERE extractions_fts MATCH ? "
+                "ORDER BY e.confidence DESC "
+                "LIMIT 2",
+                (sanitized,),
+            ).fetchall()
+            for row in rows:
+                if not isinstance(row, dict):
+                    try:
+                        row = dict(row)
+                    except (TypeError, ValueError):
+                        continue
+                content = row["content"]
+                cid = content[:80]
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    results.append(row)
+        except Exception:
+            continue
+
+    return results
+
+
+def _content_overlap(a: str, b: str) -> float:
+    """Quick word overlap ratio for dedup checking."""
+    words_a = set(a.lower().split())
+    words_b = set(b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    return len(intersection) / min(len(words_a), len(words_b))
 
 
 @dataclass
@@ -175,6 +280,9 @@ class LunaEngine:
 
         # Active project for scoped memory isolation
         self._active_project: Optional[str] = None
+        self._last_nexus_nodes: list = []  # Structured Nexus extractions for grounding
+        self._active_reflection_mode: Optional[str] = None  # "precision" | "reflective" | "relational"
+        self._last_collections_searched: list = []
 
         # Expression config (loaded from personality.json)
         self._expression_config: Dict = self._load_expression_config()
@@ -435,7 +543,12 @@ Emojis can accompany gestures or stand alone.
                 await self.collection_lock_in.ensure_table()
                 # Bootstrap luna_system so it's always in the search chain
                 await self.collection_lock_in.ensure_tracked("luna_system", pattern="emergent")
+                # Auto-register all enabled collections so new ones are immediately visible
                 if self.aibrarian is not None:
+                    for key, conn in self.aibrarian.connections.items():
+                        cfg = self.aibrarian.registry.collections.get(key)
+                        pattern = cfg.ingestion_pattern if cfg else "utilitarian"
+                        await self.collection_lock_in.ensure_tracked(key, pattern=pattern)
                     self.aibrarian.set_lock_in_engine(self.collection_lock_in)
                 logger.info("CollectionLockInEngine owned by Engine — injected into AiBrarian")
             else:
@@ -471,14 +584,35 @@ Emojis can accompany gestures or stand alone.
         self.aperture = ApertureManager()
         logger.info(f"ApertureManager owned by Engine — preset={self.aperture.state.preset.value}")
 
-        # Initialize LocalSubtaskRunner (Qwen 3B lightweight agentic dispatch)
+        # Initialize SubtaskRunner — try Qwen first, fall back to Haiku
         if SUBTASK_RUNNER_AVAILABLE:
+            subtask_backend = None
+
+            # Try 1: Qwen 3B local (sovereign, offline-capable)
             director = self.get_actor("director")
+            if director and director._enable_local and not director.local_available:
+                await director._init_local_inference()
             if director and director.local_available:
-                self._subtask_runner = LocalSubtaskRunner(director._local)
-                logger.info("LocalSubtaskRunner initialized (Qwen 3B subtasks active)")
+                subtask_backend = director._local
+                logger.info("SubtaskRunner using Qwen 3B (local)")
+
+            # Try 2: Haiku API (fast, reliable, negligible cost)
+            if subtask_backend is None:
+                try:
+                    from luna.inference.haiku_subtask_backend import HaikuSubtaskBackend
+                    haiku = HaikuSubtaskBackend()
+                    if haiku.is_loaded:
+                        subtask_backend = haiku
+                        logger.info("SubtaskRunner using Haiku API (Qwen unavailable)")
+                except Exception as e:
+                    logger.warning(f"Haiku subtask backend failed: {e}")
+
+            # Wire it up
+            if subtask_backend is not None:
+                self._subtask_runner = LocalSubtaskRunner(subtask_backend)
+                logger.info("LocalSubtaskRunner initialized")
             else:
-                logger.info("LocalSubtaskRunner skipped (local model not available)")
+                logger.warning("SubtaskRunner unavailable (no local model, no Haiku API)")
         else:
             logger.debug("LocalSubtaskRunner module not available")
 
@@ -970,7 +1104,7 @@ Emojis can accompany gestures or stand alone.
         # Not currently processing - handle normally with agentic routing
         await self._process_message_agentic(user_message, correlation_id, source=source)
 
-    async def _process_message_agentic(self, user_message: str, correlation_id: str, source: str = "text") -> None:
+    async def _process_message_agentic(self, user_message: str, correlation_id: str, source: str = "text", _db_retry: bool = False) -> None:
         """Process message through the agentic pipeline (subtasks → router → planner → loop)."""
         self._is_processing = True
         self._current_goal = user_message
@@ -1012,6 +1146,7 @@ Emojis can accompany gestures or stand alone.
                     self._subtask_runner.run_subtask_phase(user_message, recent_turns)
                 )
             else:
+                logger.warning("[SUBTASK] Runner unavailable — intent classification skipped, agentic upgrade disabled")
                 parallel_tasks.append(asyncio.sleep(0))  # no-op placeholder
 
             # Memory retrieval (existing)
@@ -1038,10 +1173,50 @@ Emojis can accompany gestures or stand alone.
                         self.context.add(content=memory_context, source=ContextSource.MEMORY)
 
                 # Phase 2: search chain for active project collections
-                collection_context = await self._get_collection_context(retrieval_query)
+                # Use decomposed queries if available (multi-part questions)
+                if subtask_phase and subtask_phase.decomposed_queries:
+                    collection_context = await self._get_collection_context_multi(
+                        subtask_phase.decomposed_queries, subtask_phase=subtask_phase
+                    )
+                else:
+                    collection_context = await self._get_collection_context(
+                        retrieval_query, subtask_phase=subtask_phase
+                    )
                 if collection_context:
                     memory_context = (memory_context or "") + "\n\n" + collection_context
                     self.context.add(content=collection_context, source=ContextSource.MEMORY)
+
+                # ── Phase 2.5: Reflection mode detection + retrieval ──
+                collections_searched = self._last_collections_searched
+                active_mode = self._get_active_reflection_mode(collections_searched)
+                self._active_reflection_mode = active_mode
+
+                if active_mode in ("reflective", "relational") and matrix and matrix.is_ready:
+                    try:
+                        matrix_ops = matrix._matrix if hasattr(matrix, '_matrix') else None
+                        if matrix_ops:
+                            reflection_results = await matrix_ops.fts5_search(
+                                retrieval_query, limit=5
+                            )
+                            reflection_nodes = [
+                                node for node, _score in reflection_results
+                                if getattr(node, 'node_type', '') == 'PERSONALITY_REFLECTION'
+                            ]
+                            if reflection_nodes:
+                                reflection_context = self._format_reflection_context(reflection_nodes)
+                                memory_context = (memory_context or "") + "\n\n" + reflection_context
+                                self.context.add(content=reflection_context, source=ContextSource.MEMORY)
+                                logger.info(f"[REFLECTION-RETRIEVAL] Injected {len(reflection_nodes)} reflections (mode={active_mode})")
+                    except Exception as e:
+                        logger.warning(f"[REFLECTION-RETRIEVAL] Failed: {e}")
+
+                # ── Phase 2.75: Relational retrieval ──
+                if active_mode == "relational":
+                    relational_context = await self._get_relational_context(retrieval_query)
+                    if relational_context:
+                        memory_context = (memory_context or "") + "\n\n" + relational_context
+                        self.context.add(content=relational_context, source=ContextSource.MEMORY)
+                        logger.info(f"[RELATIONAL] Injected conversation context")
 
                 return memory_context, history_context
 
@@ -1083,12 +1258,64 @@ Emojis can accompany gestures or stand alone.
             # PHASE 4: Execute based on routing decision
             # ══════════════════════════════════════════════════════════════
 
+            # Upgrade to AgentLoop if knowledge-sparse research query
+            logger.debug("[ROUTING-DEBUG] path=%s, agent_loop=%s, nexus_nodes=%d, subtask=%s, intent=%s",
+                         routing.path, bool(self.agent_loop), len(self._last_nexus_nodes),
+                         bool(subtask_phase), subtask_phase.intent if subtask_phase else None)
+            if (
+                routing.path == ExecutionPath.DIRECT
+                and self.agent_loop
+                and subtask_phase
+                and subtask_phase.intent
+                and subtask_phase.intent.get("intent") in ("research", "memory_query")
+                and (
+                    len(self._last_nexus_nodes) < 2  # sparse results
+                    or subtask_phase.intent.get("complexity") == "complex"  # complex research needs deeper retrieval
+                )
+            ):
+                _upgrade_reason = "knowledge-sparse" if len(self._last_nexus_nodes) < 2 else "complex-research"
+                logger.info(f"[ROUTING] Upgrading to AgentLoop ({_upgrade_reason} research query)")
+                routing = RoutingDecision(
+                    path=ExecutionPath.SIMPLE_PLAN,
+                    complexity=routing.complexity,
+                    reason="knowledge-sparse research query",
+                    signals=routing.signals,
+                )
+
+            # Fallback: keyword-based upgrade when SubtaskRunner unavailable
+            if (
+                routing.path == ExecutionPath.DIRECT
+                and self.agent_loop
+                and len(self._last_nexus_nodes) < 2
+                and (not subtask_phase or not subtask_phase.intent)
+            ):
+                _RESEARCH_SIGNALS = {"what does", "tell me about", "explain", "chapters",
+                                     "evidence", "compare", "analyze", "summarize",
+                                     "describe", "how does", "why does", "what are"}
+                q_lower = user_message.lower()
+                if any(sig in q_lower for sig in _RESEARCH_SIGNALS):
+                    logger.info("[ROUTING] Keyword fallback → AgentLoop (no intent classification available)")
+                    routing = RoutingDecision(
+                        path=ExecutionPath.SIMPLE_PLAN,
+                        complexity=routing.complexity,
+                        reason="keyword-based research detection (SubtaskRunner unavailable)",
+                        signals=routing.signals,
+                    )
+
             if routing.path == ExecutionPath.DIRECT:
                 self.metrics.direct_responses += 1
                 await self._process_direct(user_message, correlation_id, memory_context, history_context)
             else:
                 self.metrics.planned_responses += 1
                 await self._process_with_agent_loop(user_message, correlation_id, memory_context, history_context)
+
+            # ══════════════════════════════════════════════════════════════
+            # PHASE 5: Bridge Nexus knowledge to Memory Matrix
+            # ══════════════════════════════════════════════════════════════
+            try:
+                await self._bridge_nexus_to_matrix()
+            except Exception as e:
+                logger.warning(f"[NEXUS-BRIDGE] Non-fatal error: {e}")
 
             self.metrics.agentic_tasks_completed += 1
 
@@ -1098,8 +1325,20 @@ Emojis can accompany gestures or stand alone.
             raise
 
         except Exception as e:
-            logger.error(f"Agentic processing error: {e}")
-            await self._emit_response(f"I ran into an issue: {e}", {"error": True})
+            # Retry once on SQLite lock contention
+            import sqlite3 as _sqlite3
+            if not _db_retry and isinstance(e, _sqlite3.OperationalError) and "database is locked" in str(e):
+                logger.warning(f"DB lock hit — retrying after 2s: {e}")
+                await asyncio.sleep(2)
+                try:
+                    await self._process_message_agentic(user_message, correlation_id, source=source, _db_retry=True)
+                    return
+                except Exception as e2:
+                    logger.error(f"Agentic processing error (retry): {e2}")
+                    await self._emit_response(f"I ran into an issue: {e2}", {"error": True})
+            else:
+                logger.error(f"Agentic processing error: {e}")
+                await self._emit_response(f"I ran into an issue: {e}", {"error": True})
 
         finally:
             self._is_processing = False
@@ -1135,6 +1374,8 @@ Emojis can accompany gestures or stand alone.
                     "user_message": user_message,
                     "system_prompt": self._build_system_prompt(memory_context, history_context),
                     "context_window": context_window,
+                    "nexus_nodes": self._last_nexus_nodes,
+                    "memory_context": memory_context,  # Pass separately so Director uses it
                 },
                 correlation_id=correlation_id,
             )
@@ -1195,6 +1436,7 @@ Emojis can accompany gestures or stand alone.
                         "context_window": context_window,
                         "agentic": True,
                         "execution_path": result.status.name,
+                        "nexus_nodes": self._last_nexus_nodes,
                     },
                     correlation_id=correlation_id,
                 )
@@ -1451,6 +1693,22 @@ Emojis can accompany gestures or stand alone.
                         print(f"⛔ [CALLBACK] Callback {i} FAILED: {e}")
                         logger.error(f"Callback error: {e}")
 
+                # ── Write-back: Reflection on deep reads ──
+                if (
+                    self._last_nexus_nodes
+                    and any(n.get("node_type") == "SOURCE_TEXT" for n in self._last_nexus_nodes)
+                    and len(text) > 200
+                    and hasattr(self, 'aibrarian') and self.aibrarian
+                ):
+                    logger.info("[REFLECTION] Triggering background reflection write...")
+                    asyncio.create_task(
+                        self._write_reflection(
+                            query=self._current_goal or "",
+                            response=text,
+                            nexus_nodes=list(self._last_nexus_nodes),
+                        )
+                    )
+
             case "generation_error":
                 data = payload.get("data", {})
                 error_msg = data.get("error", "unknown error")
@@ -1544,46 +1802,654 @@ Emojis can accompany gestures or stand alone.
     async def _get_dataroom_context(self, matrix, query: str) -> str:
         return ""  # noop — replaced by _get_collection_context()
 
-    async def _get_collection_context(self, query: str) -> str:
+    # ── Query expansion helpers for retrieval retry cascade ─────────────
+
+    async def _get_collection_context(self, query: str, *, subtask_phase=None) -> str:
         """
-        Phase 2: Search project collections via run_search_chain().
-        Only runs when a project is active.
-        Returns provenance-tagged context string or empty string.
+        Phase 2: Collection recall.
+        - If a project is active → use search_chain (voice path).
+        - Otherwise → aperture-driven search across all enabled collections.
         """
-        if not self._active_project:
+        # ── Voice-path: project-scoped search chain ──
+        voice_parts: list[str] = []
+        if self._active_project:
+            search_cfg = getattr(self, "_search_chain_config", None)
+            if not search_cfg:
+                try:
+                    from luna.tools.search_chain import SearchChainConfig
+                    search_cfg = SearchChainConfig.default()
+                except Exception:
+                    pass
+            if search_cfg:
+                try:
+                    from luna.tools.search_chain import run_search_chain
+                    results = await run_search_chain(search_cfg, query, self)
+                except Exception as e:
+                    logger.warning(f"[PHASE2] search_chain failed: {e}")
+                    results = []
+                for r in (results or []):
+                    content = r.get("content", "")
+                    source = r.get("source", "collection")
+                    if content:
+                        voice_parts.append(f"[{source}]\n{content}")
+
+        # ── Aperture-driven path (always runs — supplements voice path) ──
+        if not self.aibrarian:
             return ""
 
-        search_cfg = getattr(self, "_search_chain_config", None)
-        if not search_cfg:
+        aperture = self.aperture.state
+        inner_thresh = aperture.inner_ring_threshold
+
+        # Gather lock-in records
+        lock_in_map: dict[str, float] = {}
+        if self.collection_lock_in:
             try:
-                from luna.tools.search_chain import SearchChainConfig
-                search_cfg = SearchChainConfig.default()
+                records = await self.collection_lock_in.get_all()
+                lock_in_map = {r.collection_key: r.lock_in for r in records}
             except Exception:
-                return ""
+                pass
 
-        try:
-            from luna.tools.search_chain import run_search_chain
-            results = await run_search_chain(search_cfg, query, self)
-        except Exception as e:
-            logger.warning(f"[PHASE2] Collection search failed: {e}")
+        # Classify collections
+        collections_to_search: list[str] = []
+        for key, cfg in self.aibrarian.registry.collections.items():
+            if not cfg.enabled:
+                continue
+            # Primary grounding collections are always searched
+            is_primary = getattr(cfg, 'grounding_priority', 'supplemental') == 'primary'
+            if not lock_in_map or is_primary:
+                collections_to_search.append(key)
+            else:
+                li = lock_in_map.get(key, 0.0)
+                if li >= inner_thresh or li > 0:
+                    collections_to_search.append(key)
+
+        # Sort: primary grounding collections first
+        def _sort_key(k):
+            cfg = self.aibrarian.registry.collections.get(k)
+            if cfg and getattr(cfg, 'grounding_priority', 'supplemental') == 'primary':
+                return 0
+            return 1
+        collections_to_search.sort(key=_sort_key)
+        self._last_collections_searched = collections_to_search
+        logger.info(f"[PHASE2] Collections to search: {collections_to_search}")
+
+        if not collections_to_search:
             return ""
 
-        if not results:
+        # Split budget: structure, extraction claims, and raw chunks each get their own allocation
+        STRUCTURE_BUDGET = 3000   # TOC + doc summary (truncated to fit)
+        EXTRACTION_BUDGET = 5000  # CLAIMs + SECTION_SUMMARYs
+        CHUNK_BUDGET = 3000       # Raw text passages (SOURCE_TEXT)
+        struct_budget = STRUCTURE_BUDGET
+        content_budget = EXTRACTION_BUDGET
+        chunk_budget = CHUNK_BUDGET
+        parts: list[str] = []
+        nexus_nodes: list = []
+
+        # Grounding priority → confidence floor for Nexus nodes
+        _PRIORITY_FLOOR = {"primary": 0.75, "supplemental": 0.5, "background": 0.3}
+
+        for key in collections_to_search:
+            if content_budget <= 0 and chunk_budget <= 0:
+                break
+
+            conn = self.aibrarian.connections.get(key)
+            if not conn:
+                continue
+
+            from luna.substrate.aibrarian_engine import AiBrarianEngine
+            fts_query = AiBrarianEngine._sanitize_fts_query(query)
+
+            # Grounding config for this collection
+            cfg = self.aibrarian.registry.collections.get(key)
+            priority = getattr(cfg, 'grounding_priority', 'supplemental') if cfg else 'supplemental'
+            conf_floor = _PRIORITY_FLOOR.get(priority, 0.5)
+
+            # ── STRUCTURE PASS: Doc summary + TOC (capped at struct_budget) ──
+            for node_type in ('DOCUMENT_SUMMARY', 'TABLE_OF_CONTENTS'):
+                if struct_budget <= 0:
+                    break
+                try:
+                    row = conn.conn.execute(
+                        "SELECT node_type, content, confidence FROM extractions "
+                        "WHERE node_type = ? LIMIT 1",
+                        (node_type,),
+                    ).fetchone()
+                    if row:
+                        content = row[1][:struct_budget]
+                        parts.append(f"[Nexus/{key} {node_type}]\n{content}")
+                        struct_budget -= len(content)
+                        nexus_nodes.append({
+                            "id": f"nexus:{key}:{node_type}:{len(nexus_nodes)}",
+                            "content": content,
+                            "node_type": node_type,
+                            "source": f"nexus/{key}",
+                            "confidence": max(row[2] if len(row) > 2 else 0.85, conf_floor),
+                            "grounding_priority": priority,
+                        })
+                except Exception:
+                    pass
+
+            # ── TIER 1: Content extractions FTS5 (CLAIMs + SECTION_SUMMARYs) ──
+            ext_rows = []
+            try:
+                ext_rows = conn.conn.execute(
+                    "SELECT e.node_type, e.content, e.confidence "
+                    "FROM extractions_fts "
+                    "JOIN extractions e ON extractions_fts.rowid = e.rowid "
+                    "WHERE extractions_fts MATCH ? "
+                    "AND e.node_type NOT IN ('DOCUMENT_SUMMARY', 'TABLE_OF_CONTENTS') "
+                    "ORDER BY e.confidence DESC "
+                    "LIMIT 15",
+                    (fts_query,),
+                ).fetchall()
+            except Exception:
+                pass
+            # Normalize Row objects to dicts for downstream .get() calls
+            ext_rows = [dict(r) if not isinstance(r, dict) else r for r in ext_rows]
+            logger.info("[PHASE2] Tier 1 FTS5 for %s: query='%s', results=%d", key, fts_query[:60], len(ext_rows))
+
+            # ── TIER 2: Query expansion (if Tier 1 is sparse) ────────────
+            if len(ext_rows) < 8:
+                expanded_rows = _expand_and_search_extractions(conn, query)
+                # Filter out structure types from expanded results too
+                expanded_rows = [dict(r) if not isinstance(r, dict) else r for r in expanded_rows]
+                expanded_rows = [r for r in expanded_rows
+                                 if r.get("node_type", "")
+                                 not in ('DOCUMENT_SUMMARY', 'TABLE_OF_CONTENTS')]
+                ext_rows = list(ext_rows) + expanded_rows
+
+            # Merge (deduplicate by content) + collect structured nodes for grounding
+            seen_content: set = set()
+            for row in ext_rows:
+                if not isinstance(row, dict):
+                    try:
+                        row = dict(row)
+                    except (TypeError, ValueError):
+                        continue
+                content = row["content"]
+                node_type = row["node_type"]
+                confidence = row.get("confidence", 0.85)
+                if content not in seen_content and content_budget > 0:
+                    seen_content.add(content)
+                    chunk = content[:content_budget]
+                    parts.append(f"[Nexus/{key} {node_type}]\n{chunk}")
+                    content_budget -= len(chunk)
+
+                    nexus_nodes.append({
+                        "id": f"nexus:{key}:{node_type}:{len(nexus_nodes)}",
+                        "content": content,
+                        "node_type": node_type,
+                        "source": f"nexus/{key}",
+                        "confidence": max(confidence, conf_floor),
+                        "grounding_priority": priority,
+                    })
+
+            # ── TIER 3: Semantic fallback (if still sparse) ──────────────
+            # For complex research queries, always search chunks (extractions are summaries)
+            _tier3_threshold = 5
+            if (subtask_phase and subtask_phase.intent
+                    and subtask_phase.intent.get("complexity") == "complex"):
+                _tier3_threshold = 15
+            if len(seen_content) < _tier3_threshold and content_budget > 1000:
+                try:
+                    sem_results = await self.aibrarian.search(
+                        key, query, "semantic", limit=5
+                    )
+                    if not sem_results:
+                        sem_results = await self.aibrarian.search(
+                            key, query, "keyword", limit=5
+                        )
+                    for r in sem_results:
+                        content = r.get("snippet") or r.get("content", "")
+                        title = r.get("title") or r.get("filename", "")
+                        if content and content not in seen_content and content_budget > 0:
+                            seen_content.add(content)
+                            chunk = content[:content_budget]
+                            parts.append(f"[Nexus/{key} chunk: {title}]\n{chunk}")
+                            content_budget -= len(chunk)
+
+                            nexus_nodes.append({
+                                "id": f"nexus:{key}:chunk:{len(nexus_nodes)}",
+                                "content": content,
+                                "node_type": "CHUNK",
+                                "source": f"nexus/{key}",
+                                "confidence": conf_floor,
+                                "grounding_priority": priority,
+                            })
+                except Exception as e:
+                    logger.warning(f"[PHASE2] Semantic fallback for {key}: {e}")
+
+            # ── TIER 4: Raw text chunks (when query asks for depth) ──────
+            _DEPTH_SIGNALS = {
+                'evidence', 'specific', 'detail', 'passage', 'quote',
+                'section', 'argue', 'methodology', 'data', 'example',
+                'describe', 'text says', 'what does', 'how does', 'explain how',
+            }
+            wants_depth = any(sig in query.lower() for sig in _DEPTH_SIGNALS)
+            logger.info(f"[PHASE2] Tier 4 check for {key}: wants_depth={wants_depth}, chunk_budget={chunk_budget}")
+            if wants_depth and chunk_budget > 0:
+                try:
+                    # Build focused chunk query from extraction content (not the user query)
+                    # Extract key terms from CLAIMs/SECTION_SUMMARYs already found
+                    import re as _re
+                    _claim_text = ' '.join(
+                        n.get('content', '')[:200] for n in nexus_nodes
+                        if n.get('node_type') in ('CLAIM', 'SECTION_SUMMARY')
+                        and n.get('source', '').endswith(key)
+                    )
+                    _META_WORDS = _DEPTH_SIGNALS | {
+                        'what', 'how', 'does', 'the', 'about', 'that', 'this', 'was', 'were',
+                        'proving', 'show', 'present', 'discuss', 'explain', 'book', 'section',
+                        'chapter', 'author', 'argues', 'analysis', 'describes', 'examines',
+                        'from', 'with', 'into', 'also', 'both', 'their', 'have', 'been',
+                        'which', 'than', 'more', 'most', 'only', 'between', 'other',
+                    }
+                    # Combine user query + claim content, extract meaningful terms
+                    _combined = _re.sub(r'[?.,!"\'\-\(\)]', '', (query + ' ' + _claim_text).lower())
+                    _all_terms = [w for w in _combined.split() if w not in _META_WORDS and len(w) > 3]
+                    # Count term frequency — most frequent terms are most topical
+                    from collections import Counter
+                    _term_counts = Counter(_all_terms)
+                    _top_terms = [t for t, _ in _term_counts.most_common(6)]
+                    # Use AND for precision with top content terms
+                    chunk_fts = ' AND '.join(_top_terms[:4]) if _top_terms else fts_query
+                    # Fall back to OR if AND returns nothing
+                    chunk_rows = conn.conn.execute(
+                        "SELECT c.chunk_text, c.section_label "
+                        "FROM chunks_fts "
+                        "JOIN chunks c ON chunks_fts.rowid = c.rowid "
+                        "WHERE chunks_fts MATCH ? "
+                        "ORDER BY rank LIMIT 5",
+                        (chunk_fts,),
+                    ).fetchall()
+                    if not chunk_rows:
+                        # AND too restrictive — fall back to OR
+                        chunk_fts_or = ' OR '.join(_content_terms[:5]) if _content_terms else fts_query
+                        chunk_rows = conn.conn.execute(
+                            "SELECT c.chunk_text, c.section_label "
+                            "FROM chunks_fts "
+                            "JOIN chunks c ON chunks_fts.rowid = c.rowid "
+                            "WHERE chunks_fts MATCH ? "
+                            "ORDER BY rank LIMIT 5",
+                            (chunk_fts_or,),
+                        ).fetchall()
+                    logger.info(f"[PHASE2] Tier 4 chunk query for {key}: '{chunk_fts}'")
+                    for row in chunk_rows:
+                        text = row[0][:chunk_budget]
+                        section = row[1] or ""
+                        if text and text not in seen_content and chunk_budget > 0:
+                            seen_content.add(text)
+                            label = f" ({section})" if section else ""
+                            parts.append(f"[Nexus/{key} SOURCE_TEXT{label}]\n{text}")
+                            chunk_budget -= len(text)
+                            nexus_nodes.append({
+                                "id": f"nexus:{key}:chunk:{len(nexus_nodes)}",
+                                "content": text,
+                                "node_type": "SOURCE_TEXT",
+                                "source": f"nexus/{key}",
+                                "confidence": 0.95,
+                                "grounding_priority": priority,
+                            })
+                    if chunk_rows:
+                        logger.info(f"[PHASE2] Tier 4 chunks for {key}: {len(chunk_rows)} raw passages")
+                except Exception as e:
+                    logger.debug(f"[PHASE2] Tier 4 chunk search for {key}: {e}")
+
+                # ── TIER 5: Luna's prior reflections on this material ────────
+                try:
+                    refl_rows = conn.conn.execute(
+                        "SELECT r.content, r.reflection_type, r.created_at "
+                        "FROM reflections_fts "
+                        "JOIN reflections r ON reflections_fts.rowid = r.rowid "
+                        "WHERE reflections_fts MATCH ? "
+                        "LIMIT 3",
+                        (fts_query,),
+                    ).fetchall()
+                    for row in refl_rows:
+                        text = row[0]
+                        if text and text not in seen_content and content_budget > 0:
+                            seen_content.add(text)
+                            chunk = text[:content_budget]
+                            parts.append(f"[Nexus/{key} LUNA_REFLECTION]\n{chunk}")
+                            content_budget -= len(chunk)
+                            nexus_nodes.append({
+                                "id": f"nexus:{key}:reflection:{len(nexus_nodes)}",
+                                "content": text,
+                                "node_type": "LUNA_REFLECTION",
+                                "source": f"nexus/{key}",
+                                "confidence": 0.8,
+                                "grounding_priority": priority,
+                            })
+                    if refl_rows:
+                        logger.info(f"[PHASE2] Tier 5: {len(refl_rows)} prior reflections for {key}")
+                except Exception:
+                    pass  # reflections_fts may not exist in older collections
+
+        # ── Write-back: Log access to each searched collection ──
+        for key in collections_to_search:
+            conn = self.aibrarian.connections.get(key)
+            if conn:
+                try:
+                    conn.conn.execute(
+                        "INSERT INTO access_log (event_type, query, results_count, luna_instance) "
+                        "VALUES (?, ?, ?, ?)",
+                        ("query", query[:500], len(parts), "luna-ahab"),
+                    )
+                    conn.conn.commit()
+                except Exception:
+                    pass  # access_log table might not exist yet
+
+        # Store structured nodes for grounding
+        self._last_nexus_nodes = nexus_nodes
+
+        # Merge voice-path results with aperture results
+        all_parts = voice_parts + parts
+
+        if not all_parts:
             return ""
 
-        parts = []
-        for r in results:
-            source = r.get("source", "collection")
-            content = r.get("content", "")
-            if content:
-                parts.append(f"[{source}]\n{content}")
-
-        assembled = "\n\n".join(parts)
+        assembled = "\n\n".join(all_parts)
         logger.info(
-            f"[PHASE2] Collection context: {len(results)} results, "
-            f"{len(assembled)} chars, project={self._active_project}"
+            f"[PHASE2] Collection recall: {len(all_parts)} fragments "
+            f"(voice={len(voice_parts)}, nexus={len(parts)}), "
+            f"{len(assembled)} chars"
         )
         return assembled
+
+    async def _get_collection_context_multi(self, queries: list, *, subtask_phase=None) -> str:
+        """
+        Run multiple retrieval queries and merge results.
+
+        For compound questions like "compare chapter 2 to chapter 3",
+        this runs separate searches for each sub-query and assembles
+        them into labeled sections so the LLM can reason across both.
+        """
+        if not queries:
+            return ""
+
+        # Cap at 4 queries to prevent context explosion
+        queries = queries[:4]
+
+        # Run all queries concurrently
+        # Each call overwrites self._last_nexus_nodes — save beforehand, merge after
+        pre_nodes = list(self._last_nexus_nodes)
+        tasks = [self._get_collection_context(q, subtask_phase=subtask_phase) for q in queries]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Merge: pre-existing nodes + whatever the last gather call left behind
+        seen_ids = {n.get("id") for n in pre_nodes}
+        for node in self._last_nexus_nodes:
+            if node.get("id") not in seen_ids:
+                pre_nodes.append(node)
+                seen_ids.add(node.get("id"))
+        self._last_nexus_nodes = pre_nodes
+
+        # Assemble with labels
+        parts: list = []
+        seen_content: set = set()  # Deduplicate across queries
+
+        for query, result in zip(queries, results):
+            if isinstance(result, Exception):
+                logger.warning(f"[MULTI-QUERY] Failed for '{query}': {result}")
+                continue
+            if not result:
+                continue
+
+            # Deduplicate: skip fragments we've already seen
+            new_fragments = []
+            for line in result.split("\n\n"):
+                # Use first 100 chars as dedup key
+                key = line.strip()[:100]
+                if key and key not in seen_content:
+                    seen_content.add(key)
+                    new_fragments.append(line)
+
+            if new_fragments:
+                section = "\n\n".join(new_fragments)
+                parts.append(f"[Query: {query}]\n{section}")
+
+        if not parts:
+            return ""
+
+        assembled = "\n\n---\n\n".join(parts)
+        logger.info(
+            f"[MULTI-QUERY] {len(queries)} queries → {len(parts)} result sections, "
+            f"{len(assembled)} chars"
+        )
+        return assembled
+
+    # =========================================================================
+    # Read Write-Back: Reflection after deep reads
+    # =========================================================================
+
+    async def _write_reflection(
+        self,
+        query: str,
+        response: str,
+        nexus_nodes: list,
+    ) -> None:
+        """Background task: Luna reflects on what she just read and writes to cartridge."""
+        try:
+            source_texts = [n["content"][:300] for n in nexus_nodes if n.get("node_type") == "SOURCE_TEXT"]
+            claims = [n["content"][:200] for n in nexus_nodes if n.get("node_type") == "CLAIM"]
+
+            if not source_texts and not claims:
+                return
+
+            reflection_prompt = (
+                "You just read source material and answered a question about it. "
+                "Write a brief (2-3 sentence) first-person reflection on what you found interesting, "
+                "surprising, or worth remembering. Write as Luna — this is your marginalia.\n\n"
+                f"Question: {query[:200]}\n"
+                f"Key claims: {'; '.join(claims[:3])}\n"
+                f"Source excerpt: {source_texts[0][:300] if source_texts else 'N/A'}\n"
+                f"Your response summary: {response[:200]}\n\n"
+                "Reflection (2-3 sentences, first person):"
+            )
+
+            import anthropic
+            client = anthropic.Anthropic()
+            logger.info(f"[REFLECTION] Calling Haiku for reflection ({len(claims)} claims, {len(source_texts)} sources)...")
+            result = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=150,
+                temperature=0.7,
+                messages=[{"role": "user", "content": reflection_prompt}],
+            )
+            reflection_text = result.content[0].text.strip()
+            logger.info(f"[REFLECTION] Haiku returned: {reflection_text[:80]}...")
+
+            if not reflection_text or len(reflection_text) < 20:
+                return
+
+            import uuid
+            for node in nexus_nodes:
+                source_key = node.get("source", "").replace("nexus/", "")
+                if not source_key:
+                    continue
+                conn = self.aibrarian.connections.get(source_key)
+                if not conn:
+                    continue
+                try:
+                    conn.conn.execute(
+                        "INSERT INTO reflections "
+                        "(id, extraction_id, reflection_type, content, luna_instance, created_at) "
+                        "VALUES (?, NULL, ?, ?, ?, datetime('now'))",
+                        (
+                            str(uuid.uuid4())[:8],
+                            "connection",
+                            reflection_text,
+                            "luna-ahab",
+                        ),
+                    )
+                    conn.conn.commit()
+                    logger.info(f"[REFLECTION] Wrote reflection to {source_key}: {reflection_text[:60]}...")
+                    break  # One reflection per query, not per node
+                except Exception as e:
+                    logger.warning(f"[REFLECTION] Write failed for {source_key}: {e}")
+
+        except Exception as e:
+            logger.warning(f"[REFLECTION] Background reflection failed: {e}")
+
+    # =========================================================================
+    # Retrieval Mode Awareness (Step 8)
+    # =========================================================================
+
+    def _get_active_reflection_mode(self, collections_searched: list) -> str:
+        """
+        Determine reflection mode from the collections that were searched.
+        Most permissive mode wins: relational > reflective > precision.
+        Default: "reflective".
+        """
+        if not self.aibrarian or not collections_searched:
+            return "reflective"
+
+        MODE_RANK = {"precision": 0, "reflective": 1, "relational": 2}
+        RANK_MODE = {v: k for k, v in MODE_RANK.items()}
+
+        max_rank = 0
+        for key in collections_searched:
+            cfg = self.aibrarian.registry.collections.get(key)
+            if cfg:
+                mode = getattr(cfg, 'reflection_mode', None)
+                if mode is None and hasattr(cfg, '__getitem__'):
+                    try:
+                        mode = cfg['reflection_mode']
+                    except (KeyError, TypeError):
+                        pass
+                rank = MODE_RANK.get(mode or "reflective", 1)
+                max_rank = max(max_rank, rank)
+
+        return RANK_MODE.get(max_rank, "reflective")
+
+    def _format_reflection_context(self, reflection_nodes: list) -> str:
+        """Format PERSONALITY_REFLECTION nodes as labeled context."""
+        if not reflection_nodes:
+            return ""
+        lines = ["## Luna's reflections on this material\n"]
+        for node in reflection_nodes:
+            content = node.content if hasattr(node, 'content') else str(node)
+            summary = getattr(node, 'summary', "") or ""
+            lines.append(f"[REFLECTION] {content}")
+            if summary:
+                lines.append(f"  — re: {summary}")
+            lines.append("")
+        return "\n".join(lines)
+
+    async def _get_relational_context(self, query: str) -> Optional[str]:
+        """
+        For relational mode: search conversation turns related to the query.
+        Selectively re-includes CONVERSATION_TURN nodes that are normally
+        excluded from retrieval.
+        """
+        matrix = self.get_actor("matrix")
+        if not matrix or not matrix.is_ready:
+            return None
+
+        try:
+            matrix_ops = matrix._matrix if hasattr(matrix, '_matrix') else None
+            if not matrix_ops:
+                return None
+            results = await matrix_ops.fts5_search(query, limit=10)
+            # Filter to conversation turns only
+            turn_results = [
+                (node, score) for node, score in results
+                if getattr(node, 'node_type', '') == 'CONVERSATION_TURN'
+            ][:3]
+            if not turn_results:
+                return None
+
+            lines = ["## Connected conversations\n"]
+            for node, _score in turn_results:
+                content = node.content if hasattr(node, 'content') else str(node)
+                lines.append(f"- {content[:300]}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"[RELATIONAL] Conversation search failed: {e}")
+            return None
+
+    async def _bridge_nexus_to_matrix(self) -> None:
+        """
+        Post-generation: Bridge high-confidence Nexus extractions to Memory Matrix.
+
+        Only bridges extractions that were actually retrieved and injected
+        into the generation context. Creates REFERENCE nodes with source attribution.
+        """
+        if not self._last_nexus_nodes:
+            return
+
+        matrix = self.get_actor("matrix")
+        if not matrix or not matrix.is_ready:
+            return
+
+        librarian = self.get_actor("librarian")
+
+        bridged = 0
+        for node in self._last_nexus_nodes:
+            content = node.get("content", "")
+            node_type = node.get("node_type", "CLAIM")
+            source = node.get("source", "nexus")
+            node_id = node.get("id", "")
+            confidence = node.get("confidence", 0.85)
+
+            # Only bridge substantive extractions
+            if node_type not in ("CLAIM", "SECTION_SUMMARY", "DOCUMENT_SUMMARY"):
+                continue
+
+            # Skip very short content
+            if len(content) < 30:
+                continue
+
+            # Check if this content already exists in Matrix (dedup)
+            try:
+                existing = await matrix.search(
+                    content[:60], limit=1, scopes=None,
+                )
+                if existing:
+                    existing_content = existing[0].get("content", "")
+                    if _content_overlap(content, existing_content) > 0.8:
+                        continue
+            except Exception:
+                pass
+
+            # Store via Librarian or direct matrix
+            try:
+                if librarian:
+                    await librarian.mailbox.put(Message(
+                        type="store_reference",
+                        payload={
+                            "content": content,
+                            "node_type": "REFERENCE",
+                            "source_collection": source,
+                            "source_extraction_id": node_id,
+                            "original_node_type": node_type,
+                            "confidence": confidence,
+                            "tags": ["nexus-bridge", source.replace("/", "-")],
+                        },
+                    ))
+                else:
+                    await matrix.store_memory(
+                        content=content,
+                        node_type="REFERENCE",
+                        tags=["nexus-bridge", source.replace("/", "-")],
+                        confidence=confidence,
+                        metadata={
+                            "source_collection": source,
+                            "source_extraction_id": node_id,
+                            "original_node_type": node_type,
+                        },
+                    )
+                bridged += 1
+            except Exception as e:
+                logger.warning(f"[NEXUS-BRIDGE] Failed to bridge node: {e}")
+
+        if bridged:
+            logger.info(f"[NEXUS-BRIDGE] Bridged {bridged} extractions to Memory Matrix")
+
+        # NOTE: Do NOT clear _last_nexus_nodes here — the generation_complete
+        # callback needs them for reflection write-back. They get overwritten
+        # naturally on the next query's _get_collection_context() call.
 
     # --- Original _get_dataroom_context body preserved for reference ---
     # AccessBridge permission logic (RE-INTEGRATE when identity layer is formalized):
@@ -1913,6 +2779,13 @@ Never use generic chatbot greetings like "How can I help you?" - just be natural
                     history_section += f"- [{role}]: {summary}\n"
                 history_section += "\nUse this naturally if relevant to the current question.\n"
                 base_prompt += history_section
+
+        # Add reflection mode grounding (if active)
+        if self._active_reflection_mode:
+            from luna.context.assembler import PromptAssembler
+            mode_grounding = PromptAssembler._REFLECTION_MODE_MAP.get(self._active_reflection_mode)
+            if mode_grounding:
+                base_prompt += f"\n{mode_grounding}\n"
 
         if memory_context:
             memory_section = f"""

@@ -19,6 +19,7 @@ Design rules:
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, TYPE_CHECKING
@@ -74,6 +75,7 @@ class SubtaskPhaseResult:
     intent: Optional[dict] = None           # From classify_intent
     entities: Optional[list] = None         # From extract_entities
     rewritten_query: Optional[str] = None   # From rewrite_query
+    decomposed_queries: Optional[list] = None  # From decompose_query
     total_latency_ms: float = 0.0
 
 
@@ -95,6 +97,11 @@ Context:
 
 Message: {message}"""
 
+DECOMPOSE_PROMPT = """Break this question into separate search queries that would each find different information. Return ONLY valid JSON on one line:
+{{"queries":["first search query","second search query"]}}
+If the question is simple and only needs one search, return {{"queries":["{message}"]}}
+Question: {message}"""
+
 
 # ─── Runner ───────────────────────────────────────────────────────────────────
 
@@ -110,7 +117,7 @@ class LocalSubtaskRunner:
     def __init__(
         self,
         local_inference: "LocalInference",
-        default_timeout_ms: int = 300,
+        default_timeout_ms: int = 2000,
     ):
         self._local = local_inference
         self._default_timeout_ms = default_timeout_ms
@@ -118,6 +125,7 @@ class LocalSubtaskRunner:
             "classify_intent": SubtaskStats(),
             "extract_entities": SubtaskStats(),
             "rewrite_query": SubtaskStats(),
+            "decompose_query": SubtaskStats(),
         }
 
     @property
@@ -232,7 +240,7 @@ class LocalSubtaskRunner:
     VALID_COMPLEXITIES = {"trivial", "simple", "moderate", "complex"}
 
     async def classify_intent(
-        self, message: str, timeout_ms: int = 250,
+        self, message: str, timeout_ms: int = 2000,
     ) -> SubtaskResult:
         """
         Classify user message intent semantically.
@@ -272,7 +280,7 @@ class LocalSubtaskRunner:
     VALID_ENTITY_TYPES = {"person", "project", "place", "concept", "date"}
 
     async def extract_entities(
-        self, message: str, timeout_ms: int = 300,
+        self, message: str, timeout_ms: int = 2000,
     ) -> SubtaskResult:
         """
         Extract named entities from a user message.
@@ -323,7 +331,7 @@ class LocalSubtaskRunner:
         self,
         message: str,
         recent_turns: list[str],
-        timeout_ms: int = 300,
+        timeout_ms: int = 2000,
     ) -> SubtaskResult:
         """
         Rewrite a query by resolving ambiguous references against
@@ -384,6 +392,81 @@ class LocalSubtaskRunner:
         self._stats["rewrite_query"].successes += 1
         return result
 
+    # ── Subtask: Query Decomposition ──────────────────────────────────────
+
+    async def decompose_query(
+        self, message: str, timeout_ms: int = 2000,
+    ) -> SubtaskResult:
+        """
+        Decompose a compound question into separate search queries.
+
+        First tries regex decomposition (free, instant).
+        Falls back to Qwen if regex returns a single query AND
+        the message looks compound (contains comparison/contrast words).
+        """
+        # Tier 1: Regex decomposition
+        regex_result = decompose_query_regex(message)
+        if len(regex_result) > 1:
+            return SubtaskResult(
+                success=True,
+                output={"queries": regex_result},
+                raw_text=str(regex_result),
+                latency_ms=0.0,
+                task_name="decompose_query",
+            )
+
+        # Tier 2: Does the message LOOK compound but regex missed it?
+        compound_signals = [
+            "compare", "contrast", "difference", "differ", "vs",
+            "versus", "similarities", "both", "each",
+            "on one hand", "on the other",
+        ]
+        msg_lower = message.lower()
+        looks_compound = any(signal in msg_lower for signal in compound_signals)
+
+        if not looks_compound:
+            # Simple question — no decomposition needed
+            return SubtaskResult(
+                success=True,
+                output={"queries": [message]},
+                raw_text=message,
+                latency_ms=0.0,
+                task_name="decompose_query",
+            )
+
+        # Tier 3: Qwen decomposition for complex compound questions
+        prompt = DECOMPOSE_PROMPT.format(message=message)
+        result = await self._run_with_timeout(
+            "decompose_query", prompt, max_tokens=120, timeout_ms=timeout_ms,
+        )
+        if not result.success:
+            # Fallback: return original as single query
+            return SubtaskResult(
+                success=True,
+                output={"queries": [message]},
+                raw_text=message,
+                latency_ms=result.latency_ms,
+                task_name="decompose_query",
+            )
+
+        parsed = self._parse_json(result.raw_text, "decompose_query")
+        if parsed and "queries" in parsed and isinstance(parsed["queries"], list):
+            queries = [q.strip() for q in parsed["queries"] if q.strip()]
+            if queries:
+                # Cap at 4 sub-queries to prevent context window explosion
+                result.output = {"queries": queries[:4]}
+                self._stats.setdefault("decompose_query", SubtaskStats()).successes += 1
+                return result
+
+        # Parse failed — return original
+        return SubtaskResult(
+            success=True,
+            output={"queries": [message]},
+            raw_text=message,
+            latency_ms=result.latency_ms,
+            task_name="decompose_query",
+        )
+
     # ── Parallel phase runner ─────────────────────────────────────────────
 
     async def run_subtask_phase(
@@ -399,17 +482,23 @@ class LocalSubtaskRunner:
         returns an empty result immediately.
         """
         if not self.is_available:
-            return SubtaskPhaseResult()
+            # Even without Qwen, try regex decomposition (it's free)
+            regex_queries = decompose_query_regex(message)
+            result = SubtaskPhaseResult()
+            if len(regex_queries) > 1:
+                result.decomposed_queries = regex_queries
+            return result
 
         start = time.perf_counter()
 
-        # Fire all subtasks concurrently
+        # Fire all subtasks concurrently — now includes decompose
         intent_task = self.classify_intent(message)
         entity_task = self.extract_entities(message)
         rewrite_task = self.rewrite_query(message, recent_turns or [])
+        decompose_task = self.decompose_query(message)
 
         results = await asyncio.gather(
-            intent_task, entity_task, rewrite_task,
+            intent_task, entity_task, rewrite_task, decompose_task,
             return_exceptions=True,
         )
 
@@ -421,6 +510,7 @@ class LocalSubtaskRunner:
         intent_result = results[0] if not isinstance(results[0], Exception) else None
         entity_result = results[1] if not isinstance(results[1], Exception) else None
         rewrite_result = results[2] if not isinstance(results[2], Exception) else None
+        decompose_result = results[3] if not isinstance(results[3], Exception) else None
 
         if intent_result and intent_result.success:
             phase.intent = intent_result.output
@@ -431,11 +521,112 @@ class LocalSubtaskRunner:
         if rewrite_result and rewrite_result.success and rewrite_result.output != message:
             phase.rewritten_query = rewrite_result.output
 
+        # Decomposed queries
+        if decompose_result and decompose_result.success:
+            queries = decompose_result.output.get("queries", [message])
+            if len(queries) > 1:
+                phase.decomposed_queries = queries
+
         logger.info(
             f"[SUBTASK-PHASE] Complete in {total_ms:.0f}ms: "
             f"intent={'yes' if phase.intent else 'no'} "
             f"entities={len(phase.entities) if phase.entities else 0} "
-            f"rewritten={'yes' if phase.rewritten_query else 'no'}"
+            f"rewritten={'yes' if phase.rewritten_query else 'no'} "
+            f"decomposed={len(phase.decomposed_queries) if phase.decomposed_queries else 1}"
         )
 
         return phase
+
+# ─── Query Decomposition Patterns ─────────────────────────────────────────
+
+# Patterns that indicate multi-part questions
+COMPARISON_PATTERNS = [
+    # "compare X to/with/and Y", "X vs Y", "X versus Y"
+    re.compile(
+        r"(?:compare|contrast|difference between)\s+(.+?)\s+(?:to|with|and|vs\.?|versus)\s+(.+)",
+        re.IGNORECASE,
+    ),
+    # "X vs Y" (standalone)
+    re.compile(
+        r"(.+?)\s+(?:vs\.?|versus)\s+(.+)",
+        re.IGNORECASE,
+    ),
+    # "how does X differ from Y" / "how is X different from Y"
+    re.compile(
+        r"how\s+(?:does|is|do|are)\s+(.+?)\s+(?:differ|different)\s+from\s+(.+)",
+        re.IGNORECASE,
+    ),
+]
+
+# Patterns for sequential multi-topic questions
+MULTI_TOPIC_PATTERNS = [
+    # "tell me about X and then Y" / "what about X and Y"
+    re.compile(
+        r"(?:tell me about|what about|explain)\s+(.+?)\s+(?:and then|and also|and)\s+(.+)",
+        re.IGNORECASE,
+    ),
+]
+
+# Chapter/section reference patterns
+CHAPTER_PATTERN = re.compile(
+    r"chapter\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)",
+    re.IGNORECASE,
+)
+
+CHAPTER_WORD_TO_NUM = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+}
+
+
+def decompose_query_regex(message: str) -> list:
+    """
+    Fast regex-based query decomposition.
+
+    Returns a list of sub-queries. If the message doesn't match
+    any decomposition pattern, returns [message] (single-element list).
+    """
+    # Check for chapter references first
+    chapter_matches = CHAPTER_PATTERN.findall(message)
+    if len(chapter_matches) >= 2:
+        # Multiple chapters referenced — generate per-chapter queries
+        queries = []
+        # Extract the base question (remove chapter refs)
+        base = CHAPTER_PATTERN.sub("", message).strip()
+        base = re.sub(r"\s+", " ", base)  # collapse whitespace
+        # Remove comparison words from base
+        base = re.sub(
+            r"^(compare|contrast|difference between|how does|how do|how is)\s*",
+            "", base, flags=re.IGNORECASE,
+        ).strip()
+        # Remove trailing connector words
+        base = re.sub(
+            r"\s*(to|with|and|vs\.?|versus|differ from|different from)\s*$",
+            "", base, flags=re.IGNORECASE,
+        ).strip()
+
+        for ch in chapter_matches:
+            ch_num = CHAPTER_WORD_TO_NUM.get(ch.lower(), ch)
+            queries.append(f"chapter {ch_num} {base}".strip())
+        return queries
+
+    # Check comparison patterns
+    for pattern in COMPARISON_PATTERNS:
+        match = pattern.search(message)
+        if match:
+            part_a = match.group(1).strip().rstrip(".,?!")
+            part_b = match.group(2).strip().rstrip(".,?!")
+            if part_a and part_b:
+                return [part_a, part_b]
+
+    # Check multi-topic patterns
+    for pattern in MULTI_TOPIC_PATTERNS:
+        match = pattern.search(message)
+        if match:
+            part_a = match.group(1).strip().rstrip(".,?!")
+            part_b = match.group(2).strip().rstrip(".,?!")
+            if part_a and part_b:
+                return [part_a, part_b]
+
+    # No decomposition needed
+    return [message]
