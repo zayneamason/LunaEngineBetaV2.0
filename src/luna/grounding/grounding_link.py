@@ -142,6 +142,12 @@ class GroundingLink:
                 if not node_content:
                     continue
                 score = self._similarity_token_overlap(sentence, node_content)
+                # Boost score for primary grounding sources (cartridges/collections)
+                gp = node.get("grounding_priority", "")
+                if gp == "primary":
+                    score = min(score * 1.3, 1.0)
+                elif gp == "background":
+                    score = score * 0.8
                 if score > best_score:
                     best_score = score
                     best_node = node
@@ -207,6 +213,11 @@ class GroundingLink:
                         if n_vec is None:
                             continue
                         score = self._cosine(s_vec, n_vec)
+                        gp = node.get("grounding_priority", "")
+                        if gp == "primary":
+                            score = min(score * 1.3, 1.0)
+                        elif gp == "background":
+                            score = score * 0.8
                         if score > best_score:
                             best_score = score
                             best_node = node

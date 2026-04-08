@@ -84,11 +84,16 @@ class MemoryNode:
             self.updated_at = datetime.now()
 
     @classmethod
-    def from_row(cls, row: Union[tuple, dict]) -> "MemoryNode":
-        """Create MemoryNode from database row (tuple or dict)."""
-        # Convert tuple to dict if needed
-        if isinstance(row, tuple):
-            row = row_to_dict(row, MEMORY_NODE_COLUMNS)
+    def from_row(cls, row) -> "MemoryNode":
+        """Create MemoryNode from database row (tuple, dict, or sqlite3.Row)."""
+        if row is None:
+            return None
+        # Convert non-dict to dict
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except (TypeError, ValueError):
+                row = row_to_dict(row, MEMORY_NODE_COLUMNS)
 
         if row is None:
             return None
@@ -172,11 +177,16 @@ class Turn:
             self.created_at = datetime.now()
 
     @classmethod
-    def from_row(cls, row: Union[tuple, dict]) -> "Turn":
-        """Create Turn from database row (tuple or dict)."""
-        # Convert tuple to dict if needed
-        if isinstance(row, tuple):
-            row = row_to_dict(row, TURN_COLUMNS)
+    def from_row(cls, row) -> "Turn":
+        """Create Turn from database row (tuple, dict, or sqlite3.Row)."""
+        if row is None:
+            return None
+        # Convert non-dict to dict
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except (TypeError, ValueError):
+                row = row_to_dict(row, TURN_COLUMNS)
 
         if row is None:
             return None

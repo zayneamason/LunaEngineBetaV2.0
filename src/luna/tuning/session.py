@@ -112,6 +112,7 @@ class TuningSessionManager:
         import aiosqlite
 
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS tuning_sessions (
                     session_id TEXT PRIMARY KEY,
@@ -181,6 +182,7 @@ class TuningSessionManager:
         # Persist to database
         import aiosqlite
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             await db.execute("""
                 INSERT INTO tuning_sessions
                 (session_id, focus, started_at, notes, base_params)
@@ -241,6 +243,7 @@ class TuningSessionManager:
         # Persist to database
         import aiosqlite
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             await db.execute("""
                 INSERT INTO tuning_iterations
                 (session_id, iteration_num, params_changed, param_snapshot, eval_results, score, notes, created_at)
@@ -281,6 +284,7 @@ class TuningSessionManager:
 
         import aiosqlite
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             await db.execute("""
                 UPDATE tuning_sessions
                 SET ended_at = ?
@@ -307,6 +311,7 @@ class TuningSessionManager:
 
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
 
             # Get session
             cursor = await db.execute("""
@@ -355,6 +360,7 @@ class TuningSessionManager:
 
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute("""
                 SELECT session_id, focus, started_at, ended_at, best_score,
                        (SELECT COUNT(*) FROM tuning_iterations WHERE session_id = s.session_id) as iterations

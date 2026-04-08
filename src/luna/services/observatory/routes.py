@@ -96,6 +96,7 @@ DB_PATH = user_dir() / "luna_engine.db"
 async def _readonly_db():
     db = await aiosqlite.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA busy_timeout=15000")
     try:
         yield db
     finally:
@@ -243,11 +244,27 @@ async def zoom_galaxy(
     limit: int = Query(200),
 ):
     if not DB_PATH.exists():
-        return {"nodes": [], "edges": []}
+        return {"nodes": [], "edges": [], "focus_cluster": None}
     try:
         async with _readonly_db() as db:
+            # Fetch cluster metadata for the label/breadcrumb
+            focus_cluster = None
+            try:
+                cursor = await db.execute(
+                    "SELECT cluster_id, name, summary, lock_in, state, "
+                    "member_count, avg_node_lock_in FROM clusters "
+                    "WHERE cluster_id = ?",
+                    (cluster_id,),
+                )
+                row = await cursor.fetchone()
+                if row:
+                    focus_cluster = dict(row)
+                    focus_cluster["label"] = focus_cluster.get("name") or cluster_id
+            except Exception:
+                pass  # clusters table may not exist
+
             cursor = await db.execute(
-                "SELECT mn.id, mn.node_type, mn.content, mn.lock_in "
+                "SELECT mn.id, mn.node_type AS type, mn.content, mn.lock_in "
                 "FROM cluster_members cm "
                 "JOIN memory_nodes mn ON cm.node_id = mn.id "
                 "WHERE cm.cluster_id = ? "
@@ -267,34 +284,70 @@ async def zoom_galaxy(
                 edges = [dict(r) for r in await cursor.fetchall()]
             else:
                 edges = []
-        return {"nodes": nodes, "edges": edges}
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "focus_cluster": focus_cluster or {"label": cluster_id},
+        }
     except Exception:
-        return {"nodes": [], "edges": []}
+        return {"nodes": [], "edges": [], "focus_cluster": {"label": cluster_id}}
 
 
 @router.get("/api/zoom/solarsystem")
 async def zoom_solarsystem(node_id: str = Query(...)):
     if not DB_PATH.exists():
-        return {"node": None, "edges": [], "neighbors": []}
+        return {"focus_node": None, "edges": [], "neighbors": []}
     async with _readonly_db() as db:
         cursor = await db.execute(
-            "SELECT * FROM memory_nodes WHERE id = ?", (node_id,)
+            "SELECT id, node_type, content, lock_in, lock_in_state, scope, "
+            "metadata, created_at FROM memory_nodes WHERE id = ?",
+            (node_id,),
         )
         node_row = await cursor.fetchone()
         if not node_row:
-            return {"node": None, "edges": [], "neighbors": []}
+            return {"focus_node": None, "edges": [], "neighbors": []}
+        focus_node = dict(node_row)
+        # Normalize type field for frontend
+        focus_node["type"] = focus_node.pop("node_type", "OBSERVATION")
+
         cursor = await db.execute(
             "SELECT ge.from_id, ge.to_id, ge.relationship, ge.strength, "
-            "mn.node_type AS neighbor_type, mn.content AS neighbor_content, "
-            "mn.lock_in AS neighbor_lock_in "
+            "mn.id AS neighbor_id, mn.node_type AS neighbor_type, "
+            "mn.content AS neighbor_content, mn.lock_in AS neighbor_lock_in, "
+            "mn.lock_in_state AS neighbor_lock_in_state "
             "FROM graph_edges ge "
             "JOIN memory_nodes mn ON "
             "  (CASE WHEN ge.from_id = ? THEN ge.to_id ELSE ge.from_id END) = mn.id "
             "WHERE ge.from_id = ? OR ge.to_id = ?",
             (node_id, node_id, node_id),
         )
-        edges = [dict(r) for r in await cursor.fetchall()]
-    return {"node": dict(node_row), "edges": edges}
+        raw_edges = await cursor.fetchall()
+
+        # Build deduplicated neighbors list and clean edge list
+        seen_neighbors: dict = {}
+        edges = []
+        for r in raw_edges:
+            edges.append({
+                "from_id": r["from_id"],
+                "to_id": r["to_id"],
+                "relationship": r["relationship"],
+                "strength": r["strength"] or 0.5,
+            })
+            nid = r["neighbor_id"]
+            if nid not in seen_neighbors:
+                seen_neighbors[nid] = {
+                    "id": nid,
+                    "type": r["neighbor_type"],
+                    "content": (r["neighbor_content"] or "")[:200],
+                    "lock_in": r["neighbor_lock_in"] or 0,
+                    "lock_in_state": r["neighbor_lock_in_state"] or "drifting",
+                }
+
+    return {
+        "focus_node": focus_node,
+        "neighbors": list(seen_neighbors.values()),
+        "edges": edges,
+    }
 
 
 @router.get("/api/threads")

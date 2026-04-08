@@ -180,12 +180,13 @@ const ObservatoryGlobe = forwardRef(function ObservatoryGlobe({
       const pos = positions[i]
       const color = getClusterColor(c, i)
       const rgb = hexToRgb(color)
-      const nodeCount = c.node_count || 1
+      const cid = c.id || c.cluster_id
+      const nodeCount = c.member_count || c.node_count || 1
       const lockIn = c.lock_in || c.avg_lock_in || 0
       const size = Math.max(3, Math.sqrt(nodeCount) * 3)
       return {
-        id: c.id,
-        label: c.label || c.id,
+        id: cid,
+        label: c.label || c.name || cid,
         nodeCount,
         lockIn,
         state: c.state || 'drifting',
@@ -592,8 +593,8 @@ const ObservatoryGlobe = forwardRef(function ObservatoryGlobe({
     }
 
     const onClick = (e) => {
-      if (s.hoveredId && onClusterClick) {
-        onClusterClick(s.hoveredId)
+      if (onClusterClick) {
+        onClusterClick(s.hoveredId || null)
       }
     }
 

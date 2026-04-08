@@ -97,6 +97,10 @@ class ClaudeProvider:
                     "content": msg.content,
                 })
 
+        # Anthropic SDK >=0.76 requires system as list of content blocks
+        if isinstance(system, str):
+            system = [{"type": "text", "text": system}]
+
         return system, anthropic_messages
 
     async def complete(

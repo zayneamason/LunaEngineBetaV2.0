@@ -172,7 +172,7 @@ export const useObservatoryStore = create((set, get) => ({
       }
       set({ focusNodeId: null, solarSystemData: null })
     } else if (zoomLevel === 'galaxy') {
-      set({ zoomLevel: 'universe', focusClusterId: null, galaxyData: null })
+      set({ zoomLevel: 'universe', focusClusterId: null, galaxyData: null, selectedNodeId: null })
     }
   },
 

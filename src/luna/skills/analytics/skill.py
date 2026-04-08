@@ -84,6 +84,7 @@ class AnalyticsSkill(Skill):
 
         try:
             conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
             cursor.execute(spec["sql"])
             rows = cursor.fetchall()

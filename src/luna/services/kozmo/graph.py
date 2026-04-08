@@ -348,6 +348,7 @@ class ProjectGraph:
             raise ValueError("No database path specified")
 
         conn = sqlite3.connect(str(path))
+        conn.execute("PRAGMA busy_timeout=15000")
         try:
             conn.execute("DROP TABLE IF EXISTS graph_nodes")
             conn.execute("DROP TABLE IF EXISTS graph_edges")
@@ -392,6 +393,7 @@ class ProjectGraph:
             return
 
         conn = sqlite3.connect(str(self._db_path))
+        conn.execute("PRAGMA busy_timeout=15000")
         try:
             # Check if tables exist
             cursor = conn.execute(

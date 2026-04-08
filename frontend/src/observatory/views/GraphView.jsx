@@ -133,15 +133,38 @@ export default function GraphView({ navigateTab }) {
     return buildSolarSystemGraphData(solarSystemData)
   }, [zoomLevel, solarSystemData])
 
-  // Selected node detail (for solar system NodeCard)
+  // Selected node/cluster detail (for NodeCard at any zoom level)
   const selectedNode = useMemo(() => {
     if (!selectedNodeId) return null
     if (zoomLevel === 'solarsystem') {
       const inGraph = solarGraphData.nodes.find(n => n.id === selectedNodeId)
       if (inGraph) return inGraph
     }
+    if (zoomLevel === 'galaxy' && galaxyData) {
+      // Check flat nodes list
+      const flat = (galaxyData.nodes || []).find(n => n.id === selectedNodeId)
+      if (flat) return flat
+      // Check inside sub_groups
+      for (const sg of (galaxyData.sub_groups || [])) {
+        const found = (sg.nodes || []).find(n => n.id === selectedNodeId)
+        if (found) return found
+      }
+    }
+    if (zoomLevel === 'universe' && universeData) {
+      const cluster = (universeData.clusters || []).find(
+        c => (c.id || c.cluster_id) === selectedNodeId
+      )
+      if (cluster) return {
+        ...cluster,
+        _isCluster: true,
+        id: cluster.id || cluster.cluster_id,
+        type: 'CLUSTER',
+        content: cluster.summary || cluster.name || cluster.label || '',
+        lock_in: cluster.lock_in || cluster.avg_node_lock_in || 0,
+      }
+    }
     return nodes.find(n => n.id === selectedNodeId) || null
-  }, [solarGraphData.nodes, nodes, selectedNodeId, zoomLevel])
+  }, [solarGraphData.nodes, nodes, galaxyData, universeData, selectedNodeId, zoomLevel])
 
   // ── Force settings for solar system ──────────────
   useEffect(() => {
@@ -184,15 +207,15 @@ export default function GraphView({ navigateTab }) {
     return () => clearTimeout(timer)
   }, [zoomLevel, solarGraphData.nodes.length])
 
-  // ── Globe: cluster click ──────────────────────────
+  // ── Globe: cluster click → show card ───────────────
   const handleClusterClick = useCallback((clusterId) => {
-    drillDown('cluster', clusterId)
-  }, [drillDown])
+    selectNode(clusterId) // null dismisses
+  }, [selectNode])
 
-  // ── Galaxy: node click → solar system ─────────────
+  // ── Galaxy: node click → show card ────────────────
   const handleGalaxyNodeClick = useCallback((nodeId) => {
-    drillDown('node', nodeId)
-  }, [drillDown])
+    selectNode(nodeId) // null dismisses
+  }, [selectNode])
 
   // ── Solar system: node click ──────────────────────
   const handleSolarNodeClick = useCallback((node) => {
@@ -521,9 +544,9 @@ export default function GraphView({ navigateTab }) {
         position: 'absolute', bottom: 60, left: 16, zIndex: 2,
         color: '#333', fontSize: 9, lineHeight: 1.5, pointerEvents: 'none',
       }}>
-        {zoomLevel === 'universe' && 'CLICK or PINCH-IN on cluster to drill into galaxy view  ·  SCROLL to zoom'}
-        {zoomLevel === 'galaxy' && 'CLICK or PINCH-IN on node to drill into solar system  ·  PINCH-OUT to go back'}
-        {zoomLevel === 'solarsystem' && 'RIGHT-CLICK a neighbor to refocus'}
+        {zoomLevel === 'universe' && 'CLICK cluster to inspect  ·  PINCH-IN to drill into galaxy  ·  SCROLL to zoom'}
+        {zoomLevel === 'galaxy' && 'CLICK node to inspect  ·  PINCH-IN to drill into solar system  ·  PINCH-OUT to go back'}
+        {zoomLevel === 'solarsystem' && 'CLICK node to inspect  ·  RIGHT-CLICK a neighbor to refocus'}
       </div>
 
       {/* Legend */}
@@ -571,13 +594,73 @@ export default function GraphView({ navigateTab }) {
         </div>
       )}
 
-      {/* Node detail card (solar system only) */}
-      {selectedNode && !selectedNode._isCluster && zoomLevel === 'solarsystem' && (
+      {/* Node / cluster detail card (all zoom levels) */}
+      {selectedNode && (
         <div style={{
-          position: 'absolute', top: 12, right: 12, zIndex: 2,
+          position: 'absolute', top: 12, right: 12, zIndex: 10,
           width: 320, maxHeight: 'calc(100% - 24px)', overflow: 'auto',
         }}>
-          <NodeCard node={selectedNode} onClose={() => selectNode(null)} />
+          {selectedNode._isCluster ? (
+            /* Cluster card for universe view */
+            <div style={{
+              background: '#0a0a14', border: '1px solid #1a1a2e',
+              borderRadius: 6, padding: 16, boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                <div>
+                  <div style={{ color: '#22d3ee', fontSize: 10, letterSpacing: 1, marginBottom: 2 }}>CLUSTER</div>
+                  <div style={{ color: '#ddd', fontSize: 14, fontWeight: 600 }}>
+                    {selectedNode.name || selectedNode.label || selectedNode.id}
+                  </div>
+                </div>
+                <button onClick={() => selectNode(null)} style={{
+                  background: 'none', border: 'none', color: '#555', cursor: 'pointer',
+                  fontSize: 16, padding: '0 4px',
+                }}>x</button>
+              </div>
+              {selectedNode.summary && (
+                <div style={{ color: '#999', fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
+                  {selectedNode.summary}
+                </div>
+              )}
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
+                fontSize: 11, color: '#666', marginBottom: 14,
+              }}>
+                <div>Nodes: <span style={{ color: '#888' }}>{selectedNode.member_count || selectedNode.node_count || 0}</span></div>
+                <div>Lock-in: <span style={{ color: '#888' }}>{((selectedNode.lock_in || 0) * 100).toFixed(0)}%</span></div>
+                <div>State: <span style={{ color: '#888' }}>{selectedNode.state || 'unknown'}</span></div>
+                <div>Avg LI: <span style={{ color: '#888' }}>{((selectedNode.avg_node_lock_in || 0) * 100).toFixed(0)}%</span></div>
+              </div>
+              <button
+                onClick={() => { selectNode(null); drillDown('cluster', selectedNodeId) }}
+                style={{
+                  width: '100%', padding: '8px 0', background: '#1a1a2e',
+                  border: '1px solid #2a2a3e', borderRadius: 4, color: '#7dd3fc',
+                  cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+                }}
+              >
+                EXPLORE CLUSTER
+              </button>
+            </div>
+          ) : (
+            /* Node card for galaxy + solar system */
+            <>
+              <NodeCard node={selectedNode} onClose={() => selectNode(null)} />
+              {zoomLevel === 'galaxy' && (
+                <button
+                  onClick={() => { selectNode(null); drillDown('node', selectedNodeId) }}
+                  style={{
+                    width: '100%', marginTop: 8, padding: '8px 0', background: '#1a1a2e',
+                    border: '1px solid #2a2a3e', borderRadius: 4, color: '#7dd3fc',
+                    cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+                  }}
+                >
+                  VIEW CONNECTIONS
+                </button>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

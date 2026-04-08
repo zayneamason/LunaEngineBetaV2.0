@@ -172,6 +172,9 @@ class LibrarianActor(Actor):
             case "get_parked_threads":
                 await self._handle_get_parked_threads(msg)
 
+            case "store_reference":
+                await self._handle_store_reference(msg)
+
             case _:
                 logger.warning(f"The Dude: Unknown message type: {msg.type}")
 
@@ -1841,6 +1844,51 @@ class LibrarianActor(Actor):
         await self.send_to_engine("parked_threads", {"threads": parked})
 
     # =========================================================================
+    async def _handle_store_reference(self, msg: Message) -> None:
+        """
+        Store a REFERENCE node bridged from Nexus.
+
+        These are document-sourced facts that Luna used in a response.
+        They get stored with source attribution so Luna can recall them
+        in future sessions without re-searching Nexus.
+        """
+        payload = msg.payload or {}
+        content = payload.get("content", "")
+        source_collection = payload.get("source_collection", "")
+        source_extraction_id = payload.get("source_extraction_id", "")
+        original_node_type = payload.get("original_node_type", "")
+        confidence = payload.get("confidence", 0.85)
+        tags = payload.get("tags", [])
+
+        if not content:
+            return
+
+        matrix = await self._get_matrix()
+        if not matrix:
+            return
+
+        try:
+            metadata = {
+                "source": "nexus-bridge",
+                "source_collection": source_collection,
+                "source_extraction_id": source_extraction_id,
+                "original_node_type": original_node_type,
+                "tags": tags,
+            }
+            await matrix.add_node(
+                node_type="REFERENCE",
+                content=content,
+                source=source_collection,
+                confidence=confidence,
+                metadata=metadata,
+            )
+            logger.info(
+                f"[LIBRARIAN] Stored REFERENCE from {source_collection}: "
+                f"{content[:60]}..."
+            )
+        except Exception as e:
+            logger.warning(f"[LIBRARIAN] Failed to store reference: {e}")
+
     # HELPERS
     # =========================================================================
 

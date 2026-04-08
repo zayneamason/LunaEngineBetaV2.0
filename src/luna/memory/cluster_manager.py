@@ -128,6 +128,7 @@ class ClusterManager:
     def _get_conn(self) -> sqlite3.Connection:
         """Get database connection with row factory."""
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA busy_timeout=15000")
         conn.row_factory = sqlite3.Row
         return conn
 

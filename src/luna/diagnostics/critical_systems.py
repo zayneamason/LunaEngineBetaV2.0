@@ -106,6 +106,7 @@ class CriticalSystemsCheck:
 
         try:
             conn = sqlite3.connect(str(full_path))
+            conn.execute("PRAGMA busy_timeout=15000")
             count = conn.execute(query).fetchone()[0]
             conn.close()
 
@@ -167,6 +168,7 @@ class CriticalSystemsCheck:
         if not _first_boot:
             try:
                 _conn = sqlite3.connect(str(_db_path))
+                _conn.execute("PRAGMA busy_timeout=15000")
                 _turns = _conn.execute("SELECT COUNT(*) FROM conversation_turns").fetchone()[0]
                 _conn.close()
                 _first_boot = _turns == 0

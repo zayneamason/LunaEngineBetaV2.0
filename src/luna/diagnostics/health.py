@@ -80,6 +80,7 @@ class HealthChecker:
                 )
 
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             # Check tables exist
@@ -134,6 +135,7 @@ class HealthChecker:
         """Check if extraction is creating nodes."""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             # Check nodes created in last hour
@@ -201,6 +203,7 @@ class HealthChecker:
         """Check if retrieval is working."""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             # Test basic query performance
@@ -267,6 +270,7 @@ class HealthChecker:
         """Check Memory Matrix state and node distribution."""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             # Node type distribution
@@ -334,6 +338,7 @@ class HealthChecker:
         """Check session recording."""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             # Total sessions
@@ -401,6 +406,7 @@ class HealthChecker:
         """Check entity/profile system health."""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             # Count entities by type
@@ -482,6 +488,7 @@ class HealthChecker:
 
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             # 1. Direct entity lookup
@@ -584,6 +591,7 @@ class HealthChecker:
         """Get summary of recent database activity."""
         try:
             conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             cursor = conn.cursor()
 
             activity = {

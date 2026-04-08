@@ -136,6 +136,7 @@ class LunaWatchdog:
 
         try:
             conn = sqlite3.connect(str(db_path))
+            conn.execute("PRAGMA busy_timeout=15000")
 
             # Check node count
             nodes = conn.execute("SELECT COUNT(*) FROM memory_nodes").fetchone()[0]

@@ -178,6 +178,7 @@ async def fetch_guardian_history(engine, limit: int = 20) -> list[dict]:
 
         async with aiosqlite.connect(str(db_path)) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute(
                 """
                 SELECT role, content FROM conversation_turns

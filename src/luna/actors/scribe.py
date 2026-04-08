@@ -174,6 +174,7 @@ class ScribeActor(Actor):
         self._max_history = 20
 
         # Flow tracking state (Layer 2)
+        self.is_ready: bool = True
         self._current_topic: str = ""
         self._current_entities: set[str] = set()
         self._recent_entities: deque[set[str]] = deque(maxlen=5)

@@ -1321,6 +1321,7 @@ async def guardian_chat_stream(request: MessageRequest):
                 meta = json.dumps({"source": "guardian"})
 
                 async with aiosqlite.connect(str(db_path)) as db:
+                    await db.execute("PRAGMA busy_timeout=15000")
                     await db.execute(
                         "INSERT OR IGNORE INTO conversation_turns "
                         "(session_id, role, content, tokens, created_at, metadata) "
@@ -1747,6 +1748,7 @@ async def check_first_run():
         try:
             import aiosqlite
             async with aiosqlite.connect(str(db_path)) as db:
+                await db.execute("PRAGMA busy_timeout=15000")
                 row = await db.execute_fetchall(
                     "SELECT COUNT(*) FROM conversation_turns"
                 )
@@ -1812,6 +1814,7 @@ async def set_owner(data: dict):
     try:
         if db_path.exists():
             async with aiosqlite.connect(str(db_path)) as db:
+                await db.execute("PRAGMA busy_timeout=15000")
                 await db.execute(
                     """INSERT OR IGNORE INTO entities
                        (id, name, entity_type, core_facts, aliases, created_at, updated_at)
@@ -2182,6 +2185,7 @@ async def get_history(limit: int = 50):
 
         async with aiosqlite.connect(str(db_path)) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute("""
                 SELECT role, content, created_at
                 FROM conversation_turns
@@ -2223,6 +2227,7 @@ async def history_timeline():
 
         async with aiosqlite.connect(str(db_path)) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute(
                 "SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS count "
                 "FROM conversation_turns "
@@ -2335,6 +2340,20 @@ async def stream_message(request: MessageRequest):
                 memory_context = await matrix.get_context(request.message, max_tokens=1500)
                 if _constellation_ctx:
                     memory_context = _constellation_ctx + ("\n\n" + memory_context if memory_context else "")
+
+                # ── Phase 2: Nexus collection context (mirrors /message path) ──
+                try:
+                    collection_context = await _engine._get_collection_context(
+                        request.message
+                    )
+                    if collection_context:
+                        memory_context = (memory_context or "") + "\n\n" + collection_context
+                        logger.info(
+                            f"[STREAM] Nexus context injected: "
+                            f"{len(collection_context)} chars"
+                        )
+                except Exception as e:
+                    logger.warning(f"[STREAM] collection context failed: {e}")
 
             # Record user turn through unified API (extraction + history + matrix)
             await _engine.record_conversation_turn(
@@ -2537,6 +2556,15 @@ async def persona_stream(request: MessageRequest):
             else:
                 logger.info("[STREAM] Search chain returned no results")
 
+            # ── Nexus collection context (mirrors /stream path) ──
+            try:
+                collection_context = await _engine._get_collection_context(request.message)
+                if collection_context:
+                    memory_context = (memory_context or "") + "\n\n" + collection_context
+                    logger.info(f"[PERSONA-STREAM] Nexus context injected: {len(collection_context)} chars")
+            except Exception as _col_err:
+                logger.warning(f"[PERSONA-STREAM] collection context failed: {_col_err}")
+
             # Prepend constellations before general search results
             if constellation_prefix:
                 memory_context = constellation_prefix + ("\n\n" + memory_context if memory_context else "")
@@ -2619,6 +2647,15 @@ async def persona_stream(request: MessageRequest):
                         )
                     else:
                         await _engine._emit_progress("[OK] No knowledge found, proceeding without")
+
+                    # ── Nexus collection context for planned queries ──
+                    try:
+                        _plan_col_ctx = await _engine._get_collection_context(request.message)
+                        if _plan_col_ctx:
+                            memory_context = (memory_context or "") + "\n\n" + _plan_col_ctx
+                            logger.info(f"[PERSONA-STREAM] Planned Nexus context: {len(_plan_col_ctx)} chars")
+                    except Exception as _pcol_err:
+                        logger.warning(f"[PERSONA-STREAM] planned collection context failed: {_pcol_err}")
 
                 # OBSERVE phase 2
                 await _engine._emit_progress("[OBSERVE] Gathering context... (2/2)")
@@ -3606,6 +3643,38 @@ async def memory_smart_fetch(request: SmartFetchRequest):
             }
             for n in nodes
         ]
+
+        # ── Also search Nexus collections ──────────────────────────
+        if _engine and hasattr(_engine, 'aibrarian') and _engine.aibrarian:
+            aibrarian = _engine.aibrarian
+            for key, conn in aibrarian.connections.items():
+                cfg = aibrarian.registry.collections.get(key)
+                if not cfg or not cfg.enabled:
+                    continue
+                try:
+                    from luna.substrate.aibrarian_engine import AiBrarianEngine
+                    fts_query = AiBrarianEngine._sanitize_fts_query(request.query)
+                    ext_rows = conn.conn.execute(
+                        "SELECT e.node_type, e.content, e.confidence "
+                        "FROM extractions_fts "
+                        "JOIN extractions e ON extractions_fts.rowid = e.rowid "
+                        "WHERE extractions_fts MATCH ? "
+                        "ORDER BY e.confidence DESC "
+                        "LIMIT 10",
+                        (fts_query,),
+                    ).fetchall()
+                    for row in ext_rows:
+                        results.append({
+                            "id": f"nexus:{key}:{row[0]}:{len(results)}",
+                            "node_type": row[0],
+                            "content": row[1],
+                            "confidence": row[2] if len(row) > 2 else 0.85,
+                            "lock_in": 0.5,
+                            "lock_in_state": "fluid",
+                            "source": f"nexus/{key}",
+                        })
+                except Exception as e:
+                    logger.warning(f"Smart-fetch Nexus search for {key}: {e}")
 
         # Permission gate: strip DOCUMENT nodes the speaker can't see
         pre_gate_count = len(results)
@@ -5898,6 +5967,7 @@ async def get_cluster_detail(cluster_id: str):
             # Get node info from database
             import sqlite3
             conn = sqlite3.connect(db_path)
+            conn.execute("PRAGMA busy_timeout=15000")
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("""

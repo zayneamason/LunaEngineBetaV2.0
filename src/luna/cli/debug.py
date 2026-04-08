@@ -289,6 +289,7 @@ def cmd_search(args):
     db_path = args.db or str(HealthChecker.DEFAULT_DB_PATH)
 
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA busy_timeout=15000")
     cursor = conn.cursor()
 
     # Search memory nodes

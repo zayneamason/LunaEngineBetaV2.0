@@ -639,14 +639,16 @@ class HistoryManagerActor(Actor):
         Called on every cognitive loop cycle (~500ms-1s).
         Processes one compression and one extraction per tick.
         """
-        # Process one compression per tick
-        await self._process_compression_queue()
-
-        # Process one extraction per tick
-        await self._process_extraction_queue()
-
-        # Check for archivable turns (older than threshold)
-        await self._check_archivable_turns()
+        # Guard: skip if previous tick is still running
+        if getattr(self, '_tick_in_progress', False):
+            return
+        self._tick_in_progress = True
+        try:
+            await self._process_compression_queue()
+            await self._process_extraction_queue()
+            await self._check_archivable_turns()
+        finally:
+            self._tick_in_progress = False
 
     async def _process_compression_queue(self) -> None:
         """Process one pending compression per tick."""
@@ -669,49 +671,41 @@ class HistoryManagerActor(Actor):
 
         queue_id, turn_id, content, role = row
 
-        # Mark as processing
+        # Mark as processing (quick write, releases immediately)
         await matrix.db.execute(
             "UPDATE compression_queue SET status = 'processing' WHERE id = ?",
             (queue_id,)
         )
 
+        # Fire compression as background task — DO NOT await
+        import asyncio
+        asyncio.create_task(
+            self._do_compression(queue_id, turn_id, content, role)
+        )
+
+    async def _do_compression(self, queue_id, turn_id, content, role):
+        """Background: compress a turn and write result. Not called inside tick."""
         try:
-            # Get Scribe actor for compression
+            matrix = await self._get_matrix()
+            if not matrix:
+                return
+
+            compressed = content[:200] + "..."  # fallback
+
             if self.engine:
                 scribe = self.engine.get_actor("scribe")
                 if scribe and hasattr(scribe, "compress_turn"):
                     compressed = await scribe.compress_turn(content, role)
 
-                    # Update the turn with compressed text
-                    await matrix.db.execute(
-                        """UPDATE conversation_turns
-                           SET compressed = ?, compressed_at = ?
-                           WHERE id = ?""",
-                        (compressed, time.time(), turn_id)
-                    )
-
-                    # Generate embedding for semantic search
-                    await self._generate_turn_embedding(turn_id, compressed, matrix)
-
-                    # Mark compression complete
-                    await matrix.db.execute(
-                        """UPDATE compression_queue
-                           SET status = 'completed', processed_at = ?
-                           WHERE id = ?""",
-                        (time.time(), queue_id)
-                    )
-
-                    logger.debug(f"HistoryManager: Compressed turn {turn_id}")
-                    return
-
-            # No Scribe available - fallback to simple truncation
-            compressed = content[:200] + "..." if len(content) > 200 else content
             await matrix.db.execute(
                 """UPDATE conversation_turns
                    SET compressed = ?, compressed_at = ?
                    WHERE id = ?""",
                 (compressed, time.time(), turn_id)
             )
+
+            await self._generate_turn_embedding(turn_id, compressed, matrix)
+
             await matrix.db.execute(
                 """UPDATE compression_queue
                    SET status = 'completed', processed_at = ?
@@ -719,12 +713,19 @@ class HistoryManagerActor(Actor):
                 (time.time(), queue_id)
             )
 
+            logger.debug(f"HistoryManager: Compressed turn {turn_id}")
+
         except Exception as e:
-            logger.error(f"HistoryManager: Compression failed for turn {turn_id}: {e}")
-            await matrix.db.execute(
-                "UPDATE compression_queue SET status = 'failed' WHERE id = ?",
-                (queue_id,)
-            )
+            logger.error(f"HistoryManager: Background compression failed: {e}")
+            try:
+                matrix = await self._get_matrix()
+                if matrix:
+                    await matrix.db.execute(
+                        "UPDATE compression_queue SET status = 'failed' WHERE id = ?",
+                        (queue_id,)
+                    )
+            except Exception:
+                pass
 
     async def _process_extraction_queue(self) -> None:
         """Process one pending extraction per tick."""

@@ -95,6 +95,9 @@ class MemoryDatabase:
         # Enable WAL mode for concurrent access
         await self._connection.execute("PRAGMA journal_mode=WAL")
 
+        # Set busy timeout (5 seconds) to handle concurrent writes
+        await self._connection.execute("PRAGMA busy_timeout=15000")
+
         # Enable foreign keys
         await self._connection.execute("PRAGMA foreign_keys=ON")
 

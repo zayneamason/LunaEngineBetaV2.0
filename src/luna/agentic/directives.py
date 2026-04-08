@@ -45,6 +45,7 @@ class DirectiveEngine:
         """Load all armed directives from quests table."""
         async with aiosqlite.connect(str(self.db_path)) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute(
                 "SELECT * FROM quests WHERE type='directive' AND status='armed' "
                 "ORDER BY priority DESC LIMIT ?",
@@ -205,6 +206,7 @@ class DirectiveEngine:
             try:
                 async with aiosqlite.connect(str(self.db_path)) as db:
                     db.row_factory = aiosqlite.Row
+                    await db.execute("PRAGMA busy_timeout=15000")
                     cursor = await db.execute(
                         "SELECT content FROM memory_nodes "
                         "WHERE node_type = 'THREAD' "
@@ -310,6 +312,7 @@ class DirectiveEngine:
         """Find and execute a skill by name."""
         async with aiosqlite.connect(str(self.db_path)) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute(
                 "SELECT * FROM quests WHERE type='skill' "
                 "AND title LIKE ? AND status='available'",
@@ -342,6 +345,7 @@ class DirectiveEngine:
         """Get a skill quest by name."""
         async with aiosqlite.connect(str(self.db_path)) as db:
             db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute(
                 "SELECT * FROM quests WHERE type='skill' "
                 "AND title LIKE ? AND status='available'",
@@ -357,6 +361,7 @@ class DirectiveEngine:
     async def _record_fire(self, quest_id: str) -> None:
         """Update fire count and timestamp."""
         async with aiosqlite.connect(str(self.db_path)) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             await db.execute(
                 "UPDATE quests SET fire_count = COALESCE(fire_count, 0) + 1, "
                 "last_fired_at = datetime('now'), status = 'fired', "
@@ -368,6 +373,7 @@ class DirectiveEngine:
     async def _record_invocation(self, quest_id: str) -> None:
         """Update invocation count and timestamp."""
         async with aiosqlite.connect(str(self.db_path)) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             await db.execute(
                 "UPDATE quests SET invocation_count = COALESCE(invocation_count, 0) + 1, "
                 "last_invoked_at = datetime('now'), "
@@ -391,6 +397,7 @@ class DirectiveEngine:
         created = {"directives": 0, "skills": 0, "skipped": 0}
 
         async with aiosqlite.connect(str(self.db_path)) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             for seed in config.get("seed_directives", []):
                 exists = await db.execute(
                     "SELECT 1 FROM quests WHERE id = ?", (seed["id"],)
@@ -464,6 +471,7 @@ class DirectiveEngine:
     async def disable_all(self) -> int:
         """Emergency kill: disable all directives."""
         async with aiosqlite.connect(str(self.db_path)) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute(
                 "UPDATE quests SET status = 'disabled', updated_at = datetime('now') "
                 "WHERE type = 'directive' AND status IN ('armed', 'fired')"
@@ -477,6 +485,7 @@ class DirectiveEngine:
     async def rearm_fired(self) -> int:
         """Re-arm all fired directives (call at session start)."""
         async with aiosqlite.connect(str(self.db_path)) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             cursor = await db.execute(
                 "UPDATE quests SET status = 'armed', updated_at = datetime('now') "
                 "WHERE type = 'directive' AND status = 'fired'"

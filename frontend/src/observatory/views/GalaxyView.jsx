@@ -623,8 +623,8 @@ const GalaxyView = forwardRef(function GalaxyView({
     }
 
     const onClick = () => {
-      if (s.hoveredNodeId && onNodeClick) {
-        onNodeClick(s.hoveredNodeId)
+      if (onNodeClick) {
+        onNodeClick(s.hoveredNodeId || null)
       }
     }
 

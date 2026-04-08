@@ -307,14 +307,21 @@ class AgentLoop:
             if get_eden_adapter() is not None:
                 register_eden_tools(self.tool_registry)
         except ImportError:
-            pass
+            logger.warning("[AGENT-LOOP] Eden tools not available")
+
+        # Nexus tools (document knowledge search)
+        try:
+            from luna.tools.nexus_tools import register_nexus_tools
+            register_nexus_tools(self.tool_registry, engine=self.orchestrator)
+        except ImportError:
+            logger.warning("[AGENT-LOOP] Nexus tools not available — document search disabled in AgentLoop")
 
         # Data room tools (optional - available if dataroom ingestion has run)
         try:
             from luna.tools.dataroom_tools import register_dataroom_tools
             register_dataroom_tools(self.tool_registry)
         except ImportError:
-            pass
+            logger.warning("[AGENT-LOOP] Dataroom tools not available")
 
         logger.info(f"Registered {len(self.tool_registry.list_tools())} tools")
 
@@ -726,43 +733,44 @@ class AgentLoop:
         return f"Observed: {action.description}"
 
     async def _execute_retrieve(self, action: Action) -> str:
-        """Execute a RETRIEVE action by querying the Matrix."""
+        """Execute a RETRIEVE action by querying Matrix + Nexus collections."""
         if not self.orchestrator:
             return "Memory retrieval not available (no orchestrator)"
 
-        matrix = self.orchestrator.get_actor("matrix")
-        if not matrix:
-            return "Memory retrieval not available (no matrix actor)"
-
-        if not matrix.is_ready:
-            return "Memory not ready"
-
         # Determine query from action params or working context
         query = action.params.get("query") or self.working_context.goal
+        parts = []
 
-        try:
-            if hasattr(matrix, "get_context"):
-                context = await matrix.get_context(
-                    query=query,
-                    max_tokens=1000,
-                )
-
-                if self.working_context and context:
-                    self.working_context.variables["memory_context"] = context
-
+        # 1. Matrix (conversation memory, personal knowledge)
+        matrix = self.orchestrator.get_actor("matrix")
+        if matrix and matrix.is_ready and hasattr(matrix, "get_context"):
+            try:
+                context = await matrix.get_context(query=query, max_tokens=1000)
                 if context:
-                    preview = context[:500]
-                    if len(context) > 500:
-                        preview += f"... ({len(context)} chars)"
-                    return f"Retrieved context:\n{preview}"
-                else:
-                    return "No relevant memories found"
+                    parts.append(context)
+            except Exception as e:
+                logger.warning(f"Matrix retrieval failed: {e}")
 
-            return "Memory retrieval method not available"
+        # 2. Nexus collections (document chunks — the deep evidence)
+        if hasattr(self.orchestrator, 'aibrarian') and self.orchestrator.aibrarian:
+            try:
+                nexus_context = await self.orchestrator._get_collection_context(query)
+                if nexus_context:
+                    parts.append(nexus_context)
+            except Exception as e:
+                logger.warning(f"Nexus retrieval failed: {e}")
 
-        except Exception as e:
-            logger.error(f"Memory retrieval failed: {e}")
-            return f"Memory retrieval failed: {e}"
+        combined = "\n\n".join(parts)
+        if self.working_context and combined:
+            self.working_context.variables["memory_context"] = combined
+
+        if combined:
+            preview = combined[:500]
+            if len(combined) > 500:
+                preview += f"... ({len(combined)} chars)"
+            return f"Retrieved context:\n{preview}"
+        else:
+            return "No relevant memories found"
 
     async def _execute_tool(self, action: Action) -> str:
         """Execute a tool action via the ToolRegistry."""
