@@ -296,8 +296,8 @@ class DirectorActor(Actor):
             except Exception as e:
                 logger.warning(f"LLM Registry init failed: {e}")
 
-        # Initialize local inference if enabled
-        if self._enable_local:
+        # Initialize local inference if enabled (skip if already loaded during engine boot)
+        if self._enable_local and not self._local_loaded:
             await self._init_local_inference()
 
         # Initialize fallback chain for resilient inference
@@ -1008,6 +1008,7 @@ class DirectorActor(Actor):
             route_reason = "complexity/signals"
 
             # ── PromptAssembler: single funnel for prompt construction ──
+            _aperture = getattr(self.engine, 'aperture', None)
             assembler_result = await self._assembler.build(PromptRequest(
                 message=message,
                 conversation_history=conversation_history,
@@ -1018,6 +1019,9 @@ class DirectorActor(Actor):
                 intent=intent,
                 bridge_result=bridge_result,
                 register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
+                aperture=_aperture_state,
+                reflection_mode=getattr(self.engine, '_active_reflection_mode', None),
+                has_nexus_context=bool(getattr(self.engine, '_last_nexus_nodes', None)),
             ))
             system_prompt = assembler_result.system_prompt
             messages = assembler_result.messages
@@ -1153,6 +1157,8 @@ class DirectorActor(Actor):
                         interface=interface,
                         bridge_result=bridge_result,
                         register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
+                        reflection_mode=getattr(self.engine, '_active_reflection_mode', None),
+                        has_nexus_context=bool(getattr(self.engine, '_last_nexus_nodes', None)),
                     ))
                     system_prompt = assembler_result.system_prompt
             else:
@@ -1165,6 +1171,8 @@ class DirectorActor(Actor):
                     interface=interface,
                     bridge_result=bridge_result,
                     register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
+                    reflection_mode=getattr(self.engine, '_active_reflection_mode', None),
+                    has_nexus_context=bool(getattr(self.engine, '_last_nexus_nodes', None)),
                 ))
                 system_prompt = assembler_result.system_prompt
 
@@ -1192,6 +1200,7 @@ class DirectorActor(Actor):
             route_reason = "local unavailable"
 
             # ── PromptAssembler: single funnel for fallback path ──
+            _aperture = getattr(self.engine, 'aperture', None)
             assembler_result = await self._assembler.build(PromptRequest(
                 message=message,
                 conversation_history=conversation_history,
@@ -1200,6 +1209,8 @@ class DirectorActor(Actor):
                 auto_fetch_memory=True,
                 bridge_result=bridge_result,
                 register_block=self._register_state.to_prompt_block() if self._register_enabled else None,
+                aperture=_aperture.state if _aperture else None,
+                reflection_mode=getattr(self.engine, '_active_reflection_mode', None),
             ))
             system_prompt = assembler_result.system_prompt
             messages = assembler_result.messages
@@ -1414,6 +1425,7 @@ class DirectorActor(Actor):
         self._pending_skill_widget = None  # Skill widget for current request
         self._last_injected_memories = []  # Reset for GroundingLink
         self._last_fetched_memory_text = ""  # Reset for GroundingLink auto-fetch path
+        self._nexus_nodes = payload.get("nexus_nodes", [])  # Nexus extractions from engine
         self._abort_requested = False
         self._current_correlation_id = msg.correlation_id
 
@@ -1531,6 +1543,13 @@ class DirectorActor(Actor):
         if _skill_confirm_hint:
             # Low-confidence skill match — inject confirmation prompt
             system_prompt = system_prompt + f"\n\n## SKILL CONFIRMATION NEEDED\n{_skill_confirm_hint}"
+
+        # Inject Document Reader grounding when Nexus context is present
+        print(f"🔔 [DIRECTOR] nexus_nodes={len(self._nexus_nodes)}, types={set(n.get('node_type','?') for n in self._nexus_nodes[:10])}")
+        if self._nexus_nodes:
+            from luna.context.assembler import PromptAssembler
+            system_prompt = system_prompt + "\n\n" + PromptAssembler.DOCUMENT_READER_GROUNDING
+            print(f"🔔 [DIRECTOR] Document Reader grounding INJECTED")
 
         # PLANNING STEP: Decide routing upfront
         should_delegate = await self._should_delegate(user_message)
@@ -1875,8 +1894,8 @@ class DirectorActor(Actor):
                     "content": memory_text,
                     "node_type": "context",
                 })
-            self._last_injected_memories = grounding_nodes
-            logger.info(f"[GROUNDING] Local path: exposed {len(grounding_nodes)} nodes")
+            self._last_injected_memories = grounding_nodes + getattr(self, '_nexus_nodes', [])
+            logger.info(f"[GROUNDING] Local path: exposed {len(grounding_nodes)} memory + {len(getattr(self, '_nexus_nodes', []))} nexus nodes")
 
         try:
             print(f"📡 [LOCAL] Generating with Qwen 3B...")
@@ -2512,6 +2531,7 @@ Continue the conversation naturally, maintaining context from above."""
         # ── PromptAssembler: single funnel for prompt construction ──
         # If search chain pre-fetched memory (matrix + dataroom + etc),
         # pass it directly instead of letting assembler auto-fetch from Matrix only
+        _aperture = getattr(self.engine, 'aperture', None)
         assembler_result = await self._assembler.build(PromptRequest(
             message=user_message,
             conversation_history=conversation_history,
@@ -2519,6 +2539,8 @@ Continue the conversation naturally, maintaining context from above."""
             memory_context=prefetched_memory if prefetched_memory else None,
             auto_fetch_memory=not prefetched_memory,
             bridge_result=bridge_result,
+            aperture=_aperture.state if _aperture else None,
+            reflection_mode=getattr(self.engine, '_active_reflection_mode', None),
         ))
         enhanced_system_prompt = assembler_result.system_prompt
         self._last_system_prompt = assembler_result.system_prompt
@@ -2553,8 +2575,8 @@ Continue the conversation naturally, maintaining context from above."""
                     "content": memory_text,
                     "node_type": "context",
                 })
-        self._last_injected_memories = grounding_nodes
-        logger.info(f"[GROUNDING] Exposed {len(grounding_nodes)} nodes for traceability")
+        self._last_injected_memories = grounding_nodes + getattr(self, '_nexus_nodes', [])
+        logger.info(f"[GROUNDING] Exposed {len(grounding_nodes)} memory + {len(getattr(self, '_nexus_nodes', []))} nexus nodes for traceability")
         print(f"✓ [DELEGATION] Assembler: identity={assembler_result.identity_source} "
               f"memory={assembler_result.memory_source} voice={assembler_result.voice_injected} "
               f"temporal={assembler_result.gap_category} access={assembler_result.access_injected} "
@@ -2610,65 +2632,8 @@ Continue the conversation naturally, maintaining context from above."""
                 "know about", "heard of", "know of",
             ])
 
-            # Detect dataroom / document queries — should search AiBrarian
-            is_dataroom_query = any(sig in msg_lower for sig in [
-                "dataroom", "data room", "data-room",
-                "investor", "pitch deck", "due diligence",
-                "financials", "cap table", "term sheet",
-                "partnership", "solar", "revenue", "valuation",
-                "document", "documents", "files in the",
-                "what does the data", "what do the docs",
-                "aibrarian",
-            ])
-
-            # Pre-fetch dataroom results for dataroom queries
-            # Uses direct SQL against dataroom.db — no AiBrarian engine singleton needed
-            dataroom_context = ""
-            if is_dataroom_query:
-                try:
-                    import sqlite3 as _sq3
-                    _db_path = local_dir() / "dataroom.db"
-                    if _db_path.exists():
-                        conn = _sq3.connect(str(_db_path))
-                        # Extract keywords for FTS-like matching
-                        words = [w for w in user_message.lower().split() if len(w) > 3
-                                 and w not in ("what", "does", "about", "that", "this", "with", "from", "have", "your", "the")]
-                        where_clauses = " OR ".join(f"full_text LIKE '%{w}%'" for w in words[:6])
-                        if where_clauses:
-                            rows = conn.execute(
-                                f"SELECT title, full_text, category FROM documents WHERE {where_clauses} LIMIT 5"
-                            ).fetchall()
-                            context_parts = []
-                            for i, (title, full_text, category) in enumerate(rows, 1):
-                                if full_text:
-                                    part = f"**{i}. {title or 'Untitled'}**"
-                                    if category:
-                                        part += f" [{category}]"
-                                    part += f"\n{full_text[:2000]}"
-                                    context_parts.append(part)
-                            dataroom_context = "\n\n".join(context_parts)
-                            if dataroom_context:
-                                print(f"📚 [DELEGATION] Direct dataroom SQL: {len(rows)} docs, {len(dataroom_context)} chars")
-                        conn.close()
-                except Exception as e:
-                    logger.warning("[DELEGATION] Direct dataroom search failed: %s", e)
-
             # Route to appropriate prompt template
-            if is_dataroom_query and dataroom_context:
-                luna_prompt = f"""You are Luna. The user is asking about documents in the data room.
-
-User question: {user_message}
-
-Here are the relevant documents I found in the data room:
-
-{dataroom_context}
-
-IMPORTANT: Answer the user's question using ONLY the document content above. Summarize the key
-findings naturally in your own voice. Cite which document(s) the information comes from.
-If the documents don't fully answer the question, say what you found and note what's missing.
-Be warm, helpful, and specific — reference actual content from the documents."""
-
-            elif is_memory_query or (is_knowledge_query and memory_context):
+            if is_memory_query or (is_knowledge_query and memory_context):
                 luna_prompt = f"""You are Luna. The user is asking about something you may know from your memories.
 
 User question: {user_message}
@@ -2761,8 +2726,13 @@ QUESTION RULE: Do NOT end your response with a question. Do NOT ask follow-up qu
 
             # Stream directly from provider to user (no Qwen narration pass)
             # Luna's voice is injected via enhanced_system_prompt, not post-hoc rewriting
+            # BUG FIX: Previously excluded "claude" here, forcing it through the fallback
+            # chain which fake-streams (complete() + word-split). With large prompts
+            # (3800+ memory nodes), Claude couldn't finish within the 30s per-provider
+            # timeout, causing 120s full timeouts with zero tokens. Now all registry
+            # providers stream directly — fallback chain is still the safety net below.
             provider_succeeded = False
-            if provider and provider_name != "claude":
+            if provider and provider.is_available:
                 # Use registry provider — stream directly to callbacks
                 print(f"✓ [DELEGATION] Streaming from {provider_name} provider...")
                 llm_messages = [

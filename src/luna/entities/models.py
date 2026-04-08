@@ -140,10 +140,15 @@ class Entity:
             self.entity_type = EntityType(self.entity_type)
 
     @classmethod
-    def from_row(cls, row: Union[tuple, dict]) -> Optional["Entity"]:
-        """Create Entity from database row (tuple or dict)."""
-        if isinstance(row, tuple):
-            row = row_to_dict(row, ENTITY_COLUMNS)
+    def from_row(cls, row) -> Optional["Entity"]:
+        """Create Entity from database row (tuple, dict, or sqlite3.Row)."""
+        if row is None:
+            return None
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except (TypeError, ValueError):
+                row = row_to_dict(row, ENTITY_COLUMNS)
 
         if row is None:
             return None
@@ -227,10 +232,15 @@ class EntityVersion:
             self.change_type = ChangeType(self.change_type)
 
     @classmethod
-    def from_row(cls, row: Union[tuple, dict]) -> Optional["EntityVersion"]:
-        """Create EntityVersion from database row (tuple or dict)."""
-        if isinstance(row, tuple):
-            row = row_to_dict(row, ENTITY_VERSION_COLUMNS)
+    def from_row(cls, row) -> Optional["EntityVersion"]:
+        """Create EntityVersion from database row (tuple, dict, or sqlite3.Row)."""
+        if row is None:
+            return None
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except (TypeError, ValueError):
+                row = row_to_dict(row, ENTITY_VERSION_COLUMNS)
 
         if row is None:
             return None
@@ -316,10 +326,15 @@ class EntityRelationship:
             self.bidirectional = bool(self.bidirectional)
 
     @classmethod
-    def from_row(cls, row: Union[tuple, dict]) -> Optional["EntityRelationship"]:
-        """Create EntityRelationship from database row (tuple or dict)."""
-        if isinstance(row, tuple):
-            row = row_to_dict(row, ENTITY_RELATIONSHIP_COLUMNS)
+    def from_row(cls, row) -> Optional["EntityRelationship"]:
+        """Create EntityRelationship from database row (tuple, dict, or sqlite3.Row)."""
+        if row is None:
+            return None
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except (TypeError, ValueError):
+                row = row_to_dict(row, ENTITY_RELATIONSHIP_COLUMNS)
 
         if row is None:
             return None
@@ -371,10 +386,15 @@ class EntityMention:
             self.created_at = datetime.now()
 
     @classmethod
-    def from_row(cls, row: Union[tuple, dict]) -> Optional["EntityMention"]:
-        """Create EntityMention from database row (tuple or dict)."""
-        if isinstance(row, tuple):
-            row = row_to_dict(row, ENTITY_MENTION_COLUMNS)
+    def from_row(cls, row) -> Optional["EntityMention"]:
+        """Create EntityMention from database row (tuple, dict, or sqlite3.Row)."""
+        if row is None:
+            return None
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except (TypeError, ValueError):
+                row = row_to_dict(row, ENTITY_MENTION_COLUMNS)
 
         if row is None:
             return None

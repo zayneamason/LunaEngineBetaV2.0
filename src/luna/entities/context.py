@@ -111,15 +111,17 @@ class Entity:
         if row is None:
             return None
 
-        # Handle tuple (positional) vs dict
-        if isinstance(row, tuple):
-            # Entity table columns in order
-            columns = [
-                "id", "entity_type", "name", "aliases", "core_facts",
-                "full_profile", "voice_config", "current_version",
-                "metadata", "created_at", "updated_at"
-            ]
-            row = dict(zip(columns, row))
+        # Handle non-dict rows (tuple, sqlite3.Row, aiosqlite.Row)
+        if not isinstance(row, dict):
+            try:
+                row = dict(row)
+            except (TypeError, ValueError):
+                columns = [
+                    "id", "entity_type", "name", "aliases", "core_facts",
+                    "full_profile", "voice_config", "current_version",
+                    "metadata", "created_at", "updated_at"
+                ]
+                row = dict(zip(columns, row))
 
         # Parse JSON fields
         def parse_json(val, default):

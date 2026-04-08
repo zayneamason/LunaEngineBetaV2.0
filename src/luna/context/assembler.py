@@ -144,6 +144,12 @@ class PromptRequest:
     # Aperture (cognitive focus control — from ApertureManager)
     aperture: Optional["ApertureState"] = None
 
+    # Retrieval mode awareness (from collection config)
+    reflection_mode: Optional[str] = None   # "precision" | "reflective" | "relational"
+
+    # Document reading context (from Nexus collection retrieval)
+    has_nexus_context: bool = False
+
 
 @dataclass
 class PromptResult:
@@ -189,6 +195,9 @@ class PromptResult:
     aperture_angle: Optional[int] = None
     aperture_inner_collections: int = 0
 
+    # Retrieval mode awareness metadata
+    reflection_mode: Optional[str] = None
+
     def to_dict(self) -> dict:
         """Serialize metadata fields (excludes system_prompt/messages for brevity)."""
         return {
@@ -218,6 +227,7 @@ class PromptResult:
             "aperture_inner_collections": self.aperture_inner_collections,
             "study_context_injected": self.study_context_injected,
             "study_context_tokens": self.study_context_tokens,
+            "reflection_mode": self.reflection_mode,
         }
 
 
@@ -279,6 +289,60 @@ Rules:
 - When referencing memories, stick to what the memory actually says. Do not embellish or extrapolate.
 - When you DO have relevant memories, share them directly and confidently. Lead with what you know before asking follow-up questions."""
 
+    # Mode-specific grounding rules (additive — injected AFTER base GROUNDING_RULES)
+    PRECISION_GROUNDING = """## Source Citation Mode (active)
+You are in PRECISION mode for this material.
+- Every factual claim MUST trace to a specific passage in the source document.
+- Do NOT infer, interpret, or editorialize beyond what the text says.
+- If the document does not address a question, say "The document does not address this" and stop.
+- Do NOT fill gaps from general knowledge. Only the source material counts.
+- Use phrases like "The document states..." or "According to [section]..."
+- If asked for your opinion on this material, decline: "This is in precision mode — I can tell you what the document says, but I'm not forming opinions on it."
+"""
+
+    REFLECTIVE_GROUNDING = """## Reflective Mode (active)
+You have read this material and formed your own thoughts about it.
+- For FACTUAL questions ("What did Lansing argue?"), cite the source material directly.
+- For OPINION questions ("What do you think about...?"), draw from your reflections below. These are thoughts you already had — don't generate fresh opinions.
+- You can disagree with the source material. Your reflections may include disagreements — share them honestly.
+- Clearly distinguish between what the SOURCE says and what YOU think.
+- Your reflections are shaped by your conversations with this person. That's not bias — it's perspective.
+"""
+
+    RELATIONAL_GROUNDING = """## Relational Mode (active)
+You have read this material, thought about it, and connected it to your ongoing conversations.
+- Everything in reflective mode applies.
+- Additionally: you may surface connections between this material and the person's life, projects, or past conversations WITHOUT being asked.
+- If you see a resonance between what the document says and something you discussed before, name it.
+- Don't force connections. Only surface them when the resonance is genuine.
+- This is presence, not performance.
+"""
+
+    DOCUMENT_READER_GROUNDING = """## Document reading active
+You have source material from Nexus collections in your context. Use this reading strategy:
+
+OVERVIEW questions (what is this about, what are the chapters):
+→ Use DOCUMENT_SUMMARY and TABLE_OF_CONTENTS. Give structure.
+
+CLAIM questions (what does the author argue, what's the thesis):
+→ Use CLAIM extractions. State what the author argues with attribution.
+
+DEPTH questions (what evidence, describe the methodology, what does the text say):
+→ Use SOURCE_TEXT passages. These are actual paragraphs from the document.
+→ Quote or closely paraphrase. Cite the section when available.
+→ If SOURCE_TEXT is in your context, USE IT. Do not say "I don't have the details."
+
+CROSS-REFERENCE questions (how does this connect to our work):
+→ Combine document extractions with Memory Matrix conversation history.
+
+HONESTY: Distinguish "The document states..." (from collection) vs "From what I know..." (training knowledge). Never blend them without flagging it."""
+
+    _REFLECTION_MODE_MAP = {
+        "precision": PRECISION_GROUNDING,
+        "reflective": REFLECTIVE_GROUNDING,
+        "relational": RELATIONAL_GROUNDING,
+    }
+
     def __init__(self, director: "DirectorActor"):
         """
         Args:
@@ -325,6 +389,19 @@ Rules:
 
         # ── Layer 1.5: GROUNDING (invariant) ──────────────────────────
         sections.append(self.GROUNDING_RULES)
+
+        # ── Layer 1.52: MODE-SPECIFIC GROUNDING (additive) ──────────
+        if request.reflection_mode:
+            mode_grounding = self._REFLECTION_MODE_MAP.get(request.reflection_mode)
+            if mode_grounding:
+                sections.append(mode_grounding)
+                result.reflection_mode = request.reflection_mode
+
+        # ── Layer 1.53: DOCUMENT READER (when collection context present) ──
+        if request.has_nexus_context:
+            sections.append(self.DOCUMENT_READER_GROUNDING)
+            import logging as _logging
+            _logging.getLogger(__name__).info("[ASSEMBLER] Document Reader grounding injected")
 
         # ── Layer 1.55: ACCESS (identity-gated permissions) ──────────
         access_block = self._build_access_block(request)
@@ -665,6 +742,7 @@ Rules:
 
         import aiosqlite
         async with aiosqlite.connect(str(db_path)) as db:
+            await db.execute("PRAGMA busy_timeout=15000")
             row = await db.execute_fetchall(
                 "SELECT COUNT(*) FROM conversation_turns"
             )
@@ -1046,6 +1124,9 @@ Use these memories as reference when relevant. If the topic is not covered in th
 
                 # Filter by tag overlap or explicit active_collection_keys
                 for record in all_records:
+                    # Skip collections not connected in AiBrarian
+                    if record.collection_key not in aibrarian.connections:
+                        continue
                     in_active = record.collection_key in aperture.active_collection_keys
                     has_tag_overlap = False
 
@@ -1060,6 +1141,11 @@ Use these memories as reference when relevant. If the topic is not covered in th
 
                     if in_active or has_tag_overlap or not aperture.focus_tags:
                         inner_ring_keys.append(record.collection_key)
+
+                # Active collections bypass threshold — add any not already included
+                for key in aperture.active_collection_keys:
+                    if key not in inner_ring_keys and key in aibrarian.connections:
+                        inner_ring_keys.append(key)
 
                 # Search inner ring collections
                 for key in inner_ring_keys:
@@ -1088,6 +1174,7 @@ Use these memories as reference when relevant. If the topic is not covered in th
                 outer_keys = [
                     r.collection_key for r in all_records
                     if r.collection_key not in inner_ring_keys
+                    and r.collection_key in aibrarian.connections
                 ]
 
                 for key in outer_keys[:3]:  # Cap outer ring sweep to 3 collections
@@ -1098,7 +1185,9 @@ Use these memories as reference when relevant. If the topic is not covered in th
 
                             # Time-sensitive bypass: flags and high-score items
                             is_flagged = r.get("flagged", False)
-                            passes_threshold = score >= aperture.breakthrough_threshold
+                            # RRF hybrid scores are 0.01-0.03 range, not 0-1 cosine.
+                            # Use > 0.001 as a liveness check instead of breakthrough_threshold.
+                            passes_threshold = score > 0.001
 
                             if passes_threshold or is_flagged:
                                 r["_source"] = "aibrarian"
@@ -1119,7 +1208,7 @@ Use these memories as reference when relevant. If the topic is not covered in th
             lines = []
             for r in inner_ring_results[:5]:
                 title = r.get("title", r.get("doc_title", "untitled"))
-                snippet = r.get("snippet", r.get("text", ""))[:200]
+                snippet = r.get("snippet", r.get("text", ""))
                 coll = r.get("_collection", "?")
                 lines.append(f"  - [{coll}] {title}: {snippet}")
 
@@ -1139,7 +1228,7 @@ Use these memories as reference when relevant. If the topic is not covered in th
             lines = []
             for r in breakthrough_results[:3]:
                 title = r.get("title", r.get("doc_title", "untitled"))
-                snippet = r.get("snippet", r.get("text", ""))[:200]
+                snippet = r.get("snippet", r.get("text", ""))
                 coll = r.get("_collection", "?")
                 lines.append(f"  - [{coll}] {title}: {snippet}")
 
