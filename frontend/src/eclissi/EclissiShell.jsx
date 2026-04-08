@@ -28,6 +28,7 @@ import CacheWidget from './widgets/CacheWidget';
 import ThoughtWidget from './widgets/ThoughtWidget';
 import LunaScriptWidget from './widgets/LunaScriptWidget';
 import ArcadeWidget from './widgets/ArcadeWidget';
+import RadioWidget from './widgets/RadioWidget';
 
 const ALL_TABS = ['eclissi', 'studio', 'kozmo', 'guardian', 'observatory', 'settings'];
 
@@ -43,6 +44,7 @@ const WIDGET_COMPONENTS = {
   thought: ThoughtWidget,
   lunascript: LunaScriptWidget,
   arcade: ArcadeWidget,
+  radio: RadioWidget,
 };
 
 export default function EclissiShell() {

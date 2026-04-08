@@ -689,6 +689,20 @@ class BuildPipeline:
             yaml.dump(projects_template, default_flow_style=False, sort_keys=False)
         )
 
+        # --- LunaFM config (station.yaml + channels/) ---
+        lunafm_src = self.engine_root / "config" / "lunafm"
+        if lunafm_src.exists() and lunafm_src.is_dir():
+            shutil.copytree(str(lunafm_src), str(config_dir / "lunafm"), dirs_exist_ok=True)
+            self._emit("  Config: lunafm/ (station.yaml + channels)")
+
+        # --- Lunar Studio (Expression Pipeline diagnostic frontend) ---
+        studio_src = self.engine_root / "Tools" / "Luna-Expression-Pipeline" / "diagnostic" / "dist"
+        if studio_src.exists() and studio_src.is_dir():
+            studio_dest = staging_dir / "Tools" / "Luna-Expression-Pipeline" / "diagnostic" / "dist"
+            studio_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(str(studio_src), str(studio_dest), dirs_exist_ok=True)
+            self._emit("  Tools: Lunar Studio frontend")
+
         # --- llm_providers.json ---
         llm_mode = profile.get("config", {}).get("llm_providers", {}).get("mode", "template")
         if llm_mode == "copy":
@@ -1020,6 +1034,10 @@ class BuildPipeline:
         # Include luna engine and onnxruntime
         cmd.append("--include-package=luna")
         cmd.append("--include-package=onnxruntime")
+        # sqlite_vec ships a native vec0.dylib that Nuitka misses unless we
+        # both include the package AND ship its data files (the .dylib).
+        cmd.append("--include-package=sqlite_vec")
+        cmd.append("--include-package-data=sqlite_vec")
 
         # pywebview is auto-detected by Nuitka's plugin system — do not
         # use --include-package=webview as it conflicts with the plugin.
@@ -1156,8 +1174,8 @@ class BuildPipeline:
         profile_name = profile.get("name", self.profile_path.stem)
         version = profile.get("version", "0.1.0")
 
-        # Copy staged config/data/frontend into dist
-        for subdir in ["config", "data", "frontend"]:
+        # Copy staged config/data/frontend/Tools into dist
+        for subdir in ["config", "data", "frontend", "Tools"]:
             staged = staging_dir / subdir
             if staged.exists():
                 target = dist_dir / subdir

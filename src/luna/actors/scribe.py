@@ -286,6 +286,13 @@ class ScribeActor(Actor):
             logger.debug("Ben: Skipping assistant turn (not user-provided info)")
             return
 
+        # LUNAFM GUARD: Never extract from LunaFM-generated content.
+        # LunaFM artifacts are Luna's own inferences (low lock_in, provisional),
+        # not user-stated facts. They must never be promoted into FACT nodes.
+        if str(source).startswith("lunafm"):
+            logger.debug(f"Ben: Skipping LunaFM-sourced content (source={source})")
+            return
+
         # GUARDIAN CONTEXT GUARD: Skip context-injected messages from Guardian frontend.
         # These contain panel metadata, control prefixes, and response format instructions
         # that should NOT be extracted as facts or stored in memory.

@@ -635,6 +635,7 @@ class MemoryMatrix:
         node_type: Optional[str] = None,
         limit: int = 10,
         scope: Optional[str] = None,
+        include_provisional: bool = True,
     ) -> list[MemoryNode]:
         """
         Search memory nodes by text using LIKE query.
@@ -667,6 +668,9 @@ class MemoryMatrix:
         if scope is not None:
             conditions.append("scope = ?")
             params.append(scope)
+
+        if not include_provisional:
+            conditions.append("(source IS NULL OR source NOT LIKE 'lunafm:%')")
 
         where = " AND ".join(conditions)
         params.append(limit)

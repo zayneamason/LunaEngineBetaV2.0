@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 
-# Minimum token budget — Qwen 3 needs room to think before answering.
-# With large system prompts (~3k tokens), 2000 is too low — the model
-# exhausts all tokens on reasoning and returns empty content.
-MIN_TOKEN_BUDGET = 4096
+# Minimum token budget for response generation.
+# qwen3.5:9b is non-reasoning — no thinking tax, all tokens are content.
+# Previous value of 4096 was needed for qwen3 thinking mode overhead.
+MIN_TOKEN_BUDGET = 1024
 
 # Personality reinforcement — appended to system prompt for local models.
 # Qwen 3 loses persona adherence in long system prompts, so we add a
@@ -51,6 +51,7 @@ Distinguish between "I have this stored" and "I'm guessing." If pressed, hold gr
 Do NOT end your response with a question. Share what you have and stop."""
 
 OLLAMA_MODELS = {
+    "qwen3.5:9b": ModelInfo("qwen3.5:9b", 131072, True),
     "qwen3:30b-a3b": ModelInfo("qwen3:30b-a3b", 131072, True),
     "qwen3-coder:30b": ModelInfo("qwen3-coder:30b", 131072, True),
     "qwen3:8b": ModelInfo("qwen3:8b", 131072, True),
@@ -58,10 +59,10 @@ OLLAMA_MODELS = {
 }
 
 DEFAULT_ROLES = {
-    "general": "qwen3:30b-a3b",
+    "general": "qwen3.5:9b",
     "code": "qwen3-coder:30b",
     "router": "qwen3:8b",
-    "fast": "qwen3:8b",
+    "fast": "qwen3.5:9b",
     "vision": "qwen2.5vl:7b",
     "reasoning": "qwen3:30b-a3b",
 }
@@ -120,14 +121,14 @@ class OllamaProvider:
         if model is None:
             config = get_config()
             pconfig = config.get_provider_config("ollama")
-            model = pconfig.default_model if pconfig else "qwen3:30b-a3b"
+            model = pconfig.default_model if pconfig else "qwen3.5:9b"
         return OLLAMA_MODELS.get(model, ModelInfo(model, 8192, True))
 
     def list_models(self) -> list[str]:
         return list(OLLAMA_MODELS.keys())
 
     def get_model_for_role(self, role: str) -> str:
-        return self._model_roles.get(role, "qwen3:30b-a3b")
+        return self._model_roles.get(role, "qwen3.5:9b")
 
     async def complete(
         self,
@@ -152,10 +153,15 @@ class OllamaProvider:
                 content = content + PERSONA_TAIL
             ollama_messages.append({"role": m.role, "content": content})
 
+        # Disable thinking mode for non-reasoning models (qwen3.5)
+        # Reasoning models (qwen3) default to think:true
+        is_reasoning_model = model.startswith("qwen3:") or model.startswith("qwen3-coder")
+
         payload = {
             "model": model,
             "messages": ollama_messages,
             "stream": False,
+            "think": is_reasoning_model,
             "options": {
                 "temperature": temperature,
                 "num_predict": token_budget,
@@ -217,10 +223,13 @@ class OllamaProvider:
                 content = content + PERSONA_TAIL
             ollama_messages.append({"role": m.role, "content": content})
 
+        is_reasoning_model = model.startswith("qwen3:") or model.startswith("qwen3-coder")
+
         payload = {
             "model": model,
             "messages": ollama_messages,
             "stream": True,
+            "think": is_reasoning_model,
             "options": {
                 "temperature": temperature,
                 "num_predict": token_budget,

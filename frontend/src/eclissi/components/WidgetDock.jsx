@@ -14,6 +14,7 @@ const WIDGETS = [
   { id: 'lunascript', icon: '◈', label: 'LunaScript', accent: 'var(--ec-accent-memory)' },
   { id: 'cache',   icon: '💾', label: 'Cache',   accent: 'var(--ec-accent-luna)' },
   { id: 'thought', icon: '💭', label: 'Thought', accent: 'var(--ec-accent-voice)' },
+  { id: 'radio',   icon: '◉',  label: 'LunaFM',  accent: 'var(--ec-accent-voice)' },
 ];
 
 export default function WidgetDock({ activeWidget, onWidgetToggle, badges, enabledWidgets }) {

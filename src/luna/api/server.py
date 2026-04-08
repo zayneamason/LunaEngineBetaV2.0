@@ -49,6 +49,7 @@ from luna.services.kozmo.routes import router as kozmo_router
 from luna.services.guardian.routes import router as guardian_router
 from luna.utils.options_parser import extract_options, build_options_widget
 from luna.services.settings.routes import router as settings_router
+from luna.services.settings.lunafm_routes import router as lunafm_settings_router
 from luna.services.observatory.routes import router as observatory_router
 from luna.services.guardian.memory_bridge import GuardianMemoryBridge
 from luna.compiler import KnowledgeCompiler
@@ -652,6 +653,7 @@ app.include_router(guardian_router)
 
 # Mount SETTINGS service router
 app.include_router(settings_router)
+app.include_router(lunafm_settings_router)
 
 # Mount OBSERVATORY service router (replaces httpx reverse proxy to :8100)
 app.include_router(observatory_router)
@@ -1641,6 +1643,153 @@ async def get_shared_turn_cache():
     }
 
 
+@app.get("/lunafm/status")
+async def lunafm_status():
+    """LunaFM station status — channels, states, emission counts."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    station = getattr(_engine, "lunafm", None)
+    if station is None:
+        return {"running": False, "preempted": False, "uptime_s": 0, "channels": []}
+    return station.status()
+
+
+@app.get("/lunafm/traits")
+async def lunafm_traits():
+    """Current LunaScript trait vector + derived aperture."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    matrix = _engine.get_actor("matrix")
+    db = getattr(matrix, "_db", None) if matrix else None
+    try:
+        from luna.lunafm.frequency_coupling import read_traits, trait_to_aperture
+        traits = await read_traits(db) if db else {}
+    except Exception:
+        traits = {}
+    curiosity = float(traits.get("curiosity", 0.5))
+    try:
+        from luna.lunafm.frequency_coupling import trait_to_aperture
+        preset, sigma = trait_to_aperture(curiosity)
+    except Exception:
+        preset, sigma = "BALANCED", 0.05
+    return {
+        "traits": traits,
+        "aperture": {"preset": preset, "sigma": sigma},
+    }
+
+
+@app.get("/lunafm/spectral")
+async def lunafm_spectral():
+    """Spectral engine status — last computed, node/edge count, Fiedler."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    station = getattr(_engine, "lunafm", None)
+    if station is None or station._spectral is None:
+        return {"enabled": False}
+    return {"enabled": True, **station._spectral.status()}
+
+
+@app.get("/lunafm/pollution")
+async def lunafm_pollution():
+    """Live aggregate of lunafm-tagged nodes per node_type, bucketed."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    matrix = _engine.get_actor("matrix")
+    db = getattr(matrix, "_db", None) if matrix else None
+    if db is None:
+        return {"buckets": {"1h": {}, "24h": {}, "total": {}}}
+
+    async def _bucket(where: str) -> dict:
+        rows = await db.fetchall(
+            f"""
+            SELECT node_type, COUNT(*) AS cnt
+            FROM memory_nodes
+            WHERE source LIKE 'lunafm:%' {where}
+            GROUP BY node_type
+            """
+        )
+        return {r[0]: r[1] for r in rows}
+
+    return {
+        "buckets": {
+            "1h": await _bucket("AND created_at > datetime('now', '-1 hour')"),
+            "24h": await _bucket("AND created_at > datetime('now', '-24 hours')"),
+            "total": await _bucket(""),
+        }
+    }
+
+
+@app.get("/lunafm/stream")
+async def lunafm_stream():
+    """SSE stream of LunaFM channel emissions (real-time)."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    station = getattr(_engine, "lunafm", None)
+    if station is None:
+        raise HTTPException(status_code=404, detail="LunaFM not running")
+
+    import json as _json
+
+    async def event_gen() -> AsyncGenerator[str, None]:
+        q = station.subscribe()
+        try:
+            # Initial hello so the client knows the stream is live
+            yield f"event: hello\ndata: {_json.dumps(station.status())}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"event: {event.get('type', 'emission')}\ndata: {_json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # Heartbeat keeps proxies from closing the connection
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            station.unsubscribe(q)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+@app.get("/lunafm/artifacts")
+async def lunafm_artifacts(limit: int = 20, channel: Optional[str] = None):
+    """Recent LunaFM-tagged memory nodes."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    matrix = _engine.get_actor("matrix")
+    db = getattr(matrix, "_db", None) if matrix else None
+    if db is None:
+        return {"artifacts": []}
+    limit = max(1, min(int(limit), 100))
+    if channel:
+        rows = await db.fetchall(
+            """
+            SELECT id, node_type, source, content, lock_in, created_at, metadata
+            FROM memory_nodes
+            WHERE source = ?
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (f"lunafm:{channel}", limit),
+        )
+    else:
+        rows = await db.fetchall(
+            """
+            SELECT id, node_type, source, content, lock_in, created_at, metadata
+            FROM memory_nodes
+            WHERE source LIKE 'lunafm:%'
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (limit,),
+        )
+    artifacts = []
+    for r in rows:
+        artifacts.append({
+            "id": r[0], "node_type": r[1], "source": r[2],
+            "content": r[3], "lock_in": r[4], "created_at": r[5],
+            "metadata": r[6],
+        })
+    return {"artifacts": artifacts}
+
+
 @app.get("/status", response_model=StatusResponse)
 async def get_status():
     """
@@ -2525,10 +2674,15 @@ async def persona_stream(request: MessageRequest):
         memory_items = []
         memory_context = ""
 
+        import time as _stime
+        _st0 = _stime.time()
+        _st: dict = {}
+
         try:
             # --- PHASE 1: Send context first ---
 
             # Constellation prefetch: inject PERSON_BRIEFING etc. before search chain
+            _t_st = _stime.time()
             constellation_prefix = ""
             try:
                 from luna.compiler.constellation_prefetch import ConstellationPrefetch
@@ -2556,8 +2710,10 @@ async def persona_stream(request: MessageRequest):
                         )
             except Exception as _cpf_err:
                 logger.warning(f"[STREAM] Constellation prefetch failed: {_cpf_err}")
+            _st["constellation_prefetch"] = _stime.time() - _t_st
 
             # Use the configurable search chain (matrix + dataroom + optional sources)
+            _t_st = _stime.time()
             from luna.tools.search_chain import SearchChainConfig, run_search_chain
             _search_cfg = getattr(_engine, "_search_chain_config", None) or SearchChainConfig.default()
             chain_results = await run_search_chain(_search_cfg, request.message, _engine)
@@ -2566,8 +2722,40 @@ async def persona_stream(request: MessageRequest):
                 logger.info(f"[STREAM] Search chain returned {len(chain_results)} results, {len(memory_context)} chars")
             else:
                 logger.info("[STREAM] Search chain returned no results")
+            _st["search_chain"] = _stime.time() - _t_st
+
+            # L1 Geometric Layer: populate RevolvingContext with composite-scored
+            _t_st = _stime.time()
+            # memory nodes so _retrieval_score flows through as per-item relevance.
+            # This runs alongside run_search_chain (which feeds memory_context string);
+            # our purpose here is ring-state population for decay/rebalance.
+            try:
+                _inner = getattr(matrix, '_matrix', None)
+                if _inner:
+                    from luna.core.context import ContextSource as _CS_L1
+                    _l1_scopes = getattr(_engine, 'active_scopes', None) or ["global"]
+                    _l1_nodes = await _inner.get_context(
+                        request.message, max_tokens=1500, scopes=_l1_scopes
+                    )
+                    if _l1_nodes:
+                        for _ln in _l1_nodes:
+                            _lscore = getattr(_ln, '_retrieval_score', 1.0)
+                            _ltext = _ln.summary or _ln.content
+                            _engine.context.add(
+                                content=_ltext,
+                                source=_CS_L1.MEMORY,
+                                relevance=_lscore,
+                            )
+                        logger.warning(
+                            f"[STREAM-L1] Added {len(_l1_nodes)} scored memory nodes to ring "
+                            f"(top score={_l1_nodes[0]._retrieval_score:.3f})"
+                        )
+            except Exception as _l1_err:
+                logger.warning(f"[STREAM-L1] Ring population failed: {_l1_err}")
+            _st["l1_ring_population"] = _stime.time() - _t_st
 
             # ── Nexus collection context (mirrors /stream path) ──
+            _t_st = _stime.time()
             try:
                 collection_context = await _engine._get_collection_context(request.message)
                 if collection_context:
@@ -2575,6 +2763,7 @@ async def persona_stream(request: MessageRequest):
                     logger.info(f"[PERSONA-STREAM] Nexus context injected: {len(collection_context)} chars")
             except Exception as _col_err:
                 logger.warning(f"[PERSONA-STREAM] collection context failed: {_col_err}")
+            _st["nexus_collection"] = _stime.time() - _t_st
 
             # Prepend constellations before general search results
             if constellation_prefix:
@@ -2704,7 +2893,22 @@ async def persona_stream(request: MessageRequest):
             reconcile = getattr(_engine, 'reconcile', None)
             reconcile_instruction = reconcile.tick() if reconcile else None
 
+            _t_st = _stime.time()
             system_prompt = _engine._build_system_prompt(memory_context)
+            _st["system_prompt_build"] = _stime.time() - _t_st
+            try:
+                _st["pre_director_total"] = _stime.time() - _st0
+                logger.warning(
+                    "[STREAM-TIMING] pre-director=%.3fs | %s",
+                    _st["pre_director_total"],
+                    " | ".join(
+                        f"{k}={v:.3f}s"
+                        for k, v in sorted(_st.items(), key=lambda x: -x[1])
+                        if k != "pre_director_total"
+                    ),
+                )
+            except Exception:
+                pass
             if reconcile_instruction:
                 system_prompt += f"\n\n## Self-Correction\n{reconcile_instruction}\n"
                 logger.info("[STREAM] Reconcile instruction injected into system prompt")

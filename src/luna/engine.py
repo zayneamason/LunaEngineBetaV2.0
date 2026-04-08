@@ -267,6 +267,7 @@ class LunaEngine:
         self._pending_messages: List[str] = []  # Queue for messages during processing
         self._is_processing = False
         self._stream_owns_response = False  # When True, streaming endpoint handles turn recording
+        self.lunafm = None  # LunaFM station, set during _boot if config exists
 
         # Callbacks for external integration
         self._on_response_callbacks: list[Callable] = []
@@ -510,6 +511,22 @@ Emojis can accompany gestures or stand alone.
         from luna.actors.reconcile import ReconcileManager
         self.reconcile = ReconcileManager()
         logger.info("ReconcileManager initialized")
+
+        # Initialize LunaFM (background cognitive broadcast) — optional
+        self.lunafm = None
+        try:
+            from luna.core.paths import config_dir
+            lunafm_cfg = config_dir() / "lunafm" / "station.yaml"
+            if lunafm_cfg.exists():
+                from luna.lunafm.station import LunaFMActor
+                lunafm_actor = LunaFMActor(self, lunafm_cfg)
+                self.register_actor(lunafm_actor)
+                self.lunafm = lunafm_actor.station
+                logger.info("LunaFMActor registered")
+            else:
+                logger.debug(f"LunaFM config not found at {lunafm_cfg}, skipping")
+        except Exception as e:
+            logger.warning(f"LunaFM initialization failed (non-fatal): {e}")
 
         # =================================================================
         # Phase 1 — Engine Ownership: substrate components
@@ -1068,6 +1085,13 @@ Emojis can accompany gestures or stand alone.
         2. Be queued for after current task completes
         3. Be processed in parallel (for simple queries)
         """
+        # Preempt LunaFM background channels
+        if self.lunafm:
+            try:
+                await self.lunafm.preempt()
+            except Exception as e:
+                logger.debug(f"LunaFM preempt failed: {e}")
+
         # Add user message to revolving context
         self.context.add(
             content=f"User: {user_message}",
@@ -1131,6 +1155,10 @@ Emojis can accompany gestures or stand alone.
         self._current_goal = user_message
         self.metrics.agentic_tasks_started += 1
 
+        import time as _time
+        _pt0 = _time.time()
+        _timings: dict = {}
+
         try:
             # ══════════════════════════════════════════════════════════════
             # PHASE 1: Run Qwen subtasks in parallel with memory retrieval
@@ -1172,29 +1200,56 @@ Emojis can accompany gestures or stand alone.
 
             # Memory retrieval (existing)
             async def _retrieve_context():
+                _rt: dict = {}
+                _rt0 = _time.time()
                 memory_context = ""
                 history_context = None
                 retrieval_query = user_message
 
+                _t = _time.time()
                 if history_manager and history_manager.is_ready:
                     history_context = await history_manager.build_history_context(user_message)
+                _rt["history_build"] = _time.time() - _t
 
+                _rt["load_conv_history"] = 0.0
+                _rt["matrix_get_context"] = 0.0
                 if matrix and matrix.is_ready:
+                    _t = _time.time()
                     await self._load_conversation_history(matrix, limit=10)
+                    _rt["load_conv_history"] = _time.time() - _t
 
                     # Use rewritten query for better retrieval if available
                     if subtask_phase and subtask_phase.rewritten_query:
                         retrieval_query = subtask_phase.rewritten_query
                         logger.info(f"[SUBTASK] Using rewritten query for retrieval: {retrieval_query[:60]}...")
 
-                    memory_context = await matrix.get_context(
-                        retrieval_query, max_tokens=1500, scopes=self.active_scopes
-                    )
-                    if memory_context:
-                        self.context.add(content=memory_context, source=ContextSource.MEMORY)
+                    # Reach into inner MemoryMatrix for node-level access
+                    # (pattern: librarian._get_matrix — matrix.py:1982)
+                    # MatrixActor.get_context() returns a formatted string;
+                    # we need list[MemoryNode] to pass _retrieval_score as relevance.
+                    inner_matrix = getattr(matrix, '_matrix', None)
+                    memory_context = ""
+                    if inner_matrix:
+                        _t = _time.time()
+                        memory_nodes = await inner_matrix.get_context(
+                            retrieval_query, max_tokens=1500, scopes=self.active_scopes
+                        )
+                        if memory_nodes:
+                            for node in memory_nodes:
+                                score = getattr(node, '_retrieval_score', 1.0)
+                                text = node.summary or node.content
+                                self.context.add(
+                                    content=text,
+                                    source=ContextSource.MEMORY,
+                                    relevance=score,
+                                )
+                            # Rebuild formatted string for downstream concat
+                            memory_context = matrix._format_context(memory_nodes)
+                        _rt["matrix_get_context"] = _time.time() - _t
 
                 # Phase 2: search chain for active project collections
                 # Use decomposed queries if available (multi-part questions)
+                _t = _time.time()
                 if subtask_phase and subtask_phase.decomposed_queries:
                     collection_context = await self._get_collection_context_multi(
                         subtask_phase.decomposed_queries, subtask_phase=subtask_phase
@@ -1203,6 +1258,7 @@ Emojis can accompany gestures or stand alone.
                     collection_context = await self._get_collection_context(
                         retrieval_query, subtask_phase=subtask_phase
                     )
+                _rt["collection_context"] = _time.time() - _t
                 if collection_context:
                     memory_context = (memory_context or "") + "\n\n" + collection_context
                     self.context.add(content=collection_context, source=ContextSource.MEMORY)
@@ -1212,7 +1268,9 @@ Emojis can accompany gestures or stand alone.
                 active_mode = self._get_active_reflection_mode(collections_searched)
                 self._active_reflection_mode = active_mode
 
+                _rt["reflection_search"] = 0.0
                 if active_mode in ("reflective", "relational") and matrix and matrix.is_ready:
+                    _t = _time.time()
                     try:
                         matrix_ops = matrix._matrix if hasattr(matrix, '_matrix') else None
                         if matrix_ops:
@@ -1230,43 +1288,68 @@ Emojis can accompany gestures or stand alone.
                                 logger.info(f"[REFLECTION-RETRIEVAL] Injected {len(reflection_nodes)} reflections (mode={active_mode})")
                     except Exception as e:
                         logger.warning(f"[REFLECTION-RETRIEVAL] Failed: {e}")
+                    _rt["reflection_search"] = _time.time() - _t
 
                 # ── Phase 2.75: Relational retrieval ──
+                _rt["relational_context"] = 0.0
                 if active_mode == "relational":
+                    _t = _time.time()
                     relational_context = await self._get_relational_context(retrieval_query)
                     if relational_context:
                         memory_context = (memory_context or "") + "\n\n" + relational_context
                         self.context.add(content=relational_context, source=ContextSource.MEMORY)
                         logger.info(f"[RELATIONAL] Injected conversation context")
+                    _rt["relational_context"] = _time.time() - _t
+
+                _rt["retrieve_total"] = _time.time() - _rt0
+                try:
+                    logger.warning(
+                        "[RETRIEVE-TIMING] total=%.3fs | %s",
+                        _rt["retrieve_total"],
+                        " | ".join(
+                            f"{k}={v:.3f}s"
+                            for k, v in sorted(_rt.items(), key=lambda x: -x[1])
+                            if k != "retrieve_total"
+                        ),
+                    )
+                except Exception:
+                    pass
 
                 return memory_context, history_context
 
             # Run subtasks first (they're fast), then memory retrieval
             # (memory retrieval can use the rewritten query from subtasks)
+            _t = _time.time()
             if self._subtask_runner and self._subtask_runner.is_available:
                 subtask_phase = await self._subtask_runner.run_subtask_phase(
                     user_message, recent_turns
                 )
             else:
                 subtask_phase = SubtaskPhaseResult() if SUBTASK_RUNNER_AVAILABLE else None
+            _timings["subtask_runner"] = _time.time() - _t
 
+            _t = _time.time()
             memory_context, history_context = await _retrieve_context()
+            _timings["retrieve_context_total"] = _time.time() - _t
 
             # ══════════════════════════════════════════════════════════════
             # PHASE 2: Route using semantic classification or regex fallback
             # ══════════════════════════════════════════════════════════════
 
+            _t = _time.time()
             if subtask_phase and subtask_phase.intent:
                 routing = self.router.from_intent(subtask_phase.intent, user_message)
                 logger.info(f"Routing (semantic): {routing.path.name} (complexity={routing.complexity:.2f})")
             else:
                 routing = self.router.analyze(user_message)
                 logger.info(f"Routing (regex): {routing.path.name} (complexity={routing.complexity:.2f})")
+            _timings["routing"] = _time.time() - _t
 
             # ══════════════════════════════════════════════════════════════
             # PHASE 3: Pass entity hints to Scribe (gates Claude Haiku)
             # ══════════════════════════════════════════════════════════════
 
+            _t = _time.time()
             if subtask_phase and subtask_phase.entities is not None:
                 scribe = self.get_actor("scribe")
                 if scribe and scribe.is_ready:
@@ -1274,6 +1357,7 @@ Emojis can accompany gestures or stand alone.
                         type="entity_hints",
                         payload={"entities": subtask_phase.entities, "message": user_message},
                     ))
+            _timings["entity_hints"] = _time.time() - _t
 
             # ══════════════════════════════════════════════════════════════
             # PHASE 4: Execute based on routing decision
@@ -1323,20 +1407,38 @@ Emojis can accompany gestures or stand alone.
                         signals=routing.signals,
                     )
 
+            _t = _time.time()
             if routing.path == ExecutionPath.DIRECT:
                 self.metrics.direct_responses += 1
                 await self._process_direct(user_message, correlation_id, memory_context, history_context)
             else:
                 self.metrics.planned_responses += 1
                 await self._process_with_agent_loop(user_message, correlation_id, memory_context, history_context)
+            _timings["director_generate"] = _time.time() - _t
 
             # ══════════════════════════════════════════════════════════════
             # PHASE 5: Bridge Nexus knowledge to Memory Matrix
             # ══════════════════════════════════════════════════════════════
+            _t = _time.time()
             try:
                 await self._bridge_nexus_to_matrix()
             except Exception as e:
                 logger.warning(f"[NEXUS-BRIDGE] Non-fatal error: {e}")
+            _timings["bridge_nexus"] = _time.time() - _t
+
+            _timings["total"] = _time.time() - _pt0
+            try:
+                logger.warning(
+                    "[PIPELINE-TIMING] total=%.3fs | %s",
+                    _timings["total"],
+                    " | ".join(
+                        f"{k}={v:.3f}s"
+                        for k, v in sorted(_timings.items(), key=lambda x: -x[1])
+                        if k != "total"
+                    ),
+                )
+            except Exception:
+                pass
 
             self.metrics.agentic_tasks_completed += 1
 
@@ -1491,6 +1593,13 @@ Emojis can accompany gestures or stand alone.
         self._is_processing = False
         self._current_goal = None
 
+        # Preempt LunaFM on any interrupt
+        if self.lunafm:
+            try:
+                await self.lunafm.preempt()
+            except Exception as e:
+                logger.debug(f"LunaFM preempt on interrupt failed: {e}")
+
     async def _handle_agent_progress(self, message: str) -> None:
         """Handle progress updates from AgentLoop."""
         await self._emit_progress(message)
@@ -1570,6 +1679,13 @@ Emojis can accompany gestures or stand alone.
                 logger.error(f"Directive evaluation error: {e}")
 
         logger.debug(f"📝 Recorded {source} turn: {role} ({len(content)} chars)")
+
+        # 5. Resume LunaFM background channels after assistant turns
+        if role == "assistant" and self.lunafm:
+            try:
+                asyncio.create_task(self.lunafm.resume())
+            except Exception as e:
+                logger.debug(f"LunaFM resume failed: {e}")
 
     async def _trigger_extraction(self, role: str, content: str, source: str = "text") -> None:
         """
@@ -1911,6 +2027,10 @@ Emojis can accompany gestures or stand alone.
         # Grounding priority → confidence floor for Nexus nodes
         _PRIORITY_FLOOR = {"primary": 0.75, "supplemental": 0.5, "background": 0.3}
 
+        import time as _ctime
+        _ct: dict = {}
+        _ct0 = _ctime.time()
+
         for key in collections_to_search:
             if content_budget <= 0 and chunk_budget <= 0:
                 break
@@ -1918,6 +2038,9 @@ Emojis can accompany gestures or stand alone.
             conn = self.aibrarian.connections.get(key)
             if not conn:
                 continue
+
+            _ck = _ctime.time()
+            _t_ct = _ctime.time()
 
             from luna.substrate.aibrarian_engine import AiBrarianEngine
             fts_query = AiBrarianEngine._sanitize_fts_query(query)
@@ -1952,6 +2075,9 @@ Emojis can accompany gestures or stand alone.
                 except Exception:
                     pass
 
+            _ct[f"{key}_t0_structure"] = _ctime.time() - _t_ct
+            _t_ct = _ctime.time()
+
             # ── TIER 1: Content extractions FTS5 (CLAIMs + SECTION_SUMMARYs) ──
             ext_rows = []
             try:
@@ -1970,6 +2096,9 @@ Emojis can accompany gestures or stand alone.
             # Normalize Row objects to dicts for downstream .get() calls
             ext_rows = [dict(r) if not isinstance(r, dict) else r for r in ext_rows]
             logger.info("[PHASE2] Tier 1 FTS5 for %s: query='%s', results=%d", key, fts_query[:60], len(ext_rows))
+
+            _ct[f"{key}_t1_fts5_ext"] = _ctime.time() - _t_ct
+            _t_ct = _ctime.time()
 
             # ── TIER 2: Query expansion (if Tier 1 is sparse) ────────────
             if len(ext_rows) < 8:
@@ -2007,6 +2136,9 @@ Emojis can accompany gestures or stand alone.
                         "grounding_priority": priority,
                     })
 
+            _ct[f"{key}_t2_fts5_full"] = _ctime.time() - _t_ct
+            _t_ct = _ctime.time()
+
             # ── TIER 3: Semantic fallback (if still sparse) ──────────────
             # For complex research queries, always search chunks (extractions are summaries)
             _tier3_threshold = 5
@@ -2041,6 +2173,9 @@ Emojis can accompany gestures or stand alone.
                             })
                 except Exception as e:
                     logger.warning(f"[PHASE2] Semantic fallback for {key}: {e}")
+
+            _ct[f"{key}_t3_semantic"] = _ctime.time() - _t_ct
+            _t_ct = _ctime.time()
 
             # ── TIER 4: Raw text chunks (when query asks for depth) ──────
             _DEPTH_SIGNALS = {
@@ -2118,6 +2253,9 @@ Emojis can accompany gestures or stand alone.
                 except Exception as e:
                     logger.debug(f"[PHASE2] Tier 4 chunk search for {key}: {e}")
 
+                _ct[f"{key}_t4_chunks"] = _ctime.time() - _t_ct
+                _t_ct = _ctime.time()
+
                 # ── TIER 5: Luna's prior reflections on this material ────────
                 try:
                     refl_rows = conn.conn.execute(
@@ -2147,6 +2285,24 @@ Emojis can accompany gestures or stand alone.
                         logger.info(f"[PHASE2] Tier 5: {len(refl_rows)} prior reflections for {key}")
                 except Exception:
                     pass  # reflections_fts may not exist in older collections
+
+                _ct[f"{key}_t5_reflections"] = _ctime.time() - _t_ct
+
+            _ct[f"{key}_total"] = _ctime.time() - _ck
+
+        _ct["all_collections_total"] = _ctime.time() - _ct0
+        try:
+            logger.warning(
+                "[COLLECTION-TIMING] total=%.3fs | %s",
+                _ct["all_collections_total"],
+                " | ".join(
+                    f"{k}={v:.3f}s"
+                    for k, v in sorted(_ct.items(), key=lambda x: -x[1])
+                    if k != "all_collections_total" and v > 0.01
+                ),
+            )
+        except Exception:
+            pass
 
         # ── Write-back: Log access to each searched collection ──
         for key in collections_to_search:

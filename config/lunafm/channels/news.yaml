@@ -1,0 +1,146 @@
+# ═══════════════════════════════════════════════════════════════
+# LunaFM — Channel: News
+# "What's happening right now?"
+# ═══════════════════════════════════════════════════════════════
+#
+# The News channel is Luna's present-tense awareness.
+# High frequency, short bursts, always scanning.
+# It monitors conversation patterns, detects shifts,
+# and flags things that need attention.
+# ═══════════════════════════════════════════════════════════════
+
+channel:
+  id: news
+  name: "Luna News"
+  tagline: "What just changed?"
+  
+  # ── Schedule ────────────────────────────────────────────────
+  frequency:
+    mode: interval
+    interval_s: 15            # scan every 15 seconds
+    burst_on_event: true      # also fires on conversation events
+    events:                   # trigger events from the engine
+      - conversation_turn_complete
+      - document_ingested
+      - entity_detected
+      - memory_node_created
+  
+  # ── State machine ───────────────────────────────────────────
+  # idle → scanning → processing → emitting → cooldown → idle
+  states:
+    idle:
+      transitions:
+        - to: scanning
+          on: timer_tick
+        - to: scanning
+          on: event_received
+    
+    scanning:
+      timeout_ms: 2000        # max 2s in scanning state
+      process: "scan_recent_activity"
+      transitions:
+        - to: processing
+          on: scan_found_signal
+        - to: idle
+          on: scan_empty
+        - to: idle
+          on: preempted          # user message arrived
+    
+    processing:
+      timeout_ms: 5000        # max 5s processing
+      process: "evaluate_signal"
+      transitions:
+        - to: emitting
+          on: insight_ready
+        - to: idle
+          on: signal_below_threshold
+        - to: idle
+          on: preempted
+    
+    emitting:
+      timeout_ms: 1000
+      process: "write_artifact"
+      transitions:
+        - to: cooldown
+          on: artifact_written
+    
+    cooldown:
+      duration_ms: 5000       # 5s between emissions
+      transitions:
+        - to: idle
+          on: cooldown_complete
+  
+  # ── Processes ───────────────────────────────────────────────
+  # What the channel actually does at each state.
+  # These map to Python coroutines in src/lunafm/channels/news.py
+  processes:
+    
+    scan_recent_activity:
+      # No LLM call — pure database scan
+      type: query
+      description: "Scan recent conversation turns and memory events"
+      queries:
+        - source: conversation_turns
+          sql: |
+            SELECT content, created_at FROM conversation_turns
+            WHERE created_at > datetime('now', '-5 minutes')
+            ORDER BY created_at DESC LIMIT 10
+        - source: memory_nodes
+          sql: |
+            SELECT node_type, content, created_at FROM memory_nodes
+            WHERE created_at > datetime('now', '-5 minutes')
+            AND source != 'lunafm'
+            ORDER BY created_at DESC LIMIT 10
+      signal_threshold: 1     # emit if at least 1 new item found
+    
+    evaluate_signal:
+      # LLM call to assess what's interesting
+      type: llm
+      description: "Assess whether recent activity contains notable patterns"
+      model_override: null    # use station default (qwen3.5:9b)
+      prompt_template: |
+        You are Luna's News channel — your job is to notice what's changing.
+        
+        Recent activity:
+        {scan_results}
+        
+        In 1-2 sentences, identify the most notable change, shift, or pattern.
+        If nothing notable, respond with exactly: NOTHING_NOTABLE
+        
+        Format: TYPE: description
+        Types: TOPIC_SHIFT, REPEATED_QUESTION, EMOTIONAL_SHIFT, NEW_ENTITY, 
+               KNOWLEDGE_GAP, CONTRADICTION, PATTERN_BREAK
+      max_tokens: 100
+    
+    write_artifact:
+      type: emit
+      description: "Write a tagged artifact to the Memory Matrix"
+      artifact:
+        node_type: FLAG
+        source: "lunafm:news"
+        lock_in: 0.15
+        metadata:
+          channel: news
+          confidence: "{llm_confidence}"
+          timestamp: "{now}"
+        ttl_hours: 24          # news expires after 24h unless promoted
+  
+  # ── Cache ───────────────────────────────────────────────────
+  # Short-term memory for this channel.
+  # Prevents re-flagging the same thing.
+  cache:
+    type: lru
+    max_items: 50
+    dedup_window_s: 300       # don't flag same topic within 5 minutes
+    persist: false            # cache is ephemeral, dies with restart
+  
+  # ── Annotations ─────────────────────────────────────────────
+  # News channel can annotate existing memory nodes
+  # (e.g., "this node was accessed 5 times in 10 minutes")
+  annotations:
+    enabled: true
+    max_per_hour: 10
+    types:
+      - HOT_TOPIC              # node accessed frequently
+      - STALE                  # node hasn't been accessed in a long time
+      - CONTRADICTS            # this node contradicts another

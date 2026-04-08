@@ -1,0 +1,190 @@
+# ═══════════════════════════════════════════════════════════════
+# LunaFM — Channel: Entertainment
+# "What if...?"
+# ═══════════════════════════════════════════════════════════════
+#
+# The Entertainment channel is Luna's lateral thinking.
+# Associative, playful, wandering. It picks up two nodes
+# from different domains and asks "what's the connection?"
+# This is where synthesis happens — the unexpected insight
+# that makes Luna feel alive.
+#
+# Lowest priority. Runs in idle gaps. Allowed to be weird.
+# ═══════════════════════════════════════════════════════════════
+
+channel:
+  id: entertainment
+  name: "Luna Late Night"
+  tagline: "The unexpected connection"
+  
+  # ── Schedule ────────────────────────────────────────────────
+  frequency:
+    mode: interval
+    interval_s: 120           # wander every 2 minutes
+    only_when: idle           # only runs when no active conversation
+    jitter_s: 30              # randomize ±30s so it doesn't feel mechanical
+  
+  # ── State machine ───────────────────────────────────────────
+  # idle → sampling → associating → evaluating → emitting → cooldown
+  states:
+    idle:
+      transitions:
+        - to: sampling
+          on: timer_tick
+    
+    sampling:
+      timeout_ms: 1000
+      process: "sample_nodes"
+      transitions:
+        - to: associating
+          on: pair_selected
+        - to: idle
+          on: insufficient_nodes
+        - to: idle
+          on: preempted
+    
+    associating:
+      timeout_ms: 8000        # 8s — this is the creative LLM call
+      process: "find_connection"
+      transitions:
+        - to: evaluating
+          on: connection_found
+        - to: cooldown
+          on: no_connection      # tried, nothing there — cool down
+        - to: idle
+          on: preempted
+    
+    evaluating:
+      timeout_ms: 3000
+      process: "assess_novelty"
+      transitions:
+        - to: emitting
+          on: novel_insight
+        - to: cooldown
+          on: already_known       # connection exists, skip
+        - to: idle
+          on: preempted
+    
+    emitting:
+      timeout_ms: 1000
+      process: "write_synthesis"
+      transitions:
+        - to: cooldown
+          on: artifact_written
+    
+    cooldown:
+      duration_ms: 30000      # 30s cooldown — don't rush creativity
+      transitions:
+        - to: idle
+          on: cooldown_complete
+  
+  # ── Processes ───────────────────────────────────────────────
+  processes:
+    
+    sample_nodes:
+      # Pick two random nodes from different clusters/domains
+      type: query
+      description: "Sample a pair of nodes from different domains"
+      strategy: cross_domain_random
+      queries:
+        - source: memory_nodes
+          sql: |
+            SELECT id, node_type, content, cluster_id 
+            FROM memory_nodes 
+            WHERE node_type IN ('FACT', 'ENTITY', 'MEMORY', 'DECISION')
+            AND lock_in > 0.3
+            AND source != 'lunafm'
+            ORDER BY RANDOM() LIMIT 1
+        - source: memory_nodes
+          sql: |
+            SELECT id, node_type, content, cluster_id 
+            FROM memory_nodes 
+            WHERE node_type IN ('FACT', 'ENTITY', 'MEMORY', 'DECISION')
+            AND lock_in > 0.3
+            AND source != 'lunafm'
+            AND cluster_id != '{first_result_cluster_id}'
+            ORDER BY RANDOM() LIMIT 1
+      require_different_clusters: true
+    
+    find_connection:
+      # The creative leap — LLM looks for a structural connection
+      type: llm
+      description: "Find an unexpected connection between two memory nodes"
+      prompt_template: |
+        You are Luna's creative subconscious. You've been given two memories
+        from different parts of your experience. Your job is to find a
+        genuine structural, thematic, or metaphorical connection between them.
+        
+        Memory A ({node_a_type}):
+        {node_a_content}
+        
+        Memory B ({node_b_type}):
+        {node_b_content}
+        
+        If there's a real connection — not forced, not superficial — describe it
+        in 2-3 sentences. Start with the connection type:
+        
+        STRUCTURAL: They share the same underlying pattern or architecture
+        THEMATIC: They explore the same human question from different angles
+        METAPHORICAL: One illuminates the other through analogy
+        CAUSAL: One might influence or explain the other
+        TEMPORAL: They mark different moments in the same arc
+        
+        If there's no genuine connection, respond exactly: NO_CONNECTION
+      max_tokens: 200
+      temperature: 0.9        # higher temp for creative associations
+    
+    assess_novelty:
+      # Check: does this connection already exist in the graph?
+      type: query
+      description: "Check if this synthesis is genuinely new"
+      queries:
+        - source: graph_edges
+          sql: |
+            SELECT COUNT(*) as existing FROM graph_edges
+            WHERE (from_id = '{node_a_id}' AND to_id = '{node_b_id}')
+            OR (from_id = '{node_b_id}' AND to_id = '{node_a_id}')
+        - source: memory_nodes
+          sql: |
+            SELECT COUNT(*) as similar FROM memory_nodes
+            WHERE node_type = 'SYNTHESIS'
+            AND source = 'lunafm:entertainment'
+            AND content LIKE '%{connection_keyword}%'
+      novel_if: "existing == 0 AND similar < 3"
+    
+    write_synthesis:
+      type: emit
+      description: "Write a synthesis artifact and optional graph edge"
+      artifact:
+        node_type: SYNTHESIS
+        source: "lunafm:entertainment"
+        lock_in: 0.2           # slightly higher than news — creative insights persist longer
+        metadata:
+          channel: entertainment
+          node_a_id: "{node_a_id}"
+          node_b_id: "{node_b_id}"
+          connection_type: "{connection_type}"
+          timestamp: "{now}"
+        ttl_hours: 168         # 7 days unless promoted
+      graph_edge:
+        from_id: "{node_a_id}"
+        to_id: "{node_b_id}"
+        relationship: "SYNTHESIZED_CONNECTION"
+        strength: 0.3
+        origin: "lunafm:entertainment"
+  
+  # ── Cache ───────────────────────────────────────────────────
+  cache:
+    type: lru
+    max_items: 100
+    dedup_window_s: 3600      # don't try same pair within 1 hour
+    persist: true             # remember what we've tried across restarts
+    persist_path: "data/lunafm/entertainment_cache.json"
+  
+  # ── Annotations ─────────────────────────────────────────────
+  annotations:
+    enabled: true
+    max_per_hour: 5
+    types:
+      - RESONANCE_PAIR         # two nodes that light up together
+      - PATTERN_SEED           # early signal of a recurring theme

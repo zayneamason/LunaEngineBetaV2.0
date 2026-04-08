@@ -212,8 +212,8 @@ def _validate_merged_profile(profile: dict) -> list[str]:
         errors.append(f"config.fallback_chain.chain: expected list, got {type(chain).__name__}")
     # Database mode
     db_mode = profile.get("database", {}).get("mode")
-    if db_mode is not None and db_mode not in ("seed", "clone", "empty"):
-        errors.append(f"database.mode: expected seed|clone|empty, got {db_mode!r}")
+    if db_mode is not None and db_mode not in ("seed", "clone", "empty", "filtered"):
+        errors.append(f"database.mode: expected seed|clone|empty|filtered, got {db_mode!r}")
     return errors
 
 

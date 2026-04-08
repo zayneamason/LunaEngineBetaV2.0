@@ -9,6 +9,7 @@ import NetworkSection from './sections/NetworkSection';
 import AboutSection from './sections/AboutSection';
 import SkillsSection from './sections/SkillsSection';
 import DisplaySection from './sections/DisplaySection';
+import LunaFMSection from './sections/LunaFMSection';
 
 const SECTIONS = [
   { id: 'llm',          label: 'LLM PROVIDERS' },
@@ -18,6 +19,7 @@ const SECTIONS = [
   { id: 'memory',       label: 'MEMORY' },
   { id: 'collections',  label: 'COLLECTIONS' },
   { id: 'skills',       label: 'SKILLS' },
+  { id: 'lunafm',       label: 'LUNAFM' },
   { id: 'display',      label: 'DISPLAY' },
   { id: 'network',      label: 'NETWORK' },
   { id: 'about',        label: 'ABOUT' },
@@ -31,6 +33,7 @@ const SECTION_COMPONENTS = {
   memory: MemorySection,
   collections: CollectionsSection,
   skills: SkillsSection,
+  lunafm: LunaFMSection,
   display: DisplaySection,
   network: NetworkSection,
   about: AboutSection,

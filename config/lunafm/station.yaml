@@ -1,0 +1,88 @@
+# ═══════════════════════════════════════════════════════════════
+# LunaFM — Station Configuration
+# Luna's background cognitive broadcast system
+# ═══════════════════════════════════════════════════════════════
+#
+# LunaFM models Luna's inner life as a radio station.
+# Channels run as async coroutines, each a different mode of
+# attention. They produce cognitive artifacts — tagged, sourced,
+# and trust-leveled — that feed the Memory Matrix, revolving
+# context, and conversation pipeline.
+#
+# The station is the scheduler. Channels are the programs.
+# YAML is the program guide. Everything is inspectable.
+# ═══════════════════════════════════════════════════════════════
+
+station:
+  name: "LunaFM"
+  version: "0.1.0"
+  
+  # ── Broadcast schedule ──────────────────────────────────────
+  # When is the station "on air"?
+  # always    — runs whenever Luna engine is running
+  # idle      — runs only when no active conversation
+  # scheduled — runs on a cron-like schedule
+  mode: always
+  
+  # ── Resource budget ──────────────────────────────────────────
+  # Max % of compute Luna allocates to background thought.
+  # Conversation always has priority. If a user message arrives,
+  # all channels pause within grace_ms.
+  budget:
+    max_concurrent_channels: 2          # max channels active simultaneously
+    max_gpu_pct: 30                     # % of GPU time for background thought
+    conversation_preempts: true         # user message pauses all channels
+    preempt_grace_ms: 500               # channels get 500ms to checkpoint
+    cooldown_after_conversation_ms: 3000 # wait 3s after last user turn before resuming
+  
+  # ── LLM routing ─────────────────────────────────────────────
+  # Which model(s) power background thought?
+  # Channels can override per-channel.
+  default_model:
+    provider: ollama
+    model: "qwen3.5:9b"                # small, fast, non-reasoning
+    max_tokens: 512                     # keep thoughts short
+    temperature: 0.7
+  
+  # ── Trust model ─────────────────────────────────────────────
+  # Background thoughts are NOT user-stated facts.
+  # They're Luna's inferences — provisional until confirmed.
+  trust:
+    default_lock_in: 0.15               # low — decays fast unless reinforced
+    max_lock_in: 0.5                    # ceiling for background-generated content
+    source_tag: "lunafm"                # all artifacts tagged with origin
+    requires_confirmation: false         # true = needs user confirmation to persist
+    decay_rate: 0.02                    # per-hour decay if not accessed
+    promotion_on_access: 0.1            # bump when conversation actually uses the insight
+  
+  # ── Output targets ──────────────────────────────────────────
+  # Where do channel outputs go?
+  targets:
+    memory_matrix:
+      enabled: true
+      node_types: [INSIGHT, SYNTHESIS, CONNECTION, CONSOLIDATION, FLAG]
+      max_nodes_per_hour: 20            # pollution cap
+    
+    revolving_context:
+      enabled: true
+      ring: OUTER                       # background thoughts start in outer ring
+      max_items: 5                      # don't flood the context
+    
+    scribe_mailbox:
+      enabled: true                     # channels can send hints to scribe
+    
+    channel_log:
+      enabled: true
+      path: "data/lunafm/broadcast.log" # inspectable thought stream
+      max_size_mb: 50
+  
+  # ── Channels ────────────────────────────────────────────────
+  # Each channel is defined in its own YAML file.
+  # The station loads all files from the channels/ directory.
+  channels_dir: "config/lunafm/channels/"
+  
+  # Channel priority (higher = more compute when contending)
+  priority_order:
+    - news          # highest — present-tense awareness
+    - history       # medium — memory consolidation  
+    - entertainment # lowest — creative wandering (runs in idle gaps)

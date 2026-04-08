@@ -108,6 +108,7 @@ export default defineConfig({
       '/vk': { target: backendTarget, changeOrigin: true },
       '/guardian': { target: backendTarget, changeOrigin: true },
       '/studio': { target: backendTarget, changeOrigin: true },
+      '/lunafm': { target: backendTarget, changeOrigin: true },
     }
   }
 })
