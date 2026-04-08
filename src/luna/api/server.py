@@ -181,6 +181,7 @@ async def _run_qa_validation_background(
             virtues_loaded=virtues_loaded,
             narration_applied=narration_applied,
             memory_stats=memory_stats,
+            memory_confidence_level=getattr(getattr(director, '_last_memory_confidence', None), 'level', '') if director else '',
         )
 
         # Run validation (this stores the report automatically)

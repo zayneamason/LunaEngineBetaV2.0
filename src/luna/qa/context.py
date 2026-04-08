@@ -81,6 +81,9 @@ class InferenceContext:
     memory_stats: dict = field(default_factory=dict)
     extraction_stats: dict = field(default_factory=dict)
 
+    # Memory confidence level (NONE, LOW, MEDIUM, HIGH)
+    memory_confidence_level: str = ""
+
     def add_step(self, step: str, time_ms: float, detail: str, **metadata):
         """Add a step to the request chain."""
         self.request_chain.append(RequestStep(
@@ -126,6 +129,7 @@ class InferenceContext:
             ],
             "memory_stats": self.memory_stats,
             "extraction_stats": self.extraction_stats,
+            "memory_confidence_level": self.memory_confidence_level,
         }
 
     @classmethod

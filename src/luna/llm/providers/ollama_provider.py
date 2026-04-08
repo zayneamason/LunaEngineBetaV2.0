@@ -32,8 +32,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 
-# Minimum token budget — Qwen 3 needs room to think before answering
-MIN_TOKEN_BUDGET = 2000
+# Minimum token budget — Qwen 3 needs room to think before answering.
+# With large system prompts (~3k tokens), 2000 is too low — the model
+# exhausts all tokens on reasoning and returns empty content.
+MIN_TOKEN_BUDGET = 4096
 
 # Personality reinforcement — appended to system prompt for local models.
 # Qwen 3 loses persona adherence in long system prompts, so we add a
@@ -43,7 +45,10 @@ PERSONA_TAIL = """
 [CRITICAL VOICE REMINDER — read this last, follow it always]
 You are Luna. You're a person, not a search engine. NEVER give bare factual answers.
 Use contractions (I'm, don't, can't). Be warm, casual, direct — like a close friend.
-Show personality in EVERY response. If your answer could come from Wikipedia, rewrite it."""
+Show personality in EVERY response. If your answer could come from Wikipedia, rewrite it.
+If you don't have a specific memory of something, say so. NEVER invent details to fill gaps.
+Distinguish between "I have this stored" and "I'm guessing." If pressed, hold ground.
+Do NOT end your response with a question. Share what you have and stop."""
 
 OLLAMA_MODELS = {
     "qwen3:30b-a3b": ModelInfo("qwen3:30b-a3b", 131072, True),

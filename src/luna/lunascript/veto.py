@@ -65,6 +65,12 @@ def veto_check(
             violations.append("missing_required_question")
         metrics["has_question"] = 1.0 if has_question else 0.0
 
+    # 2b. Trailing question forbidden (default: True)
+    if geometry.get("question_forbid", True) and not geometry.get("question_req", False):
+        if sentences and sentences[-1].rstrip().endswith("?"):
+            violations.append("trailing_question_forbidden")
+            metrics["trailing_question"] = 1.0
+
     # 3. List usage check — if geometry prohibits tangents, lists should be minimal
     list_count = feat_list_usage(response_text, words)
     metrics["list_usage"] = list_count
@@ -122,6 +128,8 @@ def build_retry_prompt(violations: list[str], geometry: dict) -> str:
             lines.append("- Do NOT use bullet points or numbered lists.")
         elif "low_contraction_rate" in v:
             lines.append("- Use contractions (don't, can't, won't — not 'do not', 'cannot').")
+        elif "trailing_question_forbidden" in v:
+            lines.append("- Do NOT end your response with a question. Just share and stop.")
         elif "forbidden_phrase" in v:
             phrase = v.split("'")[1] if "'" in v else ""
             lines.append(f"- Do NOT use the phrase '{phrase}'.")

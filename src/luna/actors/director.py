@@ -273,6 +273,28 @@ class DirectorActor(Actor):
             logger.debug(f"Could not read claude model from config: {e}")
         return "claude-sonnet-4-20250514"
 
+    @staticmethod
+    def _strip_trailing_question(text: str) -> str:
+        """Remove trailing question sentence from response.
+
+        Qwen3 consistently ends responses with follow-up questions despite
+        prompt instructions. This strips the last sentence if it ends with '?',
+        unless it's the only sentence.
+        """
+        if not text or "?" not in text:
+            return text
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+        if not sentences:
+            return text
+        if sentences[-1].rstrip().endswith("?"):
+            if len(sentences) <= 1:
+                return text
+            stripped = " ".join(sentences[:-1]).rstrip()
+            logger.debug(f"[STRIP-Q] Removed trailing question: '{sentences[-1][:60]}...'")
+            return stripped
+        return text
+
     @property
     def client(self):
         """Lazy init Anthropic client."""
@@ -1333,6 +1355,7 @@ class DirectorActor(Actor):
         # RING BUFFER: Record response (structural guarantee against forgetting)
         # BUG-C FIX: Always add response to prevent orphaned user messages that bleed into next turn
         if response_text:
+            response_text = self._strip_trailing_question(response_text)
             self._active_ring.add_assistant(response_text)
             logger.debug("[PROCESS-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
         else:
@@ -1373,6 +1396,7 @@ class DirectorActor(Actor):
                     latency_ms=elapsed_ms,
                     input_tokens=len(message) // 4,
                     output_tokens=len(response_text) // 4,
+                    memory_confidence_level=getattr(self._last_memory_confidence, 'level', '') if self._last_memory_confidence else '',
                 )
 
                 # Add request chain steps
@@ -1999,6 +2023,7 @@ class DirectorActor(Actor):
 
             # Record response in ring buffer (CRITICAL for history)
             if response_buffer:
+                response_buffer = self._strip_trailing_question(response_buffer)
                 self._active_ring.add_assistant(response_buffer)
                 logger.debug("[LOCAL-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 
@@ -2919,6 +2944,7 @@ QUESTION RULE: Do NOT end your response with a question. Do NOT ask follow-up qu
 
             # Record response in ring buffer (CRITICAL for history)
             if final_response:
+                final_response = self._strip_trailing_question(final_response)
                 self._active_ring.add_assistant(final_response)
                 logger.debug("[DELEGATION-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 
@@ -3324,6 +3350,7 @@ OUTPUT:"""
 
             # Record response in ring buffer (CRITICAL for history)
             if response_text:
+                response_text = self._strip_trailing_question(response_text)
                 self._active_ring.add_assistant(response_text)
                 logger.debug("[FALLBACK-RING] Recorded response to ring buffer (size: %d)", len(self._active_ring))
 

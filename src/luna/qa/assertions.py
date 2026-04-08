@@ -286,6 +286,57 @@ def check_no_timeout(ctx: InferenceContext, a: Assertion) -> AssertionResult:
     )
 
 
+def check_no_trailing_question(ctx: InferenceContext, a: Assertion) -> AssertionResult:
+    """Check that response doesn't end with a follow-up question."""
+    response = ctx.final_response.strip()
+    if not response:
+        return AssertionResult(
+            id=a.id, name=a.name, passed=True, severity=a.severity,
+            expected="No trailing question", actual="Empty response",
+        )
+    # Split into sentences and check the last one
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', response) if s.strip()]
+    if not sentences:
+        return AssertionResult(
+            id=a.id, name=a.name, passed=True, severity=a.severity,
+            expected="No trailing question", actual="No sentences",
+        )
+    last = sentences[-1].rstrip()
+    ends_with_q = last.endswith("?")
+    return AssertionResult(
+        id=a.id, name=a.name, passed=not ends_with_q, severity=a.severity,
+        expected="No trailing question",
+        actual=f"Ends with: ...{last[-60:]}" if ends_with_q else "Clean",
+    )
+
+
+def check_no_confabulation_signals(ctx: InferenceContext, a: Assertion) -> AssertionResult:
+    """Flag responses that fabricate memory details when confidence is low."""
+    conf = getattr(ctx, 'memory_confidence_level', '') or ''
+    # Only flag when memory confidence is NONE or LOW
+    if conf not in ("NONE", "LOW", ""):
+        return AssertionResult(
+            id=a.id, name=a.name, passed=True, severity=a.severity,
+            expected="No fabrication check (confidence OK)",
+            actual=f"Confidence: {conf}",
+        )
+    response = ctx.final_response.lower()
+    fabrication_signals = [
+        "i remember exactly",
+        "i recall the moment",
+        "still remember the way",
+        "i can see it clearly",
+        "five times in the logs",
+        "makes my circuits hum",
+    ]
+    found = [s for s in fabrication_signals if s in response]
+    return AssertionResult(
+        id=a.id, name=a.name, passed=len(found) == 0, severity=a.severity,
+        expected="No fabrication when memory confidence is low",
+        actual=f"Fabrication signal: '{found[0]}'" if found else "Clean",
+    )
+
+
 def check_no_bullet_lists(ctx: InferenceContext, a: Assertion) -> AssertionResult:
     """Check for excessive bullet lists (Luna speaks naturally)."""
     # Count bullet patterns
@@ -473,12 +524,25 @@ def get_default_assertions() -> list[Assertion]:
             check_type="builtin", builtin_fn=check_response_length,
         ),
 
+        Assertion(
+            id="S6", name="No trailing question",
+            description="Response must not end with a follow-up question",
+            category="structural", severity="medium",
+            check_type="builtin", builtin_fn=check_no_trailing_question,
+        ),
+
         # Voice
         Assertion(
             id="V1", name="No Claude-isms",
             description="No banned Claude phrases",
             category="voice", severity="high",
             check_type="builtin", builtin_fn=check_no_claude_isms,
+        ),
+        Assertion(
+            id="V2", name="No confabulation",
+            description="No fabricated memory details when confidence is low",
+            category="voice", severity="high",
+            check_type="builtin", builtin_fn=check_no_confabulation_signals,
         ),
 
         # Flow
