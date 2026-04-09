@@ -1703,6 +1703,10 @@ class DirectorActor(Actor):
 
         # Check intent — casual chat and reflection stay local
         intent = getattr(self, '_last_intent', None)
+        # If intent was never classified for this call path, delegate to be safe
+        if intent is None:
+            logger.info(f"🔀 DELEGATE: '{query_preview}' (no intent classified, safe default)")
+            return True
         intent_mode = getattr(intent, 'mode', None)
         mode_val = intent_mode.value if intent_mode and hasattr(intent_mode, 'value') else "CHAT"
 

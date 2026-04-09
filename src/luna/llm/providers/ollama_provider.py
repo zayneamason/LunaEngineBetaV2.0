@@ -35,7 +35,7 @@ DEFAULT_BASE_URL = "http://localhost:11434"
 # Minimum token budget for response generation.
 # qwen3.5:9b is non-reasoning — no thinking tax, all tokens are content.
 # Previous value of 4096 was needed for qwen3 thinking mode overhead.
-MIN_TOKEN_BUDGET = 1024
+MIN_TOKEN_BUDGET = 2048
 
 # Personality reinforcement — appended to system prompt for local models.
 # Qwen 3 loses persona adherence in long system prompts, so we add a
