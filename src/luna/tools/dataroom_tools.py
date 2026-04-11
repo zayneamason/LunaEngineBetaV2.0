@@ -23,13 +23,17 @@ logger = logging.getLogger(__name__)
 
 _engine = None
 _engine_failed = False  # avoid retrying if standalone fallback failed
-_COLLECTION_KEY = "dataroom"  # default; overridden by set_collection_key()
+_COLLECTION_KEY = None  # auto-set from registry; overridden by set_collection_key()
 
 
 def set_engine(engine_instance):
     """Attach the Engine-owned AiBrarianEngine. Called once at startup."""
-    global _engine
+    global _engine, _COLLECTION_KEY
     _engine = engine_instance
+    # Auto-set default collection key from first connected collection
+    if _COLLECTION_KEY is None and hasattr(engine_instance, 'connections') and engine_instance.connections:
+        _COLLECTION_KEY = next(iter(engine_instance.connections.keys()))
+        logger.info("Auto-set collection key to '%s'", _COLLECTION_KEY)
 
 
 def set_collection_key(key: str):
@@ -64,6 +68,11 @@ async def _get_engine():
         engine = AiBrarianEngine(registry_path, project_root=_root)
         await engine.initialize()
         _engine = engine
+        # Auto-set default collection key from first connected collection
+        if _COLLECTION_KEY is None and hasattr(engine, 'connections') and engine.connections:
+            _auto_key = next(iter(engine.connections.keys()))
+            set_collection_key(_auto_key)
+            logger.info("Auto-set collection key to '%s'", _auto_key)
         logger.warning("AiBrarian engine fallback: standalone init (Engine not booted)")
         return _engine
     except Exception as e:
@@ -99,11 +108,24 @@ async def dataroom_search(
 
     if engine is not None:
         try:
-            results = await engine.search(_COLLECTION_KEY, query, search_type, limit * 2)
+            # Fan out across all connected collections, not just _COLLECTION_KEY
+            collection_keys = list(engine.connections.keys()) if hasattr(engine, 'connections') and engine.connections else [_COLLECTION_KEY]
+            all_results = []
+            for coll_key in collection_keys:
+                try:
+                    results = await engine.search(coll_key, query, search_type, limit * 2)
+                    for r in results:
+                        r["_collection"] = coll_key
+                    all_results.extend(results)
+                except Exception as coll_err:
+                    logger.debug("Search in '%s' failed: %s", coll_key, coll_err)
+
+            # Sort merged results by score descending
+            all_results.sort(key=lambda r: r.get("score", 0), reverse=True)
 
             # Apply category filter if requested
             filtered = []
-            for r in results:
+            for r in all_results:
                 if category and r.get("category") and category.lower() not in r["category"].lower():
                     continue
                 filtered.append({
@@ -113,20 +135,22 @@ async def dataroom_search(
                     "snippet": r.get("snippet", ""),
                     "score": r.get("score", 0),
                     "search_type": r.get("search_type", search_type),
+                    "collection": r.get("_collection", _COLLECTION_KEY),
                 })
                 if len(filtered) >= limit:
                     break
 
             # Enrich top results with more content so Luna can answer directly
             for entry in filtered[:3]:
-                doc = await engine.get_document(_COLLECTION_KEY, entry["id"])
+                coll = entry.get("collection", _COLLECTION_KEY)
+                doc = await engine.get_document(coll, entry["id"])
                 if doc and doc.get("full_text"):
                     text = doc["full_text"]
                     entry["content"] = text[:2000]
                     if len(text) > 2000:
                         entry["content"] += f"\n[... {len(text):,} chars total]"
 
-            logger.debug("dataroom_search '%s' via AiBrarian → %d results", query, len(filtered))
+            logger.debug("dataroom_search '%s' via AiBrarian → %d results across %d collections", query, len(filtered), len(collection_keys))
             return filtered
         except Exception as e:
             logger.warning("AiBrarian search failed, falling back to MemoryMatrix: %s", e)
@@ -178,21 +202,27 @@ async def dataroom_status() -> dict:
 
     if engine is not None:
         try:
-            stats = await engine.stats(_COLLECTION_KEY)
-            # Get category breakdown from document listing
-            doc_list = await engine.list_documents(_COLLECTION_KEY, 0, 500)
-            category_counts = {}
-            for doc in doc_list.get("documents", []):
-                cat = doc.get("category", "Unknown")
-                category_counts[cat] = category_counts.get(cat, 0) + 1
+            collection_keys = list(engine.connections.keys()) if hasattr(engine, 'connections') and engine.connections else ([_COLLECTION_KEY] if _COLLECTION_KEY else [])
+            if not collection_keys:
+                return {"error": "No collections available", "backend": "aibrarian"}
 
-            return {
-                "total_documents": stats["documents"],
-                "total_chunks": stats["chunks"],
-                "total_words": stats["total_words"],
-                "by_category": category_counts,
-                "backend": "aibrarian",
-            }
+            combined = {"total_documents": 0, "total_chunks": 0, "total_words": 0, "by_category": {}, "backend": "aibrarian", "collections": []}
+            for coll_key in collection_keys:
+                try:
+                    stats = await engine.stats(coll_key)
+                    combined["total_documents"] += stats.get("documents", 0)
+                    combined["total_chunks"] += stats.get("chunks", 0)
+                    combined["total_words"] += stats.get("total_words", 0)
+                    combined["collections"].append({"key": coll_key, **stats})
+
+                    doc_list = await engine.list_documents(coll_key, 0, 500)
+                    for doc in doc_list.get("documents", []):
+                        cat = doc.get("category", "Unknown")
+                        combined["by_category"][cat] = combined["by_category"].get(cat, 0) + 1
+                except Exception as coll_err:
+                    logger.debug("Stats for '%s' failed: %s", coll_key, coll_err)
+
+            return combined
         except Exception as e:
             logger.warning("AiBrarian stats failed: %s", e)
 
@@ -234,28 +264,31 @@ async def dataroom_recent(days: int = 7) -> list[dict]:
 
     if engine is not None:
         try:
-            doc_list = await engine.list_documents(_COLLECTION_KEY, 0, 50)
-            docs = doc_list.get("documents", [])
-
-            # Filter by created_at within the last N days
+            collection_keys = list(engine.connections.keys()) if hasattr(engine, 'connections') and engine.connections else ([_COLLECTION_KEY] if _COLLECTION_KEY else [])
             from datetime import datetime, timedelta
             cutoff = datetime.now() - timedelta(days=days)
             recent = []
-            for doc in docs:
-                created = doc.get("created_at", "")
-                if created:
-                    try:
-                        doc_time = datetime.fromisoformat(created)
-                        if doc_time < cutoff:
-                            continue
-                    except (ValueError, TypeError):
-                        pass
-                recent.append({
-                    "id": doc.get("id", ""),
-                    "name": doc.get("title") or doc.get("filename", ""),
-                    "category": doc.get("category", ""),
-                    "word_count": doc.get("word_count", 0),
-                })
+            for coll_key in collection_keys:
+                try:
+                    doc_list = await engine.list_documents(coll_key, 0, 50)
+                    for doc in doc_list.get("documents", []):
+                        created = doc.get("created_at", "")
+                        if created:
+                            try:
+                                doc_time = datetime.fromisoformat(created)
+                                if doc_time < cutoff:
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
+                        recent.append({
+                            "id": doc.get("id", ""),
+                            "name": doc.get("title") or doc.get("filename", ""),
+                            "category": doc.get("category", ""),
+                            "word_count": doc.get("word_count", 0),
+                            "collection": coll_key,
+                        })
+                except Exception as coll_err:
+                    logger.debug("List for '%s' failed: %s", coll_key, coll_err)
 
             return recent
         except Exception as e:
@@ -319,9 +352,19 @@ async def dataroom_read_document(
         return {"error": "AiBrarian engine not available"}
 
     try:
-        doc = await engine.get_document(_COLLECTION_KEY, doc_id)
+        # Try all connected collections until the document is found
+        collection_keys = list(engine.connections.keys()) if hasattr(engine, 'connections') and engine.connections else ([_COLLECTION_KEY] if _COLLECTION_KEY else [])
+        doc = None
+        for coll_key in collection_keys:
+            try:
+                doc = await engine.get_document(coll_key, doc_id)
+                if doc:
+                    break
+            except Exception:
+                continue
+
         if not doc:
-            return {"error": f"Document '{doc_id}' not found in {_COLLECTION_KEY}"}
+            return {"error": f"Document '{doc_id}' not found in any collection"}
 
         full_text = doc.get("full_text", "")
         truncated = len(full_text) > max_chars
