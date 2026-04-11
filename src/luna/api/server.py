@@ -487,8 +487,8 @@ async def lifespan(app: FastAPI):
             from luna.tools.dataroom_tools import set_engine as _dr_set_engine, set_collection_key as _dr_set_key
             _dr_set_engine(_engine.aibrarian)
             # Use first enabled collection from registry as the dataroom key
-            if hasattr(_engine.aibrarian, 'collections') and _engine.aibrarian.collections:
-                _first_key = next(iter(_engine.aibrarian.collections))
+            if hasattr(_engine.aibrarian, 'connections') and _engine.aibrarian.connections:
+                _first_key = next(iter(_engine.aibrarian.connections))
                 _dr_set_key(_first_key)
                 logger.info("Dataroom collection key set to '%s'", _first_key)
             logger.info("Dataroom tools wired to Engine-owned AiBrarianEngine")
@@ -1939,6 +1939,59 @@ async def factory_reset():
     return {"status": "reset", "restart_required": True}
 
 
+@app.post("/api/preflight")
+async def preflight_tracer():
+    """Pre-flight check: exercise all subsystems, return health report."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    from luna.api.preflight import run_preflight
+    return await run_preflight(_engine)
+
+
+@app.post("/api/jumpstart")
+async def jumpstart():
+    """Restart degraded subsystems and verify via pre-flight."""
+    if _engine is None:
+        raise HTTPException(status_code=503, detail="Engine not ready")
+    from luna.api.jumpstart import run_jumpstart
+    return await run_jumpstart(_engine)
+
+
+@app.post("/api/demo-reset")
+async def demo_reset():
+    """Reset demo instance to post-build, pre-wizard state.
+
+    Only works if demo_mode is enabled in frontend_config.json.
+    Preserves: secrets.json, collections, personality, frontend config.
+    Wipes: luna_engine.db, owner.yaml, identity_bypass.json.
+    """
+    # Verify demo_mode is enabled
+    fc_path = config_dir() / "frontend_config.json"
+    if fc_path.exists():
+        fc = json.loads(fc_path.read_text())
+        if not fc.get("demo_mode", False):
+            raise HTTPException(status_code=403, detail="Demo mode not enabled")
+    else:
+        raise HTTPException(status_code=403, detail="No frontend config found")
+
+    wipe_targets = [
+        user_dir() / "luna_engine.db",
+        config_dir() / "owner.yaml",
+        config_dir() / "identity_bypass.json",
+    ]
+    wiped = []
+    for p in wipe_targets:
+        if p.exists():
+            p.unlink()
+            wiped.append(p.name)
+
+    # Clear owner cache so /api/status/first-run returns is_first_run: true
+    from luna.core.owner import get_owner
+    get_owner.cache_clear()
+
+    return {"status": "reset", "wiped": wiped, "message": "Refresh browser to start wizard"}
+
+
 @app.post("/api/onboarding/owner")
 async def set_owner(data: dict):
     """Set the owner identity during first-run wizard."""
@@ -2362,6 +2415,7 @@ async def get_history(limit: int = 50):
                 FROM conversation_turns
                 WHERE role IN ('user', 'assistant')
                   AND content NOT LIKE '[Memory %'
+                  AND content NOT LIKE '[SYSTEM:%'
                 ORDER BY created_at DESC
                 LIMIT ?
             """, (limit,))
