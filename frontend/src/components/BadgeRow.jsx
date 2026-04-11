@@ -4,15 +4,15 @@ import React from 'react';
  * BadgeRow — configurable badge strip below assistant messages.
  * Extracted from ChatPanel to support badge visibility toggling.
  */
-export default function BadgeRow({ msg, badgeConfig }) {
+export default function BadgeRow({ msg, badgeConfig, debugMode = true }) {
   if (!msg.model && !msg.delegated && !msg.local && !msg.fallback && !msg.accessDeniedCount && !msg.lunascript) {
     return null;
   }
 
   return (
     <div className="mt-2 flex items-center gap-3 text-xs">
-      {/* Route indicator */}
-      {badgeConfig.route && (msg.delegated ? (
+      {/* Route indicator — debug only */}
+      {debugMode && badgeConfig.route && (msg.delegated ? (
         <span className="flex items-center gap-1 text-fuchsia-400">
           <span>⚡</span>
           <span>delegated</span>
@@ -29,10 +29,10 @@ export default function BadgeRow({ msg, badgeConfig }) {
         </span>
       ) : null)}
 
-      {badgeConfig.model && msg.model && (
+      {debugMode && badgeConfig.model && msg.model && (
         <span className="text-kozmo-muted">{msg.model}</span>
       )}
-      {badgeConfig.tokens && msg.tokens && (
+      {debugMode && badgeConfig.tokens && msg.tokens && (
         <span className="text-kozmo-muted">{msg.tokens} tokens</span>
       )}
       {badgeConfig.latency && msg.latency && (
@@ -48,7 +48,7 @@ export default function BadgeRow({ msg, badgeConfig }) {
           <span>{msg.accessDeniedCount} filtered</span>
         </span>
       )}
-      {badgeConfig.lunascript && msg.lunascript && (
+      {debugMode && badgeConfig.lunascript && msg.lunascript && (
         <>
           {msg.lunascript.glyph && (
             <span className="text-violet-400" title={msg.lunascript.position || ''}>

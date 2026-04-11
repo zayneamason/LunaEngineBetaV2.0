@@ -9,6 +9,7 @@ import { FallbackChainPanel } from './FallbackChainPanel';
 import { ServerMonitorPanel } from './ServerMonitorPanel';
 import AnnotatedText from './AnnotatedText';
 import GroundingOverlay, { VerificationToggle, HelpToggle } from './GroundingOverlay';
+import { useFrontendConfig } from '../hooks/useFrontendConfig';
 import { useNavigation } from '../hooks/useNavigation';
 import { GridProvider } from '../contexts/GridContext';
 import GridLayer from './GridLayer';
@@ -201,6 +202,8 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
   const { orbState, isConnected } = useOrbState();
   const { navigate } = useNavigation();
   const { config: badgeConfig } = useBadgeConfig();
+  const frontendConfig = useFrontendConfig();
+  const debugMode = frontendConfig.debug_mode !== false;
 
   // Aperture state
   const [apertureAngle, setApertureAngle] = useState(55);
@@ -555,6 +558,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                             groundingMetadata={msg.groundingMetadata}
                             verificationMode={verificationMode}
                             entities={entities}
+                            debugMode={debugMode}
                             onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
                           />
                         : <AnnotatedText
@@ -563,7 +567,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                             onEntityClick={(entityId) => navigate({ to: 'observatory', tab: 'entities', entityId })}
                           />}
                     </div>
-                    <BadgeRow msg={msg} badgeConfig={badgeConfig} />
+                    <BadgeRow msg={msg} badgeConfig={badgeConfig} debugMode={debugMode} />
                     {msg.lunascript && !msg.streaming && msg.role === 'assistant' && (
                       <LunaScriptFeedback messageId={msg.id} lunascript={msg.lunascript} />
                     )}

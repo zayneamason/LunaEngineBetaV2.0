@@ -623,7 +623,7 @@ class BuildPipeline:
         if patches is not None:
             personality["bootstrap"]["seed_patches"] = [
                 p for p in personality.get("bootstrap", {}).get("seed_patches", [])
-                if p.get("id") in patches
+                if p.get("patch_id") in patches
             ]
         if profile_personality.get("first_meeting_directive"):
             personality.setdefault("bootstrap", {})["first_meeting_directive"] = True
@@ -647,7 +647,8 @@ class BuildPipeline:
                     entry = registry["collections"][coll_name].copy()
                     entry["enabled"] = True
                     if "source" in coll_cfg:
-                        entry["db_path"] = coll_cfg["source"]
+                        # Use compiled name (coll_name.db) not source path
+                        entry["db_path"] = f"data/system/aibrarian/{coll_name}.db"
                     enabled_collections[coll_name] = entry
         registry["collections"] = enabled_collections
 
@@ -813,7 +814,16 @@ class BuildPipeline:
                 self._emit(f"  Collection (compiled): {coll_name} ({size_mb:.1f} MB)")
 
         # --- Luna-System-Knowledge ---
-        sys_knowledge_src = self.engine_root / "data" / "system" / "Luna-System-Knowledge"
+        variant = profile.get("config", {}).get("system_knowledge_variant")
+        if variant:
+            variant_dir = self.engine_root / "data" / "system" / "Luna-System-Knowledge" / variant
+            if variant_dir.exists() and variant_dir.is_dir():
+                sys_knowledge_src = variant_dir
+            else:
+                self._emit(f"  WARNING: system_knowledge_variant '{variant}' not found, using default")
+                sys_knowledge_src = self.engine_root / "data" / "system" / "Luna-System-Knowledge"
+        else:
+            sys_knowledge_src = self.engine_root / "data" / "system" / "Luna-System-Knowledge"
         if sys_knowledge_src.exists() and sys_knowledge_src.is_dir():
             dest_knowledge = system_dir / "Luna-System-Knowledge"
             shutil.copytree(str(sys_knowledge_src), str(dest_knowledge), dirs_exist_ok=True)
@@ -916,6 +926,8 @@ class BuildPipeline:
             "remap": frontend.get("remap", {}),
             "widgets": frontend.get("widgets", PROFILE_DEFAULTS["frontend"]["widgets"]),
             "wizard": profile.get("wizard", PROFILE_DEFAULTS["wizard"]),
+            "settings": frontend.get("settings", {}),
+            "debug_mode": frontend.get("debug_mode", True),
         }
 
         (config_dir / "frontend_config.json").write_text(
@@ -1199,6 +1211,11 @@ class BuildPipeline:
             launcher.write_text(
                 '#!/bin/bash\n'
                 'cd "$(dirname "$0")"\n'
+                'export LUNA_PORT=8000\n'
+                'unset ANTHROPIC_API_KEY\n'
+                'unset GROQ_API_KEY\n'
+                'unset GOOGLE_API_KEY\n'
+                'unset EDEN_API_KEY\n'
                 './run_luna.bin\n'
             )
             launcher.chmod(0o755)

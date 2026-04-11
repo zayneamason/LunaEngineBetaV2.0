@@ -23,6 +23,8 @@ const DEFAULT_CONFIG = {
     lunascript: true,
   },
   remap: {},
+  settings: {},
+  debug_mode: true,
 };
 
 export function useFrontendConfig() {

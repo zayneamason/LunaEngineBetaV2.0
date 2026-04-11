@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useFrontendConfig } from '../hooks/useFrontendConfig';
 import LLMSection from './sections/LLMSection';
 import IdentitySection from './sections/IdentitySection';
 import VoiceSection from './sections/VoiceSection';
@@ -11,7 +12,7 @@ import SkillsSection from './sections/SkillsSection';
 import DisplaySection from './sections/DisplaySection';
 import LunaFMSection from './sections/LunaFMSection';
 
-const SECTIONS = [
+const ALL_SECTIONS = [
   { id: 'llm',          label: 'LLM PROVIDERS' },
   { id: 'identity',     label: 'IDENTITY' },
   { id: 'voice',        label: 'VOICE' },
@@ -40,6 +41,9 @@ const SECTION_COMPONENTS = {
 };
 
 export default function SettingsApp() {
+  const config = useFrontendConfig();
+  const enabledSettings = config.settings || {};
+  const SECTIONS = ALL_SECTIONS.filter((s) => enabledSettings[s.id] !== false);
   const [activeSection, setActiveSection] = useState('llm');
   const ActiveComponent = SECTION_COMPONENTS[activeSection];
 

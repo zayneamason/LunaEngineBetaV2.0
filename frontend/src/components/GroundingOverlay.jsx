@@ -94,6 +94,13 @@ const GroundingDetail = ({ support, onClose }) => (
       {support.node_id || 'none'}
       {support.node_type && <span> ({support.node_type})</span>}
     </div>
+    {support.source && (
+      <div style={{ color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>
+        <span style={{ color: 'rgba(255,255,255,0.7)' }}>Source:</span>{' '}
+        {support.doc_title || support.source}
+        {support.doc_title && <span style={{ opacity: 0.5 }}> ({support.source})</span>}
+      </div>
+    )}
     <div style={{ color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>
       <span style={{ color: 'rgba(255,255,255,0.7)' }}>Confidence:</span>{' '}
       {Math.round(support.confidence * 100)}%
@@ -137,6 +144,41 @@ const GroundingSummary = ({ summary }) => {
 };
 
 /**
+ * Source attribution badges — shows which collections/documents were used.
+ */
+const SourceBadges = ({ sources }) => {
+  if (!sources || sources.length === 0) return null;
+  return (
+    <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+      {sources.map((s, i) => (
+        <span
+          key={i}
+          style={{
+            padding: '2px 6px',
+            borderRadius: 3,
+            fontSize: 10,
+            background: s.source?.startsWith('nexus/')
+              ? 'rgba(96, 165, 250, 0.1)'
+              : 'rgba(168, 85, 247, 0.1)',
+            border: s.source?.startsWith('nexus/')
+              ? '1px solid rgba(96, 165, 250, 0.3)'
+              : '1px solid rgba(168, 85, 247, 0.3)',
+            color: s.source?.startsWith('nexus/') ? '#60a5fa' : '#a855f7',
+          }}
+        >
+          {s.doc_title || s.source?.replace('nexus/', '') || 'unknown'}
+          {s.grounded_count > 0 && (
+            <span style={{ opacity: 0.6, marginLeft: 3 }}>
+              ({s.grounded_count})
+            </span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+};
+
+/**
  * Main component: wraps response text with grounding indicators.
  */
 const GroundingOverlay = ({
@@ -145,6 +187,7 @@ const GroundingOverlay = ({
   verificationMode,
   entities,
   onEntityClick,
+  debugMode = true,
 }) => {
   const [hoveredIdx, setHoveredIdx] = useState(null);
   const [expandedIdx, setExpandedIdx] = useState(null);
@@ -159,7 +202,8 @@ const GroundingOverlay = ({
     return (
       <div>
         <p><AnnotatedText text={text} entities={entities} onEntityClick={onEntityClick} /></p>
-        <GroundingSummary summary={groundingMetadata.summary} />
+        {debugMode && <GroundingSummary summary={groundingMetadata.summary} />}
+        {debugMode && <SourceBadges sources={groundingMetadata.sources_used} />}
       </div>
     );
   }
@@ -225,6 +269,7 @@ const GroundingOverlay = ({
       {/* Summary badge */}
       <div style={{ marginTop: 4 }}>
         <GroundingSummary summary={summary} />
+        <SourceBadges sources={groundingMetadata.sources_used} />
       </div>
     </div>
   );
