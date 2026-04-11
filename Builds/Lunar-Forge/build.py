@@ -17,7 +17,12 @@ from pathlib import Path
 
 import yaml
 
-from .core import BuildPipeline, detect_platform, list_profiles, load_profile
+try:
+    from .core import BuildPipeline, detect_platform, list_profiles, load_profile
+except ImportError:
+    # Running as a standalone script — use absolute import
+    sys.path.insert(0, str(Path(__file__).parent))
+    from core import BuildPipeline, detect_platform, list_profiles, load_profile
 
 
 FORGE_ROOT = Path(__file__).parent

@@ -247,6 +247,7 @@ def list_profiles(profiles_dir: Path) -> list[dict[str, Any]]:
             raw = yaml.safe_load(f) or {}
         results.append({
             "file": p.name,
+            "slug": p.stem,
             "path": p,
             "name": raw.get("name", p.stem),
             "description": raw.get("description", ""),
@@ -324,7 +325,7 @@ class BuildPipeline:
             self.engine_root = Path(
                 os.environ.get(
                     "LUNA_ENGINE_ROOT",
-                    str(self.forge_root.parent.parent / "_LunaEngine_BetaProject_V2.0_Root"),
+                    str(self.forge_root.parent.parent),
                 )
             )
 
@@ -407,7 +408,14 @@ class BuildPipeline:
 
         # Validate platform
         current = detect_platform()
-        if self.platform_target != current:
+        # macos-x64 from an arm64 host is allowed via Rosetta + an isolated
+        # x86_64 Python venv (see _find_nuitka_python). Not cross-compilation
+        # in the clang sense — it's a native x86_64 toolchain under Rosetta.
+        is_rosetta_x64 = (
+            self.platform_target == "macos-x64"
+            and current.startswith("macos")
+        )
+        if self.platform_target != current and not is_rosetta_x64:
             msg = (
                 f"Cross-compilation not supported. "
                 f"Target: {self.platform_target}, Host: {current}. "
@@ -841,33 +849,7 @@ class BuildPipeline:
                 shutil.copy2(str(source_path), str(dest))
                 self._emit(f"  Collection (compiled): {coll_name} ({size_mb:.1f} MB)")
 
-    async def _register_cartridge_into(self, db_path: Path, lun_path: Path, coll_name: str):
-        """Register a .lun cartridge into a fresh collection DB at build time."""
-        import yaml as _yaml, tempfile
-        tmp_registry = {
-            "schema_version": 1,
-            "collections": {
-                coll_name: {
-                    "enabled": True,
-                    "db_path": str(db_path),
-                    "schema_type": "standard",
-                    "read_only": False,
-                }
-            }
-        }
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            _yaml.dump(tmp_registry, f)
-            tmp_path = f.name
-        try:
-            from luna.substrate.aibrarian_engine import AiBrarianEngine
-            engine = AiBrarianEngine(Path(tmp_path))
-            await engine.initialize()
-            await engine.register_cartridge(coll_name, lun_path)
-            await engine.shutdown()
-        finally:
-            Path(tmp_path).unlink(missing_ok=True)
-
-    # --- Luna-System-Knowledge ---
+        # --- Luna-System-Knowledge ---
         variant = profile.get("config", {}).get("system_knowledge_variant")
         if variant:
             variant_dir = self.engine_root / "data" / "system" / "Luna-System-Knowledge" / variant
@@ -949,6 +931,32 @@ class BuildPipeline:
                 except Exception as e:
                     self._emit(f"  WARNING: Could not bundle deps for {skill_name}: {e}")
 
+    async def _register_cartridge_into(self, db_path: Path, lun_path: Path, coll_name: str):
+        """Register a .lun cartridge into a fresh collection DB at build time."""
+        import yaml as _yaml, tempfile
+        tmp_registry = {
+            "schema_version": 1,
+            "collections": {
+                coll_name: {
+                    "enabled": True,
+                    "db_path": str(db_path),
+                    "schema_type": "standard",
+                    "read_only": False,
+                }
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            _yaml.dump(tmp_registry, f)
+            tmp_path = f.name
+        try:
+            from luna.substrate.aibrarian_engine import AiBrarianEngine
+            engine = AiBrarianEngine(Path(tmp_path))
+            await engine.initialize()
+            await engine.register_cartridge(coll_name, lun_path)
+            await engine.shutdown()
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
     def _assemble_secrets(self, staging_dir: Path) -> None:
         """Assemble secrets file."""
         config_dir = staging_dir / "config"
@@ -1019,17 +1027,32 @@ class BuildPipeline:
     def _find_nuitka_python(self) -> Optional[str]:
         """Return a Python executable that has Nuitka installed.
 
-        Checks sys.executable first, then falls back to common versioned
-        interpreters (python3.12, python3.11, python3.13, python3).
+        When platform_target is "macos-x64", prefers the isolated x86_64
+        venv at .venv-x64/ (co-located with core.py). Otherwise checks
+        sys.executable, then falls back to common versioned interpreters.
         """
         import shutil as _shutil
 
-        candidates = [sys.executable]
-        # Add versioned interpreters that may have Nuitka
-        for ver in ["python3.12", "python3.11", "python3.13", "python3"]:
-            found = _shutil.which(ver)
-            if found and found not in candidates:
-                candidates.append(found)
+        candidates: list[str] = []
+
+        # For macos-x64 on any macOS host, the Nuitka build must run under
+        # an x86_64 Python. Prefer the dedicated venv we expect Forge to
+        # provision for this purpose; fall back to python3.12-intel64 if
+        # present (python.org universal installer ships it).
+        if self.platform_target == "macos-x64":
+            venv_py = self.forge_root / ".venv-x64" / "bin" / "python3"
+            if venv_py.exists():
+                candidates.append(str(venv_py))
+            intel_py = "/usr/local/bin/python3.12-intel64"
+            if Path(intel_py).exists():
+                candidates.append(intel_py)
+        else:
+            candidates.append(sys.executable)
+            # Add versioned interpreters that may have Nuitka
+            for ver in ["python3.12", "python3.11", "python3.13", "python3"]:
+                found = _shutil.which(ver)
+                if found and found not in candidates:
+                    candidates.append(found)
 
         for py in candidates:
             try:
@@ -1091,12 +1114,19 @@ class BuildPipeline:
                        f"sys.executable={sys.executable}", -1)
             return None
 
-        cmd = [
+        # When targeting macos-x64 from an arm64 host, the entire Nuitka
+        # process tree (Python → clang → linker) must run under Rosetta so
+        # clang emits x86_64. Prepending `arch -x86_64` handles this without
+        # requiring shell wrappers around the venv Python.
+        cmd: list[str] = []
+        if self.platform_target == "macos-x64" and _plat.machine() == "arm64":
+            cmd.extend(["arch", "-x86_64"])
+        cmd.extend([
             python_exe, "-m", "nuitka",
             f"--mode={mode}",
             "--output-dir=" + str(staging_dir),
             "--output-filename=run_luna.bin",
-        ]
+        ])
 
         # macOS framework imports — needed by pywebview for native window.
         # Do NOT exclude Foundation, AppKit, or objc.
@@ -1297,6 +1327,31 @@ class BuildPipeline:
                 'unset GROQ_API_KEY\n'
                 'unset GOOGLE_API_KEY\n'
                 'unset EDEN_API_KEY\n'
+                '\n'
+                '# Kill any existing Luna on port 8000 before starting\n'
+                'EXISTING=$(lsof -ti :8000 2>/dev/null)\n'
+                'if [ -n "$EXISTING" ]; then\n'
+                '    echo "Luna already running on :8000 (PID $EXISTING) — stopping it..."\n'
+                '    kill $EXISTING 2>/dev/null\n'
+                '    sleep 1\n'
+                '    STILL=$(lsof -ti :8000 2>/dev/null)\n'
+                '    if [ -n "$STILL" ]; then\n'
+                '        kill -9 $STILL 2>/dev/null\n'
+                '        sleep 1\n'
+                '    fi\n'
+                'fi\n'
+                '\n'
+                '# Open browser once Luna is responding (background watcher, up to 30s)\n'
+                '(\n'
+                '    for i in $(seq 1 60); do\n'
+                '        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ 2>/dev/null | grep -q "200"; then\n'
+                '            open http://localhost:8000\n'
+                '            exit 0\n'
+                '        fi\n'
+                '        sleep 0.5\n'
+                '    done\n'
+                ') &\n'
+                '\n'
                 './run_luna.bin\n'
             )
             launcher.chmod(0o755)

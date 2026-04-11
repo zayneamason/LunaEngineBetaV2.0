@@ -92,8 +92,8 @@ export default function BuildManager({ profiles, onEditDraft, onBuildDraft }) {
               </button>
               {profiles.map((p) => (
                 <button
-                  key={p.name}
-                  onClick={() => handleCreateDraft(p.name)}
+                  key={p.slug || p.name}
+                  onClick={() => handleCreateDraft(p.slug || p.name)}
                   className="w-full text-left px-4 py-3 rounded-lg border border-gray-800 hover:border-purple-600 hover:bg-gray-800/50 transition-colors"
                 >
                   <div className="text-sm text-gray-200">{p.display_name || p.name}</div>

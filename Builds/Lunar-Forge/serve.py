@@ -37,7 +37,7 @@ FORGE_ROOT = Path(__file__).parent
 ENGINE_ROOT = Path(
     os.environ.get(
         "LUNA_ENGINE_ROOT",
-        str(FORGE_ROOT.parent.parent / "_LunaEngine_BetaProject_V2.0_Root"),
+        str(FORGE_ROOT.parent.parent),
     )
 )
 PROFILES_DIR = FORGE_ROOT / "profiles"
@@ -111,7 +111,7 @@ app.add_middleware(
 class CollectionOverride(BaseModel):
     model_config = {"strict": True}
     enabled: bool
-    mode: Literal["compiled", "plugin"] = "compiled"
+    mode: Literal["compiled", "plugin", "cartridge"] = "compiled"
 
 
 class SkillBuildOverride(BaseModel):
@@ -191,8 +191,8 @@ def _validate_merged_profile(profile: dict) -> list[str]:
         if e is not None and not isinstance(e, bool):
             errors.append(f"collections.{name}.enabled: expected bool, got {type(e).__name__}: {e!r}")
         m = cfg.get("mode")
-        if m is not None and m not in ("compiled", "plugin"):
-            errors.append(f"collections.{name}.mode: expected compiled|plugin, got {m!r}")
+        if m is not None and m not in ("compiled", "plugin", "cartridge"):
+            errors.append(f"collections.{name}.mode: expected compiled|plugin|cartridge, got {m!r}")
     # Skills: mode=enum
     for name, cfg in profile.get("skills", {}).items():
         if not isinstance(cfg, dict):

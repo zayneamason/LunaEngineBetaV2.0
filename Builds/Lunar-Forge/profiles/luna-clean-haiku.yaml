@@ -1,0 +1,77 @@
+name: "Luna Clean (Haiku)"
+description: "Clean Luna test build — Claude Haiku only, full frontend + all widgets, empty substrate"
+version: "0.1.0"
+
+platform: "auto"
+
+database:
+  mode: "seed"
+
+collections:
+  luna_system:
+    enabled: true
+    mode: "compiled"
+    source: "data/system/aibrarian/luna_system.db"
+
+skills:
+  math:
+    mode: "plugin"
+    packages: ["sympy"]
+  logic:
+    mode: "plugin"
+    packages: ["sympy"]
+
+config:
+  personality:
+    first_meeting_directive: true
+    bootstrap_patches:
+      - bootstrap_001_sovereignty
+      - bootstrap_003_honesty
+  llm_providers:
+    mode: "template"
+  fallback_chain:
+    chain: ["claude"]
+
+secrets:
+  mode: "template"
+
+frontend:
+  build: true
+  pages:
+    eclissi: true
+    studio: true
+    kozmo: true
+    guardian: true
+    observatory: true
+    settings: true
+  widgets:
+    engine: true
+    voice: true
+    memory: true
+    qa: true
+    prompt: true
+    debug: true
+    vk: true
+    cache: true
+    thought: true
+    lunascript: true
+
+nuitka:
+  standalone: true
+  exclude_packages:
+    - torch
+    - torchvision
+    - torchaudio
+    - transformers
+    - tensorflow
+    - keras
+    - scipy
+    - sklearn
+    - matplotlib
+    - PIL
+    - cv2
+    - spacy
+    - llama_cpp
+
+post_build:
+  create_launcher: true
