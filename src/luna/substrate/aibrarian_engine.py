@@ -1023,7 +1023,9 @@ class AiBrarianEngine:
                 results = []
                 seen_docs: set[str] = set()
                 for chunk_id, distance in fb_results:
-                    if ":chunk:" in chunk_id:
+                    if ":" in chunk_id:
+                        # Synthetic id (:chunk:N or :section:N) — both live
+                        # in the chunks table; bare doc_id UUIDs have no `:`.
                         doc_row = conn.conn.execute(
                             "SELECT d.id, d.title, d.filename, d.category, c.chunk_text "
                             "FROM chunks c JOIN documents d ON c.doc_id = d.id WHERE c.id = ?",
@@ -1068,8 +1070,9 @@ class AiBrarianEngine:
                 chunk_id = row[0]
                 distance = row[1]
 
-                if ":chunk:" in chunk_id:
-                    # Chunk-level embedding — join via chunks table
+                if ":" in chunk_id:
+                    # Synthetic id (:chunk:N or :section:N) — both live in
+                    # the chunks table; bare doc_id UUIDs have no `:`.
                     doc_row = conn.conn.execute(
                         """
                         SELECT d.id, d.title, d.filename, d.category, c.chunk_text
@@ -2524,6 +2527,71 @@ class AiBrarianEngine:
                     ),
                 )
                 lun_node_to_chunk[node["id"]] = chunk_id
+                chunk_index += 1
+
+            # Persist section/paragraph-level embedded nodes as chunks too.
+            # The .lun file's `embeddings` table is keyed by paragraph and
+            # section node IDs whose `content` column is typically NULL —
+            # the embedding text was concatenated from descendant sentences
+            # at .lun creation time and never persisted at the parent. To
+            # make :section:N embeddings resolvable at search time, walk
+            # the doc_nodes tree once, build a parent->children adjacency
+            # list, then for each embedded node not already a content chunk,
+            # gather descendant text and insert it as a chunks row. This also
+            # makes section headings/paragraphs FTS-searchable.
+            all_nodes = lun_conn.execute(
+                "SELECT id, parent_id, content FROM doc_nodes"
+            ).fetchall()
+            children_of: dict[int, list[int]] = {}
+            content_of: dict[int, str] = {}
+            for n in all_nodes:
+                pid = n["parent_id"]
+                if pid is not None:
+                    children_of.setdefault(pid, []).append(n["id"])
+                if n["content"]:
+                    content_of[n["id"]] = n["content"]
+
+            def _gather_subtree_text(root_id: int) -> str:
+                parts: list[str] = []
+                stack = [root_id]
+                while stack:
+                    nid = stack.pop()
+                    if nid in content_of:
+                        parts.append(content_of[nid])
+                    if nid in children_of:
+                        stack.extend(children_of[nid])
+                return " ".join(parts).strip()
+
+            embedded_node_ids = [
+                row["node_id"]
+                for row in lun_conn.execute(
+                    "SELECT node_id FROM embeddings"
+                ).fetchall()
+            ]
+            for emb_node_id in embedded_node_ids:
+                if emb_node_id in lun_node_to_chunk:
+                    continue  # already persisted as a content chunk
+                text = _gather_subtree_text(emb_node_id)
+                if not text:
+                    continue
+                section_label, section_level = section_map.get(emb_node_id, ("", 0))
+                section_chunk_id = f"{doc_id}:section:{emb_node_id}"
+                conn.conn.execute(
+                    """INSERT INTO chunks
+                       (id, doc_id, chunk_index, chunk_text, word_count,
+                        start_char, end_char, section_label, section_level)
+                       VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)""",
+                    (
+                        section_chunk_id,
+                        doc_id,
+                        chunk_index,
+                        text,
+                        len(text.split()),
+                        section_label,
+                        section_level,
+                    ),
+                )
+                lun_node_to_chunk[emb_node_id] = section_chunk_id
                 chunk_index += 1
 
             # Copy embeddings to collection's chunk_embeddings (or fallback)
