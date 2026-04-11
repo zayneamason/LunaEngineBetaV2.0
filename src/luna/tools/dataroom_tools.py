@@ -23,12 +23,19 @@ logger = logging.getLogger(__name__)
 
 _engine = None
 _engine_failed = False  # avoid retrying if standalone fallback failed
+_COLLECTION_KEY = "dataroom"  # default; overridden by set_collection_key()
 
 
 def set_engine(engine_instance):
     """Attach the Engine-owned AiBrarianEngine. Called once at startup."""
     global _engine
     _engine = engine_instance
+
+
+def set_collection_key(key: str):
+    """Override the default collection key used for dataroom queries."""
+    global _COLLECTION_KEY
+    _COLLECTION_KEY = key
 
 
 async def _get_engine():
@@ -92,7 +99,7 @@ async def dataroom_search(
 
     if engine is not None:
         try:
-            results = await engine.search("dataroom", query, search_type, limit * 2)
+            results = await engine.search(_COLLECTION_KEY, query, search_type, limit * 2)
 
             # Apply category filter if requested
             filtered = []
@@ -112,7 +119,7 @@ async def dataroom_search(
 
             # Enrich top results with more content so Luna can answer directly
             for entry in filtered[:3]:
-                doc = await engine.get_document("dataroom", entry["id"])
+                doc = await engine.get_document(_COLLECTION_KEY, entry["id"])
                 if doc and doc.get("full_text"):
                     text = doc["full_text"]
                     entry["content"] = text[:2000]
@@ -171,9 +178,9 @@ async def dataroom_status() -> dict:
 
     if engine is not None:
         try:
-            stats = await engine.stats("dataroom")
+            stats = await engine.stats(_COLLECTION_KEY)
             # Get category breakdown from document listing
-            doc_list = await engine.list_documents("dataroom", 0, 500)
+            doc_list = await engine.list_documents(_COLLECTION_KEY, 0, 500)
             category_counts = {}
             for doc in doc_list.get("documents", []):
                 cat = doc.get("category", "Unknown")
@@ -227,7 +234,7 @@ async def dataroom_recent(days: int = 7) -> list[dict]:
 
     if engine is not None:
         try:
-            doc_list = await engine.list_documents("dataroom", 0, 50)
+            doc_list = await engine.list_documents(_COLLECTION_KEY, 0, 50)
             docs = doc_list.get("documents", [])
 
             # Filter by created_at within the last N days
@@ -312,9 +319,9 @@ async def dataroom_read_document(
         return {"error": "AiBrarian engine not available"}
 
     try:
-        doc = await engine.get_document("dataroom", doc_id)
+        doc = await engine.get_document(_COLLECTION_KEY, doc_id)
         if not doc:
-            return {"error": f"Document '{doc_id}' not found in dataroom"}
+            return {"error": f"Document '{doc_id}' not found in {_COLLECTION_KEY}"}
 
         full_text = doc.get("full_text", "")
         truncated = len(full_text) > max_chars

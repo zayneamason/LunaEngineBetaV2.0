@@ -484,11 +484,25 @@ async def lifespan(app: FastAPI):
         except Exception as _e:
             logger.warning(f"Failed to wire MCP aibrarian tools: {_e}")
         try:
-            from luna.tools.dataroom_tools import set_engine as _dr_set_engine
+            from luna.tools.dataroom_tools import set_engine as _dr_set_engine, set_collection_key as _dr_set_key
             _dr_set_engine(_engine.aibrarian)
+            # Use first enabled collection from registry as the dataroom key
+            if hasattr(_engine.aibrarian, 'collections') and _engine.aibrarian.collections:
+                _first_key = next(iter(_engine.aibrarian.collections))
+                _dr_set_key(_first_key)
+                logger.info("Dataroom collection key set to '%s'", _first_key)
             logger.info("Dataroom tools wired to Engine-owned AiBrarianEngine")
         except Exception as _e:
             logger.warning(f"Failed to wire dataroom tools: {_e}")
+
+    # Wire ForgeWatcher into MCP tools
+    if _engine and getattr(_engine, "forge_watcher", None) is not None:
+        try:
+            from luna_mcp.tools.aibrarian import set_forge_watcher
+            set_forge_watcher(_engine.forge_watcher)
+            logger.info("MCP forge tools wired to Engine-owned ForgeWatcher")
+        except Exception as _e:
+            logger.warning(f"Failed to wire ForgeWatcher into MCP: {_e}")
 
     # Start runtime watchdog for continuous health monitoring
     # Wire alerts into QA event store
@@ -1891,31 +1905,38 @@ async def check_first_run():
     from luna.core.owner import owner_configured, get_owner
 
     owner = get_owner()
-    db_path = user_dir() / "luna_engine.db"
-
-    turn_count = 0
-    if db_path.exists():
-        try:
-            import aiosqlite
-            async with aiosqlite.connect(str(db_path)) as db:
-                await db.execute("PRAGMA busy_timeout=15000")
-                row = await db.execute_fetchall(
-                    "SELECT COUNT(*) FROM conversation_turns"
-                )
-                turn_count = row[0][0] if row else 0
-        except Exception:
-            # DB may exist but schema not yet initialized (fresh compiled build)
-            turn_count = 0
-
-    is_first_run = not owner_configured() and turn_count == 0
+    is_first = not owner_configured()
 
     return {
-        "is_first_run": is_first_run,
-        "owner_configured": owner_configured(),
+        "is_first_run": is_first,
+        "owner_configured": not is_first,
         "owner_name": owner.display_name or None,
-        "conversation_count": turn_count,
         "has_api_keys": _check_api_keys_configured(),
     }
+
+
+@app.post("/api/factory-reset")
+async def factory_reset():
+    """Reset the instance to first-run state."""
+    from luna.core.owner import get_owner
+
+    targets = [
+        user_dir() / "luna_engine.db",
+        config_dir() / "owner.yaml",
+        config_dir() / "identity_bypass.json",
+    ]
+    for p in targets:
+        if p.exists():
+            p.unlink()
+
+    # Clear secrets values (keep keys, empty values)
+    sp = config_dir() / "secrets.json"
+    if sp.exists():
+        data = json.loads(sp.read_text())
+        sp.write_text(json.dumps({k: "" for k in data}, indent=2))
+
+    get_owner.cache_clear()
+    return {"status": "reset", "restart_required": True}
 
 
 @app.post("/api/onboarding/owner")
@@ -9193,10 +9214,11 @@ async def _get_annotation_engine():
 async def api_aperture_get():
     """Get current aperture state."""
     mgr = _get_aperture_manager()
-    return mgr.state.to_dict()
+    return mgr.state.to_dict(mode=mgr.mode.value)
 
 
 class ApertureSetRequest(BaseModel):
+    mode: Optional[str] = None  # 'off', 'auto', or 'manual'
     preset: Optional[str] = None
     angle: Optional[int] = None
     focus_tags: Optional[list[str]] = None
@@ -9206,9 +9228,12 @@ class ApertureSetRequest(BaseModel):
 
 @app.post("/api/aperture")
 async def api_aperture_set(req: ApertureSetRequest):
-    """Set aperture. Preset overrides angle."""
+    """Set aperture mode and/or preset. Preset overrides angle."""
     from luna.context.aperture import AperturePreset
     mgr = _get_aperture_manager()
+
+    if req.mode:
+        mgr.set_mode(req.mode)
 
     if req.preset:
         try:
@@ -9226,7 +9251,7 @@ async def api_aperture_set(req: ApertureSetRequest):
     if req.active_collection_keys is not None:
         mgr.set_active_collections(req.active_collection_keys)
 
-    return mgr.state.to_dict()
+    return mgr.state.to_dict(mode=mgr.mode.value)
 
 
 @app.post("/api/aperture/reset")
@@ -9234,7 +9259,7 @@ async def api_aperture_reset():
     """Clear user override, revert to app default."""
     mgr = _get_aperture_manager()
     mgr.clear_override()
-    return mgr.state.to_dict()
+    return mgr.state.to_dict(mode=mgr.mode.value)
 
 
 # --- Collection Lock-In Endpoints ---
