@@ -504,8 +504,18 @@ class AiBrarianConnection:
             )
             self._conn.commit()
             self._vec_loaded = True
+            self._fallback_vec = None
         except Exception as e:
-            logger.warning("sqlite-vec not available for %s: %s", self.config.key, e)
+            from luna.diagnostics.maturity import compiled_debug
+            compiled_debug(logger, "sqlite-vec not available for %s: %s", self.config.key, e)
+            # Initialize pure-Python fallback for vector search
+            try:
+                from luna.substrate.vec_fallback import AiBrarianFallbackVec
+                self._fallback_vec = AiBrarianFallbackVec(self._conn, self.config.embedding_dim)
+                logger.info("Using pure-Python vector fallback for %s", self.config.key)
+            except Exception as fb_err:
+                logger.debug("Fallback vec init failed for %s: %s", self.config.key, fb_err)
+                self._fallback_vec = None
 
         # Auto-migrate: apply cartridge schema if not present
         try:
@@ -569,7 +579,8 @@ class _EmbeddingGenerator:
 
                 self._model_instance = SentenceTransformer("all-MiniLM-L6-v2")
             except ImportError:
-                logger.warning("sentence-transformers not installed; embeddings disabled")
+                from luna.diagnostics.maturity import compiled_debug
+                compiled_debug(logger, "sentence-transformers not installed; embeddings disabled")
                 self._model_instance = None
         else:
             logger.warning("Unsupported embedding model: %s", self.model)
@@ -994,7 +1005,7 @@ class AiBrarianEngine:
     async def _vec_search(
         self, conn: AiBrarianConnection, query: str, limit: int
     ) -> list[dict]:
-        if not conn._vec_loaded:
+        if not conn._vec_loaded and not getattr(conn, '_fallback_vec', None):
             return []
 
         gen = self._get_generator(conn.config)
@@ -1003,6 +1014,43 @@ class AiBrarianEngine:
             return []
 
         blob = _vector_to_blob(query_vec)
+
+        # Use fallback if sqlite-vec extension isn't loaded
+        fallback = getattr(conn, '_fallback_vec', None)
+        if not conn._vec_loaded and fallback:
+            try:
+                fb_results = fallback.search(query_vec, limit)
+                results = []
+                seen_docs: set[str] = set()
+                for chunk_id, distance in fb_results:
+                    if ":chunk:" in chunk_id:
+                        doc_row = conn.conn.execute(
+                            "SELECT d.id, d.title, d.filename, d.category, c.chunk_text "
+                            "FROM chunks c JOIN documents d ON c.doc_id = d.id WHERE c.id = ?",
+                            (chunk_id,),
+                        ).fetchone()
+                    else:
+                        doc_row = conn.conn.execute(
+                            "SELECT d.id, d.title, d.filename, d.category, "
+                            "substr(d.full_text, 1, 200) AS chunk_text FROM documents d WHERE d.id = ?",
+                            (chunk_id,),
+                        ).fetchone()
+                    if doc_row and doc_row["id"] not in seen_docs:
+                        seen_docs.add(doc_row["id"])
+                        results.append({
+                            "doc_id": doc_row["id"],
+                            "title": doc_row["title"],
+                            "filename": doc_row["filename"],
+                            "category": doc_row["category"],
+                            "snippet": doc_row["chunk_text"],
+                            "score": max(0.0, 1.0 - distance),
+                            "search_type": "semantic",
+                        })
+                return results
+            except Exception as e:
+                logger.warning("Fallback vector search failed: %s", e)
+                return []
+
         try:
             cursor = conn.conn.execute(
                 """

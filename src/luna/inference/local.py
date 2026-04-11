@@ -232,8 +232,9 @@ class LocalInference:
 
         except ImportError as e:
             self._load_error = f"MLX not available: {e}"
-            logger.error(self._load_error)
-            logger.error("Install with: pip install mlx-lm")
+            from luna.diagnostics.maturity import compiled_debug
+            compiled_debug(logger, "MLX not available: %s", e)
+            compiled_debug(logger, "Install with: pip install mlx-lm")
             return False
 
         except Exception as e:

@@ -828,7 +828,8 @@ class MemoryMatrix:
             self._embedding_generator = EmbeddingGenerator(model="local-minilm")
 
         if not self._embedding_store.is_available:
-            logger.warning("sqlite-vec not available, falling back to LIKE search")
+            from luna.diagnostics.maturity import compiled_debug
+            compiled_debug(logger, "sqlite-vec not available, falling back to LIKE search")
             nodes = await self.search_nodes(query, node_type, limit)
             return [(node, 1.0) for node in nodes]
 

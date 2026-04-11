@@ -128,6 +128,15 @@ class StartupChecks:
                     required=self.require_local_inference,
                 )
             else:
+                from luna.diagnostics.maturity import is_compiled
+                if is_compiled():
+                    # Compiled builds use online LLMs only — not a problem
+                    return CheckResult(
+                        name="Local Inference (MLX)",
+                        status=CheckStatus.PASS,
+                        message="Compiled build — using cloud LLM providers",
+                        required=False,
+                    )
                 return CheckResult(
                     name="Local Inference (MLX)",
                     status=CheckStatus.FAIL if self.require_local_inference else CheckStatus.WARN,

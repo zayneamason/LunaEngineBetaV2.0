@@ -32,7 +32,8 @@ try:
 except ImportError:
     _ENCODER = None
     _HAS_TIKTOKEN = False
-    logger.warning("tiktoken not available, using fallback token counting (len/4)")
+    from luna.diagnostics.maturity import compiled_debug
+    compiled_debug(logger, "tiktoken not available, using fallback token counting (len/4)")
 
 
 def count_tokens(text: str) -> int:

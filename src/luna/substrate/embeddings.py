@@ -107,8 +107,22 @@ class EmbeddingStore:
             return True
 
         except Exception as e:
-            logger.warning(f"sqlite-vec not available: {e}")
-            logger.warning("Semantic search will not be available. Using keyword search fallback.")
+            from luna.diagnostics.maturity import compiled_debug
+            compiled_debug(logger, "sqlite-vec not available: %s", e)
+            # Try pure-Python fallback for vector search
+            try:
+                from luna.substrate.vec_fallback import FallbackVecStore
+                raw_conn = self.db._connection._conn if hasattr(self.db, '_connection') and hasattr(self.db._connection, '_conn') else None
+                if raw_conn:
+                    self._fallback = FallbackVecStore(raw_conn, f"{self.table_name}_fallback", self.dim)
+                    self._fallback.ensure_table()
+                    compiled_debug(logger, "Using pure-Python vector fallback for memory embeddings")
+                else:
+                    self._fallback = None
+                    compiled_debug(logger, "Semantic search will not be available. Using keyword search fallback.")
+            except Exception:
+                self._fallback = None
+                compiled_debug(logger, "Semantic search will not be available. Using keyword search fallback.")
             self._initialized = True
             self._vec_loaded = False
             return False
@@ -144,8 +158,8 @@ class EmbeddingStore:
 
     @property
     def is_available(self) -> bool:
-        """Check if sqlite-vec is available for use."""
-        return self._vec_loaded
+        """Check if vector search is available (native or fallback)."""
+        return self._vec_loaded or (hasattr(self, '_fallback') and self._fallback is not None and self._fallback.is_available)
 
     async def store(self, node_id: str, embedding: list[float]) -> bool:
         """
@@ -159,6 +173,10 @@ class EmbeddingStore:
             True if stored successfully
         """
         if not self._vec_loaded:
+            # Try fallback store
+            fb = getattr(self, '_fallback', None)
+            if fb and fb.is_available:
+                return fb.store(node_id, embedding)
             logger.debug("sqlite-vec not available, skipping embedding storage")
             return False
 
@@ -188,6 +206,9 @@ class EmbeddingStore:
             True if deleted successfully
         """
         if not self._vec_loaded:
+            fb = getattr(self, '_fallback', None)
+            if fb and fb.is_available:
+                return fb.delete(node_id)
             return False
 
         result = await self.db.execute(f"""
@@ -214,6 +235,10 @@ class EmbeddingStore:
             List of (node_id, similarity_score) tuples, sorted by similarity
         """
         if not self._vec_loaded:
+            # Try fallback store
+            fb = getattr(self, '_fallback', None)
+            if fb and fb.is_available:
+                return fb.search(query_embedding, limit, min_similarity)
             logger.debug("sqlite-vec not available, returning empty results")
             return []
 

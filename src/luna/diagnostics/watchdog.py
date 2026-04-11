@@ -77,9 +77,20 @@ class LunaWatchdog:
         # Alert cooldown: prevent same alert from firing more than once per 5 min
         self._alert_cooldowns: dict[str, float] = {}
 
-        # Minimum expected values (lowered after brain scrub Jan 2026)
-        self.min_memory_nodes = 10000
-        self.min_graph_edges = 10000
+        # Minimum expected values — adjusted by instance maturity
+        from luna.diagnostics.maturity import detect_maturity, Maturity, is_compiled
+        self._maturity = detect_maturity()
+        self._is_compiled = is_compiled()
+
+        if self._maturity == Maturity.FRESH:
+            self.min_memory_nodes = 0
+            self.min_graph_edges = 0
+        elif self._maturity == Maturity.YOUNG:
+            self.min_memory_nodes = 50
+            self.min_graph_edges = 50
+        else:
+            self.min_memory_nodes = 10000
+            self.min_graph_edges = 10000
 
     def _emit_alert(self, alert: WatchdogAlert):
         """Emit an alert via logging and optional callback, with 5-min cooldown per key."""
@@ -103,6 +114,11 @@ class LunaWatchdog:
 
     def _check_lora_adapter(self) -> Optional[WatchdogAlert]:
         """Check if LoRA adapter still exists."""
+        from luna.diagnostics.maturity import Maturity
+        # Fresh instances and compiled builds have no LoRA adapter
+        if self._maturity == Maturity.FRESH or self._is_compiled:
+            return None
+
         lora_path = self.project_root / "models/luna_lora_mlx/adapters.safetensors"
 
         if not lora_path.exists():
@@ -168,6 +184,9 @@ class LunaWatchdog:
 
     def _check_local_inference(self) -> Optional[WatchdogAlert]:
         """Check if local inference is still importable."""
+        # Compiled builds use online LLMs only — no local inference
+        if self._is_compiled:
+            return None
         try:
             from luna.inference import LocalInference
             return None

@@ -967,7 +967,8 @@ Emojis can accompany gestures or stand alone.
                     logger.warning(f"[SEEDS] {summary['errors']} errors during seed loading")
 
             except ImportError as e:
-                logger.warning(f"[SEEDS] EntitySeedLoader not available: {e}")
+                from luna.diagnostics.maturity import compiled_debug
+                compiled_debug(logger, "[SEEDS] EntitySeedLoader not available: %s", e)
 
         except Exception as e:
             # Don't fail startup if seed loading fails - just warn
