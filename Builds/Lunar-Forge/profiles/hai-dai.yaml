@@ -1,6 +1,6 @@
-name: "Hai Dai"
-description: "Luna instance for Jero Wiku Hai Dai and the Indigenous Dojo. Ships the 10-Layer Sovereign Knowledge Framework, LOI, and Project Tapestry strategy."
-version: "0.1.0"
+name: "Hai Dai Ambassador"
+description: "Distribution build for indigenous leaders."
+version: "0.3.0"
 
 platform: "auto"
 
@@ -12,58 +12,73 @@ collections:
     enabled: true
     mode: "compiled"
     source: "data/system/aibrarian/luna_system.db"
-  hai_dai_framework:
+  priests_and_programmers:
     enabled: true
     mode: "compiled"
-    source: "data/system/aibrarian/hai_dai_framework.db"
-
-skills:
-  math:
-    mode: "plugin"
-    packages: ["sympy"]
-  logic:
-    mode: "plugin"
-    packages: ["sympy"]
+    source: "collections/priests-and-programmers/priests_and_programmers.db"
 
 config:
   personality:
     bootstrap_patches:
       - bootstrap_001_sovereignty
-      - bootstrap_002_relationship
       - bootstrap_003_honesty
       - bootstrap_004_consciousness
+      - bootstrap_006_ambassador
+    first_meeting_directive: true
   llm_providers:
-    mode: "copy"
+    mode: "template"
   fallback_chain:
-    chain: ["ollama", "claude"]
-  skills:
-    eden: true
-    analytics: true
-    reading: true
+    chain: ["claude", "groq", "gemini"]
+  system_knowledge_variant: "ambassador"
 
 secrets:
-  mode: "env"
+  mode: "template"
 
 frontend:
   build: true
+  debug_mode: false
   pages:
     eclissi: true
-    studio: true
-    kozmo: true
-    guardian: true
+    nexus: true
+    studio: false
+    kozmo: false
+    guardian: false
     observatory: true
     settings: true
   widgets:
     engine: true
     voice: true
     memory: true
-    qa: true
-    prompt: true
-    debug: true
-    vk: true
-    cache: true
+    qa: false
+    prompt: false
+    debug: false
+    vk: false
+    cache: false
     thought: true
-    lunascript: true
+    lunascript: false
+    radio: true
+  settings:
+    llm: true
+    identity: true
+    voice: true
+    personality: true
+    memory: false
+    collections: true
+    skills: false
+    lunafm: false
+    display: true
+    network: false
+    about: true
+
+wizard:
+  enabled: true
+  show_voice_step: true
+  show_personality_step: true
+  providers: ["claude", "groq", "gemini"]
+  custom_welcome: >-
+    Welcome. Luna is yours. She runs on this device,
+    remembers what matters to you, and holds knowledge
+    you entrust to her. Let us get her set up.
 
 nuitka:
   standalone: true
@@ -81,6 +96,7 @@ nuitka:
     - cv2
     - spacy
     - llama_cpp
+    - pymupdf
 
 post_build:
   create_launcher: true
