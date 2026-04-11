@@ -61,15 +61,24 @@ import uvicorn
 from luna.api.server import app
 
 
-def _find_free_port(preferred: int = 8000) -> int:
-    """Try preferred port first, fall back to OS-assigned ephemeral port."""
+def _find_free_port(preferred: int = 8000) -> int | None:
+    """Try preferred port. If busy and Luna is already running, return None."""
     import socket
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('127.0.0.1', preferred))
             return preferred
     except OSError:
-        print(f"WARNING: Port {preferred} busy, using random port")
+        # Port busy — check if it's an existing Luna instance
+        import urllib.request
+        try:
+            resp = urllib.request.urlopen(f'http://127.0.0.1:{preferred}/api/status', timeout=2)
+            if resp.status == 200:
+                return None  # Luna is already running
+        except Exception:
+            pass
+        # Not Luna — fall back to OS-assigned ephemeral port
+        print(f"WARNING: Port {preferred} busy (not Luna), using random port")
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('127.0.0.1', 0))
             return s.getsockname()[1]
@@ -82,7 +91,17 @@ def _run_server(port: int) -> None:
 
 if __name__ == "__main__":
     explicit_port = os.environ.get('LUNA_PORT')
-    port = int(explicit_port) if explicit_port else _find_free_port()
+    if explicit_port:
+        port = int(explicit_port)
+    else:
+        port = _find_free_port()
+        if port is None:
+            # Luna is already running on the preferred port
+            import webbrowser
+            preferred = 8000
+            print(f"Luna is already running on port {preferred}. Opening browser.")
+            webbrowser.open(f'http://127.0.0.1:{preferred}')
+            sys.exit(0)
     os.environ['LUNA_PORT'] = str(port)
 
     if explicit_port:
