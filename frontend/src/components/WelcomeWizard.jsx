@@ -29,8 +29,10 @@ export default function WelcomeWizard({ onComplete }) {
   const customWelcome = wizardCfg.custom_welcome || '';
 
   // Build step list dynamically
-  // 1=Name, 2=LLM, (3=Voice?), (4=Personality?), last=Greeting
-  const steps = ['name', 'llm'];
+  // 1=Name, 2=LLM (skip if preloaded), (3=Voice?), (4=Personality?), last=Greeting
+  const hasPreloadedKeys = frontendConfig.has_preloaded_keys === true;
+  const steps = ['name'];
+  if (!hasPreloadedKeys) steps.push('llm');
   if (showVoice) steps.push('voice');
   if (showPersonality) steps.push('personality');
   steps.push('greeting');

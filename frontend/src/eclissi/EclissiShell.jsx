@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ShellHeader from './components/ShellHeader';
 import WidgetDock from './components/WidgetDock';
 import RightPanel from './components/RightPanel';
@@ -69,6 +69,26 @@ export default function EclissiShell() {
       .then(data => setIsFirstRun(data.is_first_run))
       .catch(() => setIsFirstRun(false));
   }, [frontendConfig]);
+
+  // Hidden 4444 unlock for preloaded API keys
+  const [keysUnlocked, setKeysUnlocked] = useState(false);
+  const keyBuffer = useRef([]);
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === '4') {
+        keyBuffer.current.push('4');
+        if (keyBuffer.current.length > 4) keyBuffer.current.shift();
+        if (keyBuffer.current.join('') === '4444') {
+          setKeysUnlocked(prev => !prev);
+          keyBuffer.current = [];
+        }
+      } else {
+        keyBuffer.current = [];
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   // Identity + connection for header
   const identityHook = useIdentity();
@@ -194,7 +214,7 @@ export default function EclissiShell() {
           {activeTab === 'studio' && <iframe src="/studio/?v=2" style={{ width: '100%', height: '100%', border: 'none' }} />}
           {activeTab === 'nexus' && <iframe src="/studio/?v=2&view=nexus" style={{ width: '100%', height: '100%', border: 'none' }} />}
           {/* Guardian tab now redirects to eclissi + opens Guardian panel (see switchTab) */}
-          {activeTab === 'settings' && <SettingsApp />}
+          {activeTab === 'settings' && <SettingsApp keysUnlocked={keysUnlocked} />}
         </main>
 
         {/* Right Panel (only when a widget is active on eclissi tab) */}

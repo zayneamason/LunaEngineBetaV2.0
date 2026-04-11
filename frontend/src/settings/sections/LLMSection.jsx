@@ -15,7 +15,7 @@ function StatusDot({ status }) {
   );
 }
 
-export default function LLMSection() {
+export default function LLMSection({ keysUnlocked = false }) {
   const [data, setData] = useState(null);
   const [keys, setKeys] = useState({});       // env_var -> value typed by user
   const [showKeys, setShowKeys] = useState({}); // env_var -> bool
@@ -270,12 +270,16 @@ export default function LLMSection() {
                   }}
                   style={{ ...inputStyle, flex: 1 }}
                 />
-                <button
-                  onClick={() => setShowKeys((p) => ({ ...p, [envVar]: !p[envVar] }))}
-                  style={btnStyle}
-                >
-                  {showKeys[envVar] ? 'HIDE' : 'SHOW'}
-                </button>
+                {pconf.key_masked && !keysUnlocked ? (
+                  <span style={{ ...btnStyle, opacity: 0.5, cursor: 'default' }}>CONFIGURED</span>
+                ) : (
+                  <button
+                    onClick={() => setShowKeys((p) => ({ ...p, [envVar]: !p[envVar] }))}
+                    style={btnStyle}
+                  >
+                    {showKeys[envVar] ? 'HIDE' : 'SHOW'}
+                  </button>
+                )}
                 <button
                   onClick={() => handleTest(pid)}
                   disabled={testState === 'testing'}

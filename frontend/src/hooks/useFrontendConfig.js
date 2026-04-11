@@ -25,6 +25,8 @@ const DEFAULT_CONFIG = {
   remap: {},
   settings: {},
   debug_mode: true,
+  demo_mode: false,
+  has_preloaded_keys: false,
 };
 
 export function useFrontendConfig() {

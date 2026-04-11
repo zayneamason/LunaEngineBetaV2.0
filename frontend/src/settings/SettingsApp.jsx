@@ -40,7 +40,7 @@ const SECTION_COMPONENTS = {
   about: AboutSection,
 };
 
-export default function SettingsApp() {
+export default function SettingsApp({ keysUnlocked = false }) {
   const config = useFrontendConfig();
   const enabledSettings = config.settings || {};
   const SECTIONS = ALL_SECTIONS.filter((s) => enabledSettings[s.id] !== false);
@@ -101,7 +101,7 @@ export default function SettingsApp() {
         overflowY: 'auto',
         padding: '24px 32px',
       }}>
-        {ActiveComponent && <ActiveComponent />}
+        {ActiveComponent && <ActiveComponent keysUnlocked={keysUnlocked} />}
       </div>
     </div>
   );

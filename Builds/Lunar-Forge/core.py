@@ -645,11 +645,17 @@ class BuildPipeline:
             if isinstance(coll_cfg, dict) and coll_cfg.get("enabled", False):
                 if coll_name in registry.get("collections", {}):
                     entry = registry["collections"][coll_name].copy()
-                    entry["enabled"] = True
-                    if "source" in coll_cfg:
-                        # Use compiled name (coll_name.db) not source path
-                        entry["db_path"] = f"data/system/aibrarian/{coll_name}.db"
-                    enabled_collections[coll_name] = entry
+                else:
+                    entry = {
+                        "display_name": coll_name.replace("_", " ").title(),
+                        "schema_type": "standard",
+                        "read_only": True,
+                        "tags": [],
+                    }
+                entry["enabled"] = True
+                if "source" in coll_cfg:
+                    entry["db_path"] = f"data/system/aibrarian/{coll_name}.db"
+                enabled_collections[coll_name] = entry
         registry["collections"] = enabled_collections
 
         (config_dir / "aibrarian_registry.yaml").write_text(
@@ -691,6 +697,7 @@ class BuildPipeline:
         )
 
         # --- LunaFM config (station.yaml + channels/) ---
+        # Always ship config so engine boots LunaFM; settings.lunafm controls UI tab only
         lunafm_src = self.engine_root / "config" / "lunafm"
         if lunafm_src.exists() and lunafm_src.is_dir():
             shutil.copytree(str(lunafm_src), str(config_dir / "lunafm"), dirs_exist_ok=True)
@@ -785,7 +792,28 @@ class BuildPipeline:
 
             size_mb = source_path.stat().st_size / (1024 * 1024)
 
-            if coll_mode == "plugin":
+            if coll_mode == "cartridge":
+                # .lun cartridge — convert to standard collection DB at build time
+                dest = sys_aibrarian_dir / f"{coll_name}.db"
+                self._emit(f"  Registering cartridge: {source_path.name} ...")
+                import asyncio
+                import sys as _sys
+                import sqlite3 as _sqlite3
+                # Ensure luna package is importable from engine root
+                _src_dir = str(self.engine_root / "src")
+                if _src_dir not in _sys.path:
+                    _sys.path.insert(0, _src_dir)
+                try:
+                    from luna.substrate.aibrarian_schema import STANDARD_SCHEMA
+                    conn = _sqlite3.connect(str(dest))
+                    conn.executescript(STANDARD_SCHEMA)
+                    conn.close()
+                    asyncio.run(self._register_cartridge_into(dest, source_path, coll_name))
+                    size_mb = dest.stat().st_size / (1024 * 1024)
+                    self._emit(f"  Collection (cartridge): {coll_name} ({size_mb:.1f} MB)")
+                except Exception as cart_err:
+                    self._emit(f"  WARNING: Cartridge registration failed: {cart_err}")
+            elif coll_mode == "plugin":
                 # Plugin collections go to collections/{name}/ with manifest
                 plugin_dir = staging_dir / "collections" / coll_name
                 plugin_dir.mkdir(parents=True, exist_ok=True)
@@ -813,7 +841,33 @@ class BuildPipeline:
                 shutil.copy2(str(source_path), str(dest))
                 self._emit(f"  Collection (compiled): {coll_name} ({size_mb:.1f} MB)")
 
-        # --- Luna-System-Knowledge ---
+    async def _register_cartridge_into(self, db_path: Path, lun_path: Path, coll_name: str):
+        """Register a .lun cartridge into a fresh collection DB at build time."""
+        import yaml as _yaml, tempfile
+        tmp_registry = {
+            "schema_version": 1,
+            "collections": {
+                coll_name: {
+                    "enabled": True,
+                    "db_path": str(db_path),
+                    "schema_type": "standard",
+                    "read_only": False,
+                }
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            _yaml.dump(tmp_registry, f)
+            tmp_path = f.name
+        try:
+            from luna.substrate.aibrarian_engine import AiBrarianEngine
+            engine = AiBrarianEngine(Path(tmp_path))
+            await engine.initialize()
+            await engine.register_cartridge(coll_name, lun_path)
+            await engine.shutdown()
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    # --- Luna-System-Knowledge ---
         variant = profile.get("config", {}).get("system_knowledge_variant")
         if variant:
             variant_dir = self.engine_root / "data" / "system" / "Luna-System-Knowledge" / variant
@@ -910,6 +964,31 @@ class BuildPipeline:
             else:
                 self._emit("  WARNING: .env not found, using template")
                 self._write_secrets_template(config_dir)
+        elif secrets_mode == "preloaded":
+            # Embed actual API keys from a source file into secrets.json
+            keys_file = profile.get("secrets", {}).get("keys_file", "")
+            keys_path = self.forge_root / keys_file if keys_file else None
+            if keys_path and keys_path.exists():
+                shutil.copy2(str(keys_path), str(config_dir / "secrets.json"))
+                self._emit("  Secrets: preloaded keys embedded")
+            else:
+                # Fallback: read keys from current environment / .env
+                env_src = self.engine_root / ".env"
+                if env_src.exists():
+                    secrets = {}
+                    for line in env_src.read_text().splitlines():
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            k, _, v = line.partition('=')
+                            k = k.strip()
+                            v = v.strip().strip('"').strip("'")
+                            if v and k.endswith('_API_KEY'):
+                                secrets[k] = v
+                    (config_dir / "secrets.json").write_text(json.dumps(secrets, indent=2))
+                    self._emit(f"  Secrets: preloaded {len(secrets)} keys from .env")
+                else:
+                    self._emit("  WARNING: preloaded mode but no keys source found, using template")
+                    self._write_secrets_template(config_dir)
         else:
             self._write_secrets_template(config_dir)
             self._emit("  Secrets: template (empty)")
@@ -928,6 +1007,8 @@ class BuildPipeline:
             "wizard": profile.get("wizard", PROFILE_DEFAULTS["wizard"]),
             "settings": frontend.get("settings", {}),
             "debug_mode": frontend.get("debug_mode", True),
+            "has_preloaded_keys": profile.get("secrets", {}).get("mode") == "preloaded",
+            "demo_mode": profile.get("demo_mode", False),
         }
 
         (config_dir / "frontend_config.json").write_text(
