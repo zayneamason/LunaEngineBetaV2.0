@@ -2358,8 +2358,15 @@ class AiBrarianEngine:
         doc_id: str,
         chunks: list[DocumentChunk],
     ) -> None:
-        """Embed all chunks and store a document-level embedding (average)."""
-        if not conn._vec_loaded:
+        """Embed all chunks and store a document-level embedding (average).
+
+        When sqlite-vec is loaded, writes to the chunk_embeddings vec0 table.
+        When vec is unavailable but the pure-Python fallback is initialized,
+        writes to chunk_embeddings_fallback via conn._fallback_vec.store().
+        Returns silently if neither path is available.
+        """
+        fallback = getattr(conn, "_fallback_vec", None)
+        if not conn._vec_loaded and not fallback:
             return
 
         gen = self._get_generator(conn.config)
@@ -2371,11 +2378,14 @@ class AiBrarianEngine:
             if emb is None:
                 continue
             chunk_id = f"{doc_id}:chunk:{chunk.index}"
-            blob = _vector_to_blob(emb)
-            conn.conn.execute(
-                "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
-                (chunk_id, blob),
-            )
+            if conn._vec_loaded:
+                blob = _vector_to_blob(emb)
+                conn.conn.execute(
+                    "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                    (chunk_id, blob),
+                )
+            else:
+                fallback.store(chunk_id, emb)
             valid_embeddings.append(emb)
 
         # Document-level embedding = average of chunk embeddings
@@ -2383,11 +2393,14 @@ class AiBrarianEngine:
             import numpy as np
 
             doc_vec = np.mean(valid_embeddings, axis=0).tolist()
-            blob = _vector_to_blob(doc_vec)
-            conn.conn.execute(
-                "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
-                (doc_id, blob),
-            )
+            if conn._vec_loaded:
+                blob = _vector_to_blob(doc_vec)
+                conn.conn.execute(
+                    "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                    (doc_id, blob),
+                )
+            else:
+                fallback.store(doc_id, doc_vec)
 
     # =====================================================================
     # Cartridge Registration
