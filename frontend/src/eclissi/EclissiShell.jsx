@@ -30,7 +30,7 @@ import LunaScriptWidget from './widgets/LunaScriptWidget';
 import ArcadeWidget from './widgets/ArcadeWidget';
 import RadioWidget from './widgets/RadioWidget';
 
-const ALL_TABS = ['eclissi', 'studio', 'kozmo', 'guardian', 'observatory', 'settings'];
+const ALL_TABS = ['eclissi', 'studio', 'nexus', 'kozmo', 'guardian', 'observatory', 'settings'];
 
 const WIDGET_COMPONENTS = {
   engine: EngineWidget,
@@ -192,6 +192,7 @@ export default function EclissiShell() {
             <ObservatoryApp onBack={() => switchTab('eclissi')} activeProjectSlug={activeProjectSlug} />
           )}
           {activeTab === 'studio' && <iframe src="/studio/?v=2" style={{ width: '100%', height: '100%', border: 'none' }} />}
+          {activeTab === 'nexus' && <iframe src="/studio/?v=2&view=nexus" style={{ width: '100%', height: '100%', border: 'none' }} />}
           {/* Guardian tab now redirects to eclissi + opens Guardian panel (see switchTab) */}
           {activeTab === 'settings' && <SettingsApp />}
         </main>

@@ -20,6 +20,9 @@ export default function App() {
   const { isConnected: wsConnected } = useOrbConnection();
   const { connected: httpConnected } = useLiveData(5000);
 
+  // Check for forced view (e.g. ?view=nexus from Eclissi Nexus tab)
+  const forcedView = new URLSearchParams(window.location.search).get('view');
+
   // Poll active project
   useEffect(() => {
     const poll = async () => {
@@ -33,6 +36,15 @@ export default function App() {
     const id = setInterval(poll, 15000);
     return () => clearInterval(id);
   }, []);
+
+  // Standalone mode: render only the requested view without Studio chrome
+  if (forcedView === 'nexus') {
+    return (
+      <div style={{ width: '100vw', height: '100vh', background: '#08080f', fontFamily: "'JetBrains Mono', monospace" }}>
+        <NexusView />
+      </div>
+    );
+  }
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: '#08080f', fontFamily: "'JetBrains Mono', monospace" }}>
