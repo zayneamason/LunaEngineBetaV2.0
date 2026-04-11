@@ -36,7 +36,11 @@ secrets_path = DATA_DIR / 'config' / 'secrets.json'
 if secrets_path.exists():
     for key, val in json.loads(secrets_path.read_text()).items():
         if val:
-            os.environ[key] = val
+            try:
+                val.encode('ascii')
+                os.environ[key] = val
+            except UnicodeEncodeError:
+                print(f"WARNING: {key} contains non-ASCII characters, skipping")
 
 # Fallback: load .env if it exists (dev mode)
 env_path = DATA_DIR / '.env' if (DATA_DIR / '.env').exists() else BASE_DIR / '.env'
@@ -57,12 +61,18 @@ import uvicorn
 from luna.api.server import app
 
 
-def _find_free_port() -> int:
-    """Grab an ephemeral port from the OS — guaranteed not to collide."""
+def _find_free_port(preferred: int = 8000) -> int:
+    """Try preferred port first, fall back to OS-assigned ephemeral port."""
     import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', preferred))
+            return preferred
+    except OSError:
+        print(f"WARNING: Port {preferred} busy, using random port")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
 
 
 def _run_server(port: int) -> None:
