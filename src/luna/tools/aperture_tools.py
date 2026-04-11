@@ -80,7 +80,7 @@ async def aperture_get() -> dict:
             "angle": 55,
         }
 
-    return _aperture_manager.state.to_dict()
+    return _aperture_manager.state.to_dict(mode=_aperture_manager.mode.value)
 
 
 async def aperture_set(
@@ -126,7 +126,7 @@ async def aperture_set(
     if active_collections is not None:
         _aperture_manager.set_active_collections(active_collections)
 
-    return _aperture_manager.state.to_dict()
+    return _aperture_manager.state.to_dict(mode=_aperture_manager.mode.value)
 
 
 async def collection_lock_in(

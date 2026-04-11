@@ -549,6 +549,17 @@ Emojis can accompany gestures or stand alone.
             self.aibrarian = None
             logger.warning(f"AiBrarianEngine initialization failed (non-fatal): {e}")
 
+        # 1b/4 ForgeWatcher — live folder monitor for Knowledge Forge
+        self.forge_watcher = None
+        if self.aibrarian is not None:
+            try:
+                from luna.substrate.forge_watcher import ForgeWatcher
+                self.forge_watcher = ForgeWatcher(self.aibrarian)
+                self.forge_watcher.start()
+                logger.info("ForgeWatcher owned by Engine — started")
+            except Exception as e:
+                logger.warning(f"ForgeWatcher initialization failed (non-fatal): {e}")
+
         # 2/4 CollectionLockInEngine — inject into AiBrarianEngine
         try:
             from luna.substrate.collection_lock_in import CollectionLockInEngine
@@ -1198,11 +1209,12 @@ Emojis can accompany gestures or stand alone.
                 logger.warning("[SUBTASK] Runner unavailable — intent classification skipped, agentic upgrade disabled")
                 parallel_tasks.append(asyncio.sleep(0))  # no-op placeholder
 
-            # Memory retrieval (existing)
+            # Memory retrieval via unified module
             async def _retrieve_context():
+                from luna.retrieval import UnifiedRetrieval, RetrievalRequest
+
                 _rt: dict = {}
                 _rt0 = _time.time()
-                memory_context = ""
                 history_context = None
                 retrieval_query = user_message
 
@@ -1212,95 +1224,50 @@ Emojis can accompany gestures or stand alone.
                 _rt["history_build"] = _time.time() - _t
 
                 _rt["load_conv_history"] = 0.0
-                _rt["matrix_get_context"] = 0.0
                 if matrix and matrix.is_ready:
                     _t = _time.time()
                     await self._load_conversation_history(matrix, limit=10)
                     _rt["load_conv_history"] = _time.time() - _t
 
-                    # Use rewritten query for better retrieval if available
-                    if subtask_phase and subtask_phase.rewritten_query:
-                        retrieval_query = subtask_phase.rewritten_query
-                        logger.info(f"[SUBTASK] Using rewritten query for retrieval: {retrieval_query[:60]}...")
+                # Use rewritten query for better retrieval if available
+                if subtask_phase and subtask_phase.rewritten_query:
+                    retrieval_query = subtask_phase.rewritten_query
+                    logger.info(f"[SUBTASK] Using rewritten query for retrieval: {retrieval_query[:60]}...")
 
-                    # Reach into inner MemoryMatrix for node-level access
-                    # (pattern: librarian._get_matrix — matrix.py:1982)
-                    # MatrixActor.get_context() returns a formatted string;
-                    # we need list[MemoryNode] to pass _retrieval_score as relevance.
-                    inner_matrix = getattr(matrix, '_matrix', None)
-                    memory_context = ""
-                    if inner_matrix:
-                        _t = _time.time()
-                        memory_nodes = await inner_matrix.get_context(
-                            retrieval_query, max_tokens=1500, scopes=self.active_scopes
-                        )
-                        if memory_nodes:
-                            for node in memory_nodes:
-                                score = getattr(node, '_retrieval_score', 1.0)
-                                text = node.summary or node.content
-                                self.context.add(
-                                    content=text,
-                                    source=ContextSource.MEMORY,
-                                    relevance=score,
-                                )
-                            # Rebuild formatted string for downstream concat
-                            memory_context = matrix._format_context(memory_nodes)
-                        _rt["matrix_get_context"] = _time.time() - _t
+                retriever = UnifiedRetrieval(
+                    matrix_actor=matrix,
+                    aibrarian=self.aibrarian,
+                    aperture=self.aperture,
+                    collection_lock_in=self.collection_lock_in,
+                    active_scopes=self.active_scopes,
+                    active_project=self._active_project,
+                )
+                _ap = self.aperture.state
+                request = RetrievalRequest(
+                    query=retrieval_query,
+                    scopes=self.active_scopes,
+                    subtask_phase=subtask_phase,
+                    aperture_preset=_ap.preset.value,
+                    aperture_angle=_ap.angle,
+                    aperture_inner_threshold=_ap.inner_ring_threshold,
+                    aperture_breakthrough=_ap.breakthrough_threshold,
+                )
+                result = await retriever.retrieve(request)
 
-                # Phase 2: search chain for active project collections
-                # Use decomposed queries if available (multi-part questions)
-                _t = _time.time()
-                if subtask_phase and subtask_phase.decomposed_queries:
-                    collection_context = await self._get_collection_context_multi(
-                        subtask_phase.decomposed_queries, subtask_phase=subtask_phase
+                # Preserve existing engine state updates
+                self._last_collections_searched = result.collections_searched
+                self._last_nexus_nodes = result.nexus_nodes
+                self._active_reflection_mode = result.reflection_mode
+
+                # Add to revolving context
+                for candidate in result.candidates:
+                    self.context.add(
+                        content=candidate.content,
+                        source=ContextSource.MEMORY,
+                        relevance=candidate.score,
                     )
-                else:
-                    collection_context = await self._get_collection_context(
-                        retrieval_query, subtask_phase=subtask_phase
-                    )
-                _rt["collection_context"] = _time.time() - _t
-                if collection_context:
-                    memory_context = (memory_context or "") + "\n\n" + collection_context
-                    self.context.add(content=collection_context, source=ContextSource.MEMORY)
 
-                # ── Phase 2.5: Reflection mode detection + retrieval ──
-                collections_searched = self._last_collections_searched
-                active_mode = self._get_active_reflection_mode(collections_searched)
-                self._active_reflection_mode = active_mode
-
-                _rt["reflection_search"] = 0.0
-                if active_mode in ("reflective", "relational") and matrix and matrix.is_ready:
-                    _t = _time.time()
-                    try:
-                        matrix_ops = matrix._matrix if hasattr(matrix, '_matrix') else None
-                        if matrix_ops:
-                            reflection_results = await matrix_ops.fts5_search(
-                                retrieval_query, limit=5
-                            )
-                            reflection_nodes = [
-                                node for node, _score in reflection_results
-                                if getattr(node, 'node_type', '') == 'PERSONALITY_REFLECTION'
-                            ]
-                            if reflection_nodes:
-                                reflection_context = self._format_reflection_context(reflection_nodes)
-                                memory_context = (memory_context or "") + "\n\n" + reflection_context
-                                self.context.add(content=reflection_context, source=ContextSource.MEMORY)
-                                logger.info(f"[REFLECTION-RETRIEVAL] Injected {len(reflection_nodes)} reflections (mode={active_mode})")
-                    except Exception as e:
-                        logger.warning(f"[REFLECTION-RETRIEVAL] Failed: {e}")
-                    _rt["reflection_search"] = _time.time() - _t
-
-                # ── Phase 2.75: Relational retrieval ──
-                _rt["relational_context"] = 0.0
-                if active_mode == "relational":
-                    _t = _time.time()
-                    relational_context = await self._get_relational_context(retrieval_query)
-                    if relational_context:
-                        memory_context = (memory_context or "") + "\n\n" + relational_context
-                        self.context.add(content=relational_context, source=ContextSource.MEMORY)
-                        logger.info(f"[RELATIONAL] Injected conversation context")
-                    _rt["relational_context"] = _time.time() - _t
-
+                _rt["unified_retrieval"] = result.timings.get("retrieve_total", 0.0)
                 _rt["retrieve_total"] = _time.time() - _rt0
                 try:
                     logger.warning(
@@ -1315,7 +1282,7 @@ Emojis can accompany gestures or stand alone.
                 except Exception:
                     pass
 
-                return memory_context, history_context
+                return result.context_string, history_context
 
             # Run subtasks first (they're fast), then memory retrieval
             # (memory retrieval can use the rewritten query from subtasks)
@@ -1327,6 +1294,12 @@ Emojis can accompany gestures or stand alone.
             else:
                 subtask_phase = SubtaskPhaseResult() if SUBTASK_RUNNER_AVAILABLE else None
             _timings["subtask_runner"] = _time.time() - _t
+
+            # Auto-aperture: set aperture based on intent classification
+            if subtask_phase and subtask_phase.intent:
+                intent = subtask_phase.intent.get('intent', 'simple_question')
+                complexity = subtask_phase.intent.get('complexity', 'simple')
+                self.aperture.auto_aperture(intent, complexity)
 
             _t = _time.time()
             memory_context, history_context = await _retrieve_context()
@@ -1915,6 +1888,20 @@ Emojis can accompany gestures or stand alone.
         except Exception as e:
             logger.debug(f"Reflective tick consolidation skipped: {e}")
 
+        # Phase 3b: Forge Watcher — drain queued file events
+        if self.forge_watcher and self.forge_watcher._running:
+            try:
+                events = await self.forge_watcher.drain_queue()
+                if events:
+                    summary = await self.forge_watcher.process_events(events)
+                    logger.info(
+                        "[FORGE-WATCHER] Processed %d events: %d ingested, %d deleted, %d skipped, %d errors",
+                        len(events), summary["ingested"], summary["deleted"],
+                        summary["skipped"], summary["errors"],
+                    )
+            except Exception as e:
+                logger.debug(f"Forge watcher tick skipped: {e}")
+
         # Phase 4: Collection floor monitor
         try:
             from luna_mcp.observatory.tools import tool_observatory_collection_health
@@ -1944,458 +1931,58 @@ Emojis can accompany gestures or stand alone.
 
     async def _get_collection_context(self, query: str, *, subtask_phase=None) -> str:
         """
-        Phase 2: Collection recall.
-        - If a project is active → use search_chain (voice path).
-        - Otherwise → aperture-driven search across all enabled collections.
+        Phase 2: Collection recall — delegates to unified retrieval module.
+        Kept as engine API for server.py callers.
         """
-        # ── Voice-path: project-scoped search chain ──
-        voice_parts: list[str] = []
-        if self._active_project:
-            search_cfg = getattr(self, "_search_chain_config", None)
-            if not search_cfg:
-                try:
-                    from luna.tools.search_chain import SearchChainConfig
-                    search_cfg = SearchChainConfig.default()
-                except Exception:
-                    pass
-            if search_cfg:
-                try:
-                    from luna.tools.search_chain import run_search_chain
-                    results = await run_search_chain(search_cfg, query, self)
-                except Exception as e:
-                    logger.warning(f"[PHASE2] search_chain failed: {e}")
-                    results = []
-                for r in (results or []):
-                    content = r.get("content", "")
-                    source = r.get("source", "collection")
-                    if content:
-                        voice_parts.append(f"[{source}]\n{content}")
+        from luna.retrieval import UnifiedRetrieval, RetrievalRequest
 
-        # ── Aperture-driven path (always runs — supplements voice path) ──
-        if not self.aibrarian:
-            return ""
-
-        aperture = self.aperture.state
-        inner_thresh = aperture.inner_ring_threshold
-
-        # Gather lock-in records
-        lock_in_map: dict[str, float] = {}
-        if self.collection_lock_in:
-            try:
-                records = await self.collection_lock_in.get_all()
-                lock_in_map = {r.collection_key: r.lock_in for r in records}
-            except Exception:
-                pass
-
-        # Classify collections
-        collections_to_search: list[str] = []
-        for key, cfg in self.aibrarian.registry.collections.items():
-            if not cfg.enabled:
-                continue
-            # Primary grounding collections are always searched
-            is_primary = getattr(cfg, 'grounding_priority', 'supplemental') == 'primary'
-            if not lock_in_map or is_primary:
-                collections_to_search.append(key)
-            else:
-                li = lock_in_map.get(key, 0.0)
-                if li >= inner_thresh or li > 0:
-                    collections_to_search.append(key)
-
-        # Sort: primary grounding collections first
-        def _sort_key(k):
-            cfg = self.aibrarian.registry.collections.get(k)
-            if cfg and getattr(cfg, 'grounding_priority', 'supplemental') == 'primary':
-                return 0
-            return 1
-        collections_to_search.sort(key=_sort_key)
-        self._last_collections_searched = collections_to_search
-        logger.info(f"[PHASE2] Collections to search: {collections_to_search}")
-
-        if not collections_to_search:
-            return ""
-
-        # Split budget: structure, extraction claims, and raw chunks each get their own allocation
-        STRUCTURE_BUDGET = 3000   # TOC + doc summary (truncated to fit)
-        EXTRACTION_BUDGET = 5000  # CLAIMs + SECTION_SUMMARYs
-        CHUNK_BUDGET = 3000       # Raw text passages (SOURCE_TEXT)
-        struct_budget = STRUCTURE_BUDGET
-        content_budget = EXTRACTION_BUDGET
-        chunk_budget = CHUNK_BUDGET
-        parts: list[str] = []
-        nexus_nodes: list = []
-
-        # Grounding priority → confidence floor for Nexus nodes
-        _PRIORITY_FLOOR = {"primary": 0.75, "supplemental": 0.5, "background": 0.3}
-
-        import time as _ctime
-        _ct: dict = {}
-        _ct0 = _ctime.time()
-
-        for key in collections_to_search:
-            if content_budget <= 0 and chunk_budget <= 0:
-                break
-
-            conn = self.aibrarian.connections.get(key)
-            if not conn:
-                continue
-
-            _ck = _ctime.time()
-            _t_ct = _ctime.time()
-
-            from luna.substrate.aibrarian_engine import AiBrarianEngine
-            fts_query = AiBrarianEngine._sanitize_fts_query(query)
-
-            # Grounding config for this collection
-            cfg = self.aibrarian.registry.collections.get(key)
-            priority = getattr(cfg, 'grounding_priority', 'supplemental') if cfg else 'supplemental'
-            conf_floor = _PRIORITY_FLOOR.get(priority, 0.5)
-
-            # ── STRUCTURE PASS: Doc summary + TOC (capped at struct_budget) ──
-            for node_type in ('DOCUMENT_SUMMARY', 'TABLE_OF_CONTENTS'):
-                if struct_budget <= 0:
-                    break
-                try:
-                    row = conn.conn.execute(
-                        "SELECT node_type, content, confidence FROM extractions "
-                        "WHERE node_type = ? LIMIT 1",
-                        (node_type,),
-                    ).fetchone()
-                    if row:
-                        content = row[1][:struct_budget]
-                        parts.append(f"[Nexus/{key} {node_type}]\n{content}")
-                        struct_budget -= len(content)
-                        nexus_nodes.append({
-                            "id": f"nexus:{key}:{node_type}:{len(nexus_nodes)}",
-                            "content": content,
-                            "node_type": node_type,
-                            "source": f"nexus/{key}",
-                            "confidence": max(row[2] if len(row) > 2 else 0.85, conf_floor),
-                            "grounding_priority": priority,
-                        })
-                except Exception:
-                    pass
-
-            _ct[f"{key}_t0_structure"] = _ctime.time() - _t_ct
-            _t_ct = _ctime.time()
-
-            # ── TIER 1: Content extractions FTS5 (CLAIMs + SECTION_SUMMARYs) ──
-            ext_rows = []
-            try:
-                ext_rows = conn.conn.execute(
-                    "SELECT e.node_type, e.content, e.confidence "
-                    "FROM extractions_fts "
-                    "JOIN extractions e ON extractions_fts.rowid = e.rowid "
-                    "WHERE extractions_fts MATCH ? "
-                    "AND e.node_type NOT IN ('DOCUMENT_SUMMARY', 'TABLE_OF_CONTENTS') "
-                    "ORDER BY e.confidence DESC "
-                    "LIMIT 15",
-                    (fts_query,),
-                ).fetchall()
-            except Exception:
-                pass
-            # Normalize Row objects to dicts for downstream .get() calls
-            ext_rows = [dict(r) if not isinstance(r, dict) else r for r in ext_rows]
-            logger.info("[PHASE2] Tier 1 FTS5 for %s: query='%s', results=%d", key, fts_query[:60], len(ext_rows))
-
-            _ct[f"{key}_t1_fts5_ext"] = _ctime.time() - _t_ct
-            _t_ct = _ctime.time()
-
-            # ── TIER 2: Query expansion (if Tier 1 is sparse) ────────────
-            if len(ext_rows) < 8:
-                expanded_rows = _expand_and_search_extractions(conn, query)
-                # Filter out structure types from expanded results too
-                expanded_rows = [dict(r) if not isinstance(r, dict) else r for r in expanded_rows]
-                expanded_rows = [r for r in expanded_rows
-                                 if r.get("node_type", "")
-                                 not in ('DOCUMENT_SUMMARY', 'TABLE_OF_CONTENTS')]
-                ext_rows = list(ext_rows) + expanded_rows
-
-            # Merge (deduplicate by content) + collect structured nodes for grounding
-            seen_content: set = set()
-            for row in ext_rows:
-                if not isinstance(row, dict):
-                    try:
-                        row = dict(row)
-                    except (TypeError, ValueError):
-                        continue
-                content = row["content"]
-                node_type = row["node_type"]
-                confidence = row.get("confidence", 0.85)
-                if content not in seen_content and content_budget > 0:
-                    seen_content.add(content)
-                    chunk = content[:content_budget]
-                    parts.append(f"[Nexus/{key} {node_type}]\n{chunk}")
-                    content_budget -= len(chunk)
-
-                    nexus_nodes.append({
-                        "id": f"nexus:{key}:{node_type}:{len(nexus_nodes)}",
-                        "content": content,
-                        "node_type": node_type,
-                        "source": f"nexus/{key}",
-                        "confidence": max(confidence, conf_floor),
-                        "grounding_priority": priority,
-                    })
-
-            _ct[f"{key}_t2_fts5_full"] = _ctime.time() - _t_ct
-            _t_ct = _ctime.time()
-
-            # ── TIER 3: Semantic fallback (if still sparse) ──────────────
-            # For complex research queries, always search chunks (extractions are summaries)
-            _tier3_threshold = 5
-            if (subtask_phase and subtask_phase.intent
-                    and subtask_phase.intent.get("complexity") == "complex"):
-                _tier3_threshold = 15
-            if len(seen_content) < _tier3_threshold and content_budget > 1000:
-                try:
-                    sem_results = await self.aibrarian.search(
-                        key, query, "semantic", limit=5
-                    )
-                    if not sem_results:
-                        sem_results = await self.aibrarian.search(
-                            key, query, "keyword", limit=5
-                        )
-                    for r in sem_results:
-                        content = r.get("snippet") or r.get("content", "")
-                        title = r.get("title") or r.get("filename", "")
-                        if content and content not in seen_content and content_budget > 0:
-                            seen_content.add(content)
-                            chunk = content[:content_budget]
-                            parts.append(f"[Nexus/{key} chunk: {title}]\n{chunk}")
-                            content_budget -= len(chunk)
-
-                            nexus_nodes.append({
-                                "id": f"nexus:{key}:chunk:{len(nexus_nodes)}",
-                                "content": content,
-                                "node_type": "CHUNK",
-                                "source": f"nexus/{key}",
-                                "confidence": conf_floor,
-                                "grounding_priority": priority,
-                            })
-                except Exception as e:
-                    logger.warning(f"[PHASE2] Semantic fallback for {key}: {e}")
-
-            _ct[f"{key}_t3_semantic"] = _ctime.time() - _t_ct
-            _t_ct = _ctime.time()
-
-            # ── TIER 4: Raw text chunks (when query asks for depth) ──────
-            _DEPTH_SIGNALS = {
-                'evidence', 'specific', 'detail', 'passage', 'quote',
-                'section', 'argue', 'methodology', 'data', 'example',
-                'describe', 'text says', 'what does', 'how does', 'explain how',
-            }
-            wants_depth = any(sig in query.lower() for sig in _DEPTH_SIGNALS)
-            logger.info(f"[PHASE2] Tier 4 check for {key}: wants_depth={wants_depth}, chunk_budget={chunk_budget}")
-            if wants_depth and chunk_budget > 0:
-                try:
-                    # Build focused chunk query from extraction content (not the user query)
-                    # Extract key terms from CLAIMs/SECTION_SUMMARYs already found
-                    import re as _re
-                    _claim_text = ' '.join(
-                        n.get('content', '')[:200] for n in nexus_nodes
-                        if n.get('node_type') in ('CLAIM', 'SECTION_SUMMARY')
-                        and n.get('source', '').endswith(key)
-                    )
-                    _META_WORDS = _DEPTH_SIGNALS | {
-                        'what', 'how', 'does', 'the', 'about', 'that', 'this', 'was', 'were',
-                        'proving', 'show', 'present', 'discuss', 'explain', 'book', 'section',
-                        'chapter', 'author', 'argues', 'analysis', 'describes', 'examines',
-                        'from', 'with', 'into', 'also', 'both', 'their', 'have', 'been',
-                        'which', 'than', 'more', 'most', 'only', 'between', 'other',
-                    }
-                    # Combine user query + claim content, extract meaningful terms
-                    _combined = _re.sub(r'[?.,!"\'\-\(\)]', '', (query + ' ' + _claim_text).lower())
-                    _all_terms = [w for w in _combined.split() if w not in _META_WORDS and len(w) > 3]
-                    # Count term frequency — most frequent terms are most topical
-                    from collections import Counter
-                    _term_counts = Counter(_all_terms)
-                    _top_terms = [t for t, _ in _term_counts.most_common(6)]
-                    # Use AND for precision with top content terms
-                    chunk_fts = ' AND '.join(_top_terms[:4]) if _top_terms else fts_query
-                    # Fall back to OR if AND returns nothing
-                    chunk_rows = conn.conn.execute(
-                        "SELECT c.chunk_text, c.section_label "
-                        "FROM chunks_fts "
-                        "JOIN chunks c ON chunks_fts.rowid = c.rowid "
-                        "WHERE chunks_fts MATCH ? "
-                        "ORDER BY rank LIMIT 5",
-                        (chunk_fts,),
-                    ).fetchall()
-                    if not chunk_rows:
-                        # AND too restrictive — fall back to OR
-                        chunk_fts_or = ' OR '.join(_content_terms[:5]) if _content_terms else fts_query
-                        chunk_rows = conn.conn.execute(
-                            "SELECT c.chunk_text, c.section_label "
-                            "FROM chunks_fts "
-                            "JOIN chunks c ON chunks_fts.rowid = c.rowid "
-                            "WHERE chunks_fts MATCH ? "
-                            "ORDER BY rank LIMIT 5",
-                            (chunk_fts_or,),
-                        ).fetchall()
-                    logger.info(f"[PHASE2] Tier 4 chunk query for {key}: '{chunk_fts}'")
-                    for row in chunk_rows:
-                        text = row[0][:chunk_budget]
-                        section = row[1] or ""
-                        if text and text not in seen_content and chunk_budget > 0:
-                            seen_content.add(text)
-                            label = f" ({section})" if section else ""
-                            parts.append(f"[Nexus/{key} SOURCE_TEXT{label}]\n{text}")
-                            chunk_budget -= len(text)
-                            nexus_nodes.append({
-                                "id": f"nexus:{key}:chunk:{len(nexus_nodes)}",
-                                "content": text,
-                                "node_type": "SOURCE_TEXT",
-                                "source": f"nexus/{key}",
-                                "confidence": 0.95,
-                                "grounding_priority": priority,
-                            })
-                    if chunk_rows:
-                        logger.info(f"[PHASE2] Tier 4 chunks for {key}: {len(chunk_rows)} raw passages")
-                except Exception as e:
-                    logger.debug(f"[PHASE2] Tier 4 chunk search for {key}: {e}")
-
-                _ct[f"{key}_t4_chunks"] = _ctime.time() - _t_ct
-                _t_ct = _ctime.time()
-
-                # ── TIER 5: Luna's prior reflections on this material ────────
-                try:
-                    refl_rows = conn.conn.execute(
-                        "SELECT r.content, r.reflection_type, r.created_at "
-                        "FROM reflections_fts "
-                        "JOIN reflections r ON reflections_fts.rowid = r.rowid "
-                        "WHERE reflections_fts MATCH ? "
-                        "LIMIT 3",
-                        (fts_query,),
-                    ).fetchall()
-                    for row in refl_rows:
-                        text = row[0]
-                        if text and text not in seen_content and content_budget > 0:
-                            seen_content.add(text)
-                            chunk = text[:content_budget]
-                            parts.append(f"[Nexus/{key} LUNA_REFLECTION]\n{chunk}")
-                            content_budget -= len(chunk)
-                            nexus_nodes.append({
-                                "id": f"nexus:{key}:reflection:{len(nexus_nodes)}",
-                                "content": text,
-                                "node_type": "LUNA_REFLECTION",
-                                "source": f"nexus/{key}",
-                                "confidence": 0.8,
-                                "grounding_priority": priority,
-                            })
-                    if refl_rows:
-                        logger.info(f"[PHASE2] Tier 5: {len(refl_rows)} prior reflections for {key}")
-                except Exception:
-                    pass  # reflections_fts may not exist in older collections
-
-                _ct[f"{key}_t5_reflections"] = _ctime.time() - _t_ct
-
-            _ct[f"{key}_total"] = _ctime.time() - _ck
-
-        _ct["all_collections_total"] = _ctime.time() - _ct0
-        try:
-            logger.warning(
-                "[COLLECTION-TIMING] total=%.3fs | %s",
-                _ct["all_collections_total"],
-                " | ".join(
-                    f"{k}={v:.3f}s"
-                    for k, v in sorted(_ct.items(), key=lambda x: -x[1])
-                    if k != "all_collections_total" and v > 0.01
-                ),
-            )
-        except Exception:
-            pass
-
-        # ── Write-back: Log access to each searched collection ──
-        for key in collections_to_search:
-            conn = self.aibrarian.connections.get(key)
-            if conn:
-                try:
-                    conn.conn.execute(
-                        "INSERT INTO access_log (event_type, query, results_count, luna_instance) "
-                        "VALUES (?, ?, ?, ?)",
-                        ("query", query[:500], len(parts), "luna-ahab"),
-                    )
-                    conn.conn.commit()
-                except Exception:
-                    pass  # access_log table might not exist yet
-
-        # Store structured nodes for grounding
-        self._last_nexus_nodes = nexus_nodes
-
-        # Merge voice-path results with aperture results
-        all_parts = voice_parts + parts
-
-        if not all_parts:
-            return ""
-
-        assembled = "\n\n".join(all_parts)
-        logger.info(
-            f"[PHASE2] Collection recall: {len(all_parts)} fragments "
-            f"(voice={len(voice_parts)}, nexus={len(parts)}), "
-            f"{len(assembled)} chars"
+        retriever = UnifiedRetrieval(
+            matrix_actor=self.get_actor("matrix"),
+            aibrarian=self.aibrarian,
+            aperture=self.aperture,
+            collection_lock_in=self.collection_lock_in,
+            active_scopes=self.active_scopes,
+            active_project=self._active_project,
         )
-        return assembled
+        request = RetrievalRequest(
+            query=query,
+            scopes=self.active_scopes,
+            subtask_phase=subtask_phase,
+        )
+        context_str, nexus_nodes, collections_searched = await retriever._get_collection_context(
+            query, request,
+        )
+        # Preserve engine state for downstream consumers
+        self._last_nexus_nodes = nexus_nodes
+        self._last_collections_searched = collections_searched
+        return context_str
 
     async def _get_collection_context_multi(self, queries: list, *, subtask_phase=None) -> str:
         """
         Run multiple retrieval queries and merge results.
-
-        For compound questions like "compare chapter 2 to chapter 3",
-        this runs separate searches for each sub-query and assembles
-        them into labeled sections so the LLM can reason across both.
+        Delegates to unified retrieval module.
         """
-        if not queries:
-            return ""
+        from luna.retrieval import UnifiedRetrieval, RetrievalRequest
 
-        # Cap at 4 queries to prevent context explosion
-        queries = queries[:4]
-
-        # Run all queries concurrently
-        # Each call overwrites self._last_nexus_nodes — save beforehand, merge after
-        pre_nodes = list(self._last_nexus_nodes)
-        tasks = [self._get_collection_context(q, subtask_phase=subtask_phase) for q in queries]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Merge: pre-existing nodes + whatever the last gather call left behind
-        seen_ids = {n.get("id") for n in pre_nodes}
-        for node in self._last_nexus_nodes:
-            if node.get("id") not in seen_ids:
-                pre_nodes.append(node)
-                seen_ids.add(node.get("id"))
-        self._last_nexus_nodes = pre_nodes
-
-        # Assemble with labels
-        parts: list = []
-        seen_content: set = set()  # Deduplicate across queries
-
-        for query, result in zip(queries, results):
-            if isinstance(result, Exception):
-                logger.warning(f"[MULTI-QUERY] Failed for '{query}': {result}")
-                continue
-            if not result:
-                continue
-
-            # Deduplicate: skip fragments we've already seen
-            new_fragments = []
-            for line in result.split("\n\n"):
-                # Use first 100 chars as dedup key
-                key = line.strip()[:100]
-                if key and key not in seen_content:
-                    seen_content.add(key)
-                    new_fragments.append(line)
-
-            if new_fragments:
-                section = "\n\n".join(new_fragments)
-                parts.append(f"[Query: {query}]\n{section}")
-
-        if not parts:
-            return ""
-
-        assembled = "\n\n---\n\n".join(parts)
-        logger.info(
-            f"[MULTI-QUERY] {len(queries)} queries → {len(parts)} result sections, "
-            f"{len(assembled)} chars"
+        retriever = UnifiedRetrieval(
+            matrix_actor=self.get_actor("matrix"),
+            aibrarian=self.aibrarian,
+            aperture=self.aperture,
+            collection_lock_in=self.collection_lock_in,
+            active_scopes=self.active_scopes,
+            active_project=self._active_project,
         )
-        return assembled
+        request = RetrievalRequest(
+            query=queries[0] if queries else "",
+            scopes=self.active_scopes,
+            subtask_phase=subtask_phase,
+        )
+        context_str, nexus_nodes, collections_searched = await retriever._get_collection_context_multi(
+            queries, request,
+        )
+        self._last_nexus_nodes = nexus_nodes
+        self._last_collections_searched = collections_searched
+        return context_str
 
     # =========================================================================
     # Read Write-Back: Reflection after deep reads
@@ -2475,77 +2062,19 @@ Emojis can accompany gestures or stand alone.
     # =========================================================================
 
     def _get_active_reflection_mode(self, collections_searched: list) -> str:
-        """
-        Determine reflection mode from the collections that were searched.
-        Most permissive mode wins: relational > reflective > precision.
-        Default: "reflective".
-        """
-        if not self.aibrarian or not collections_searched:
-            return "reflective"
-
-        MODE_RANK = {"precision": 0, "reflective": 1, "relational": 2}
-        RANK_MODE = {v: k for k, v in MODE_RANK.items()}
-
-        max_rank = 0
-        for key in collections_searched:
-            cfg = self.aibrarian.registry.collections.get(key)
-            if cfg:
-                mode = getattr(cfg, 'reflection_mode', None)
-                if mode is None and hasattr(cfg, '__getitem__'):
-                    try:
-                        mode = cfg['reflection_mode']
-                    except (KeyError, TypeError):
-                        pass
-                rank = MODE_RANK.get(mode or "reflective", 1)
-                max_rank = max(max_rank, rank)
-
-        return RANK_MODE.get(max_rank, "reflective")
+        """Delegates to unified retrieval module."""
+        from luna.retrieval import _get_active_reflection_mode
+        return _get_active_reflection_mode(self.aibrarian, collections_searched)
 
     def _format_reflection_context(self, reflection_nodes: list) -> str:
-        """Format PERSONALITY_REFLECTION nodes as labeled context."""
-        if not reflection_nodes:
-            return ""
-        lines = ["## Luna's reflections on this material\n"]
-        for node in reflection_nodes:
-            content = node.content if hasattr(node, 'content') else str(node)
-            summary = getattr(node, 'summary', "") or ""
-            lines.append(f"[REFLECTION] {content}")
-            if summary:
-                lines.append(f"  — re: {summary}")
-            lines.append("")
-        return "\n".join(lines)
+        """Delegates to unified retrieval module."""
+        from luna.retrieval import _format_reflection_context
+        return _format_reflection_context(reflection_nodes)
 
     async def _get_relational_context(self, query: str) -> Optional[str]:
-        """
-        For relational mode: search conversation turns related to the query.
-        Selectively re-includes CONVERSATION_TURN nodes that are normally
-        excluded from retrieval.
-        """
-        matrix = self.get_actor("matrix")
-        if not matrix or not matrix.is_ready:
-            return None
-
-        try:
-            matrix_ops = matrix._matrix if hasattr(matrix, '_matrix') else None
-            if not matrix_ops:
-                return None
-            results = await matrix_ops.fts5_search(query, limit=10)
-            # Filter to conversation turns only
-            turn_results = [
-                (node, score) for node, score in results
-                if getattr(node, 'node_type', '') == 'CONVERSATION_TURN'
-            ][:3]
-            if not turn_results:
-                return None
-
-            lines = ["## Connected conversations\n"]
-            for node, _score in turn_results:
-                content = node.content if hasattr(node, 'content') else str(node)
-                lines.append(f"- {content[:300]}")
-            return "\n".join(lines)
-        except Exception as e:
-            logger.warning(f"[RELATIONAL] Conversation search failed: {e}")
-            return None
+        """Delegates to unified retrieval module."""
+        from luna.retrieval import _get_relational_context
+        return await _get_relational_context(self.get_actor("matrix"), query)
 
     async def _bridge_nexus_to_matrix(self) -> None:
         """
@@ -3155,6 +2684,13 @@ Use this context naturally - don't explicitly mention "my memory" unless asked.
     async def _shutdown(self) -> None:
         """Shutdown sequence."""
         logger.info("Shutdown sequence starting...")
+
+        # Stop ForgeWatcher before closing substrate connections
+        if self.forge_watcher is not None:
+            try:
+                self.forge_watcher.stop()
+            except Exception as e:
+                logger.debug(f"ForgeWatcher shutdown: {e}")
         self.state = EngineState.STOPPED
 
         # Run session-end reflection and maintenance via Director

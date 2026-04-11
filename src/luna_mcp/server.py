@@ -1527,6 +1527,59 @@ async def aibrarian_export_search(collection: str, query: str, limit: int = 1000
 
 
 # ==============================================================================
+# Knowledge Forge — folder mapping, watch mode, compile
+# ==============================================================================
+
+@mcp.tool()
+async def forge_map_folder(collection: str, folder_path: str, watch: bool = True) -> str:
+    """Map a source folder to a Nexus collection for live ingestion.
+
+    Args:
+        collection: Registry key (e.g., "research_library")
+        folder_path: Absolute path to source folder
+        watch: Start watching for changes immediately (default True)
+    """
+    return await aibrarian.forge_map_folder_impl(collection, folder_path, watch)
+
+@mcp.tool()
+async def forge_unmap_folder(collection: str) -> str:
+    """Unmap a source folder and stop watching. Ingested data is preserved.
+
+    Args:
+        collection: Registry key
+    """
+    return await aibrarian.forge_unmap_folder_impl(collection)
+
+@mcp.tool()
+async def forge_sync_status(collection: str) -> str:
+    """Get sync status for a collection — tracked files, last sync, watch state.
+
+    Args:
+        collection: Registry key
+    """
+    return await aibrarian.forge_sync_status_impl(collection)
+
+@mcp.tool()
+async def forge_compile(collection: str) -> str:
+    """Run a full compile on the mapped source folder. Skips unchanged files.
+
+    Args:
+        collection: Registry key
+    """
+    return await aibrarian.forge_compile_impl(collection)
+
+@mcp.tool()
+async def forge_watch_toggle(collection: str, enabled: bool) -> str:
+    """Start or stop watching a collection's source folder.
+
+    Args:
+        collection: Registry key
+        enabled: True to start watching, False to stop
+    """
+    return await aibrarian.forge_watch_toggle_impl(collection, enabled)
+
+
+# ==============================================================================
 # Bridge Tools (Desktop ↔ Code)
 # ==============================================================================
 

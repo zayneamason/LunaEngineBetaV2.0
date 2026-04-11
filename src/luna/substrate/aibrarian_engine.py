@@ -34,7 +34,7 @@ from typing import Any, Optional
 
 import yaml
 
-from .aibrarian_schema import CARTRIDGE_SCHEMA, EMBEDDING_TABLE_SQL, INVESTIGATION_SCHEMA, STANDARD_SCHEMA
+from .aibrarian_schema import CARTRIDGE_SCHEMA, EMBEDDING_TABLE_SQL, FORGE_SYNC_SCHEMA, INVESTIGATION_SCHEMA, STANDARD_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +415,9 @@ class AiBrarianConfig:
     ingestion_pattern: str = "utilitarian"
     reflection_mode: str = ""                # "precision" | "reflective" | "relational"
     grounding_priority: str = "supplemental" # "primary" | "supplemental" | "background"
+    watch: bool = False                      # auto-watch source_dir on startup
+    multi_pass_ingest: bool = True           # use ForgeCompiler when available
+    bridge_to_matrix: bool = False           # promote entities/insights to Memory Matrix
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +515,14 @@ class AiBrarianConnection:
             self._conn.commit()
             logger.info("Applied cartridge schema to %s", self.config.key)
 
+        # Auto-migrate: apply forge_sync schema if not present
+        try:
+            self._conn.execute("SELECT 1 FROM forge_sync LIMIT 1")
+        except sqlite3.OperationalError:
+            self._conn.executescript(FORGE_SYNC_SCHEMA)
+            self._conn.commit()
+            logger.info("Applied forge_sync schema to %s", self.config.key)
+
     def _create_database(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path))
@@ -520,6 +531,7 @@ class AiBrarianConnection:
         if self.config.schema_type == "investigation":
             conn.executescript(INVESTIGATION_SCHEMA)
         conn.executescript(CARTRIDGE_SCHEMA)
+        conn.executescript(FORGE_SYNC_SCHEMA)
         conn.close()
         logger.info("Created AiBrarian database: %s", self.db_path)
 
@@ -600,6 +612,18 @@ class AiBrarianEngine:
         self.connections: dict[str, AiBrarianConnection] = {}
         self._generators: dict[str, _EmbeddingGenerator] = {}
         self._lock_in_engine = None  # CollectionLockInEngine — set externally
+
+        # ForgeCompiler — multi-pass document comprehension
+        self._forge_compiler = None
+        try:
+            from luna.substrate.forge_compiler import ForgeCompiler
+            self._forge_compiler = ForgeCompiler()
+            if self._forge_compiler.is_available:
+                logger.info("[NEXUS] ForgeCompiler available — multi-pass ingestion enabled")
+            else:
+                logger.info("[NEXUS] ForgeCompiler unavailable — using single-pass extraction")
+        except ImportError:
+            logger.debug("[NEXUS] ForgeCompiler not available")
 
     # =====================================================================
     # Lifecycle
@@ -1164,6 +1188,78 @@ class AiBrarianEngine:
             return []
 
     # =====================================================================
+    # Forge Sync — file change tracking for watch/compile mode
+    # =====================================================================
+
+    _LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  # 50 MB
+
+    async def _check_sync_status(
+        self, collection: str, file_path: Path
+    ) -> str:
+        """Returns: 'unchanged', 'modified', 'new', or 'deleted'."""
+        conn = self._get_conn(collection)
+        row = conn.conn.execute(
+            "SELECT file_hash, last_modified FROM forge_sync WHERE file_path = ?",
+            (str(file_path),),
+        ).fetchone()
+
+        if not row:
+            return "new"
+
+        if not file_path.exists():
+            return "deleted"
+
+        # For large files, compare mtime only to avoid memory issues
+        if file_path.stat().st_size > self._LARGE_FILE_THRESHOLD:
+            if file_path.stat().st_mtime != row["last_modified"]:
+                return "modified"
+            return "unchanged"
+
+        import hashlib
+        current_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        if current_hash != row["file_hash"]:
+            return "modified"
+
+        return "unchanged"
+
+    async def _update_sync(
+        self, collection: str, file_path: Path, doc_id: str
+    ) -> None:
+        """Record a successful ingest in forge_sync."""
+        import hashlib
+        from datetime import datetime
+
+        file_path = Path(file_path)
+        stat = file_path.stat()
+
+        if stat.st_size > self._LARGE_FILE_THRESHOLD:
+            file_hash = f"mtime:{stat.st_mtime}"
+        else:
+            file_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+
+        conn = self._get_conn(collection)
+        conn.conn.execute(
+            """INSERT OR REPLACE INTO forge_sync
+               (file_path, file_hash, file_size, last_modified, last_synced, doc_id, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'synced')""",
+            (str(file_path), file_hash, stat.st_size,
+             stat.st_mtime, datetime.now().isoformat(), doc_id),
+        )
+        conn.conn.commit()
+
+    async def _delete_document(self, collection: str, doc_id: str) -> None:
+        """Delete a document and all its chunks/extractions/entities."""
+        conn = self._get_conn(collection)
+        conn.conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+        conn.conn.execute("DELETE FROM extractions WHERE doc_id = ?", (doc_id,))
+        try:
+            conn.conn.execute("DELETE FROM entities WHERE doc_id = ?", (doc_id,))
+        except sqlite3.OperationalError:
+            pass  # entities table may not exist
+        conn.conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+        conn.conn.commit()
+
+    # =====================================================================
     # Ingestion
     # =====================================================================
 
@@ -1263,27 +1359,67 @@ class AiBrarianEngine:
         conn.conn.commit()
 
         # 6. Run extraction if enabled for this collection
-        if conn.config.extract_on_ingest:
+        use_compiler = (
+            conn.config.extract_on_ingest
+            and conn.config.multi_pass_ingest
+            and self._forge_compiler is not None
+            and self._forge_compiler.is_available
+        )
+
+        if use_compiler:
+            # Multi-pass comprehension via ForgeCompiler
+            compilation = await self._forge_compiler.compile(
+                text=content,
+                filename=file_path.name,
+            )
+            # Write extractions
+            for idx, ex in enumerate(compilation.extractions):
+                ext_id = f"{doc_id}:ext:{ex['node_type'].lower()}:{idx}"
+                conn.conn.execute(
+                    "INSERT OR REPLACE INTO extractions "
+                    "(id, doc_id, chunk_index, node_type, content, confidence) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (ext_id, doc_id, 0, ex["node_type"], ex["content"], ex["confidence"]),
+                )
+            # Write entities from entity pass
+            for idx, ent in enumerate(compilation.entity_rows):
+                ent_id = f"{doc_id}:ent:compiler:{idx}"
+                try:
+                    conn.conn.execute(
+                        "INSERT OR REPLACE INTO entities "
+                        "(id, doc_id, entity_type, entity_value, confidence) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (ent_id, doc_id, ent["entity_type"], ent["entity_value"], ent["confidence"]),
+                    )
+                except Exception:
+                    pass  # entities table may not exist
+            conn.conn.commit()
+            logger.info(
+                "[INGEST] ForgeCompiler: %d extractions, %d entities from %d passes for %s",
+                len(compilation.extractions), len(compilation.entity_rows),
+                compilation.total_haiku_calls, file_path.name,
+            )
+        elif conn.config.extract_on_ingest:
+            # Fallback: single-pass extraction
             await self.extract(collection, doc_id)
 
-        # 6.5 Generate TABLE_OF_CONTENTS extraction from structure
-        # (inserted AFTER extract() so it doesn't trigger the "already extracted" guard)
-        if structure:
-            toc_lines = []
-            for marker in structure:
-                indent = "  " * (marker.level - 1)
-                page = f" (p. {marker.page_hint})" if marker.page_hint else ""
-                toc_lines.append(f"{indent}{marker.heading}{page}")
+            # Generate TABLE_OF_CONTENTS from detected structure
+            if structure:
+                toc_lines = []
+                for marker in structure:
+                    indent = "  " * (marker.level - 1)
+                    page = f" (p. {marker.page_hint})" if marker.page_hint else ""
+                    toc_lines.append(f"{indent}{marker.heading}{page}")
 
-            toc_content = "Document Structure:\n" + "\n".join(toc_lines)
-            toc_id = f"{doc_id}:ext:toc:0"
-            conn.conn.execute(
-                "INSERT OR REPLACE INTO extractions "
-                "(id, doc_id, chunk_index, node_type, content, confidence) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (toc_id, doc_id, 0, "TABLE_OF_CONTENTS", toc_content, 1.0),
-            )
-            conn.conn.commit()
+                toc_content = "Document Structure:\n" + "\n".join(toc_lines)
+                toc_id = f"{doc_id}:ext:toc:0"
+                conn.conn.execute(
+                    "INSERT OR REPLACE INTO extractions "
+                    "(id, doc_id, chunk_index, node_type, content, confidence) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (toc_id, doc_id, 0, "TABLE_OF_CONTENTS", toc_content, 1.0),
+                )
+                conn.conn.commit()
 
         logger.info(
             "Ingested %s → %s (%d words, %d chunks)",
@@ -1294,31 +1430,67 @@ class AiBrarianEngine:
         )
         return doc_id
 
+    # Directories to exclude from directory ingestion / watch
+    _EXCLUDED_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".env", ".tox"}
+
     async def ingest_directory(
         self,
         collection: str,
         directory: Path,
         recursive: bool = True,
         extensions: Optional[set[str]] = None,
+        sync_aware: bool = True,
     ) -> list[str]:
-        """Ingest all supported files from a directory."""
+        """Ingest all supported files from a directory.
+
+        When *sync_aware* is True (default), files that haven't changed since
+        the last ingest are skipped.  Modified files are re-ingested (old doc
+        deleted first).
+        """
         extensions = extensions or {".md", ".txt", ".csv", ".pdf", ".docx", ".json", ".yaml", ".yml"}
         directory = Path(directory)
-        doc_ids = []
+        doc_ids: list[str] = []
+        skipped = 0
 
         pattern = "**/*" if recursive else "*"
         for file_path in sorted(directory.glob(pattern)):
-            if file_path.is_file() and file_path.suffix.lower() in extensions:
-                category = file_path.parent.name if file_path.parent != directory else ""
-                doc_id = await self.ingest(
-                    collection,
-                    file_path,
-                    metadata={"title": file_path.stem, "category": category},
-                )
-                if doc_id:
-                    doc_ids.append(doc_id)
+            # Skip excluded directories
+            if any(part in self._EXCLUDED_DIRS or part.startswith(".") for part in file_path.parts):
+                continue
 
-        logger.info("Ingested %d files from %s into '%s'", len(doc_ids), directory, collection)
+            if not file_path.is_file() or file_path.suffix.lower() not in extensions:
+                continue
+
+            # Sync-aware check
+            if sync_aware:
+                status = await self._check_sync_status(collection, file_path)
+                if status == "unchanged":
+                    skipped += 1
+                    continue
+                if status == "modified":
+                    # Delete old doc before re-ingesting
+                    conn = self._get_conn(collection)
+                    row = conn.conn.execute(
+                        "SELECT doc_id FROM forge_sync WHERE file_path = ?",
+                        (str(file_path),),
+                    ).fetchone()
+                    if row and row["doc_id"]:
+                        await self._delete_document(collection, row["doc_id"])
+
+            category = file_path.parent.name if file_path.parent != directory else ""
+            doc_id = await self.ingest(
+                collection,
+                file_path,
+                metadata={"title": file_path.stem, "category": category},
+            )
+            if doc_id:
+                await self._update_sync(collection, file_path, doc_id)
+                doc_ids.append(doc_id)
+
+        logger.info(
+            "Ingested %d files from %s into '%s' (skipped %d unchanged)",
+            len(doc_ids), directory, collection, skipped,
+        )
         return doc_ids
 
     # =====================================================================
@@ -2168,3 +2340,167 @@ class AiBrarianEngine:
                 "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
                 (doc_id, blob),
             )
+
+    # =====================================================================
+    # Cartridge Registration
+    # =====================================================================
+
+    async def register_cartridge(
+        self,
+        collection: str,
+        lun_path: Path | str,
+        metadata: Optional[dict] = None,
+    ) -> str:
+        """Register a .lun Knowledge Cartridge into an existing collection.
+
+        Opens the .lun file, reads its nodes and embeddings, and inserts
+        them as chunks into the collection's standard tables so existing
+        search methods work without changes.
+
+        Returns the doc_id assigned in the collection.
+        """
+        conn = self._get_conn(collection)
+        if conn.config.read_only:
+            raise PermissionError(f"Collection '{collection}' is read-only")
+
+        lun_path = Path(lun_path)
+        if not lun_path.exists():
+            raise FileNotFoundError(f".lun file not found: {lun_path}")
+
+        # Open .lun as read-only
+        lun_conn = sqlite3.connect(f"file:{lun_path}?mode=ro", uri=True)
+        lun_conn.row_factory = sqlite3.Row
+
+        try:
+            # Read meta
+            meta_rows = lun_conn.execute("SELECT key, value FROM meta").fetchall()
+            lun_meta = {row["key"]: row["value"] for row in meta_rows}
+            title = lun_meta.get("title", lun_path.stem)
+            word_count = int(lun_meta.get("word_count", "0"))
+
+            # Gather full text for the documents table
+            all_text = lun_conn.execute(
+                "SELECT GROUP_CONCAT(content, ' ') FROM doc_nodes "
+                "WHERE content IS NOT NULL AND type IN ('sentence', 'list_item', 'cell')"
+            ).fetchone()[0] or ""
+
+            # Create document record in collection
+            doc_id = str(uuid.uuid4())
+            coll_meta = metadata or {}
+            coll_meta["lun_path"] = str(lun_path.resolve())
+            coll_meta["cartridge"] = True
+
+            conn.conn.execute(
+                """INSERT OR REPLACE INTO documents
+                   (id, filename, title, full_text, word_count, source_path,
+                    doc_type, category, metadata, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'lun', ?, ?, CURRENT_TIMESTAMP)""",
+                (
+                    doc_id,
+                    lun_path.name,
+                    title,
+                    all_text,
+                    word_count,
+                    str(lun_path.resolve()),
+                    coll_meta.get("category"),
+                    json.dumps(coll_meta),
+                ),
+            )
+
+            # Map content-bearing nodes to chunks
+            content_nodes = lun_conn.execute(
+                """SELECT id, type, content, parent_id
+                   FROM doc_nodes
+                   WHERE content IS NOT NULL AND content != ''
+                   AND type IN ('paragraph', 'sentence', 'list_item', 'cell')
+                   ORDER BY id"""
+            ).fetchall()
+
+            # Build parent-to-section lookup for section_label
+            section_map: dict[int, tuple[str, int]] = {}  # node_id -> (heading, level)
+            sections = lun_conn.execute(
+                "SELECT id, content, meta_json FROM doc_nodes WHERE type = 'section'"
+            ).fetchall()
+            for sec in sections:
+                meta_j = json.loads(sec["meta_json"]) if sec["meta_json"] else {}
+                section_map[sec["id"]] = (sec["content"] or "", meta_j.get("level", 1))
+
+            # Walk parent chain to find section for each node
+            def _find_section(node_id: int) -> tuple[str, int]:
+                """Walk up parent chain until we hit a section node."""
+                visited = set()
+                current = node_id
+                while current is not None and current not in visited:
+                    visited.add(current)
+                    if current in section_map:
+                        return section_map[current]
+                    row = lun_conn.execute(
+                        "SELECT parent_id FROM doc_nodes WHERE id = ?", (current,)
+                    ).fetchone()
+                    current = row["parent_id"] if row else None
+                return ("", 0)
+
+            chunk_index = 0
+            lun_node_to_chunk: dict[int, str] = {}  # lun node_id -> chunk_id
+
+            for node in content_nodes:
+                chunk_id = f"{doc_id}:chunk:{chunk_index}"
+                section_label, section_level = _find_section(node["id"])
+
+                conn.conn.execute(
+                    """INSERT INTO chunks
+                       (id, doc_id, chunk_index, chunk_text, word_count,
+                        start_char, end_char, section_label, section_level)
+                       VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)""",
+                    (
+                        chunk_id,
+                        doc_id,
+                        chunk_index,
+                        node["content"],
+                        len(node["content"].split()),
+                        section_label,
+                        section_level,
+                    ),
+                )
+                lun_node_to_chunk[node["id"]] = chunk_id
+                chunk_index += 1
+
+            # Copy embeddings to collection's chunk_embeddings
+            if conn._vec_loaded:
+                embeddings = lun_conn.execute(
+                    "SELECT node_id, level, vector FROM embeddings"
+                ).fetchall()
+
+                valid_embeddings = []
+                for emb_row in embeddings:
+                    node_id = emb_row["node_id"]
+                    chunk_id = lun_node_to_chunk.get(node_id)
+                    if not chunk_id:
+                        # Section-level embedding — map to a synthetic chunk_id
+                        chunk_id = f"{doc_id}:section:{node_id}"
+                    blob = emb_row["vector"]
+                    conn.conn.execute(
+                        "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                        (chunk_id, blob),
+                    )
+                    valid_embeddings.append(blob)
+
+                # Doc-level average embedding
+                if valid_embeddings:
+                    import numpy as np
+                    vecs = [_blob_to_vector(b) for b in valid_embeddings]
+                    doc_vec = np.mean(vecs, axis=0).tolist()
+                    conn.conn.execute(
+                        "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                        (doc_id, _vector_to_blob(doc_vec)),
+                    )
+
+            conn.conn.commit()
+            logger.info(
+                "Registered cartridge %s into '%s' — %d chunks, doc_id=%s",
+                lun_path.name, collection, chunk_index, doc_id,
+            )
+            return doc_id
+
+        finally:
+            lun_conn.close()

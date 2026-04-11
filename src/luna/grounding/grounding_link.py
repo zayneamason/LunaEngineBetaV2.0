@@ -51,6 +51,8 @@ class GroundingSupport:
     node_preview: Optional[str]  # First 120 chars of source node content
     confidence: float            # 0.0 -- 1.0 similarity score
     level: str                   # "GROUNDED" | "INFERRED" | "UNGROUNDED"
+    source: Optional[str] = None       # e.g. 'nexus/priests_and_programmers', 'matrix'
+    doc_title: Optional[str] = None    # e.g. 'Priests and Programmers'
 
 
 @dataclass
@@ -66,6 +68,20 @@ class GroundingResult:
     supports: list[GroundingSupport] = field(default_factory=list)
     summary: GroundingSummary = field(default_factory=GroundingSummary)
 
+    def _unique_sources(self) -> list[dict]:
+        """Collect unique sources with grounded sentence counts."""
+        seen: dict[str, dict] = {}
+        for s in self.supports:
+            if s.source and s.source not in seen:
+                seen[s.source] = {
+                    "source": s.source,
+                    "doc_title": s.doc_title,
+                    "grounded_count": 0,
+                }
+            if s.source and s.level == "GROUNDED":
+                seen[s.source]["grounded_count"] += 1
+        return list(seen.values())
+
     def to_dict(self) -> dict:
         return {
             "supports": [
@@ -77,6 +93,8 @@ class GroundingResult:
                     "node_preview": s.node_preview,
                     "confidence": round(s.confidence, 3),
                     "level": s.level,
+                    "source": s.source,
+                    "doc_title": s.doc_title,
                 }
                 for s in self.supports
             ],
@@ -86,6 +104,7 @@ class GroundingResult:
                 "ungrounded": self.summary.ungrounded,
                 "avg_confidence": round(self.summary.avg_confidence, 3),
             },
+            "sources_used": self._unique_sources(),
         }
 
 
@@ -161,6 +180,8 @@ class GroundingLink:
                     node_preview=self._preview(best_node.get("content", "")) if best_node else None,
                     confidence=best_score,
                     level=self._classify(best_score),
+                    source=best_node.get("source") if best_node else None,
+                    doc_title=best_node.get("doc_title", best_node.get("title")) if best_node else None,
                 )
             )
 
@@ -231,6 +252,8 @@ class GroundingLink:
                         node_preview=self._preview(best_node.get("content", "")) if best_node else None,
                         confidence=best_score,
                         level=self._classify(best_score),
+                        source=best_node.get("source") if best_node else None,
+                        doc_title=best_node.get("doc_title", best_node.get("title")) if best_node else None,
                     )
                 )
 

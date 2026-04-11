@@ -124,6 +124,23 @@ END;
 """
 
 # ---------------------------------------------------------------------------
+# Forge Sync Schema — tracks ingested files for watch/compile mode
+# ---------------------------------------------------------------------------
+
+FORGE_SYNC_SCHEMA = """\
+CREATE TABLE IF NOT EXISTS forge_sync (
+    file_path TEXT PRIMARY KEY,
+    file_hash TEXT NOT NULL,
+    file_size INTEGER,
+    last_modified REAL,
+    last_synced TEXT,
+    doc_id TEXT,
+    status TEXT DEFAULT 'synced',
+    error TEXT
+);
+"""
+
+# ---------------------------------------------------------------------------
 # Investigation Schema Extension — connections, gaps, claims
 # ---------------------------------------------------------------------------
 

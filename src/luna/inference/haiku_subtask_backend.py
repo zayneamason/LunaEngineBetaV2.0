@@ -45,6 +45,16 @@ class HaikuSubtaskBackend:
 
     def _init_client(self):
         """Initialize via registry first, then direct SDK fallback."""
+        # Ensure .env is loaded (key may not be in os.environ yet)
+        try:
+            from dotenv import load_dotenv
+            from luna.core.paths import project_root
+            _env = project_root() / ".env"
+            if _env.exists():
+                load_dotenv(_env, override=True)
+        except Exception:
+            pass
+
         # Try LLM registry (preferred — async, no direct dependency)
         try:
             from luna.llm import get_provider

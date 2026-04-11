@@ -314,8 +314,8 @@ class TestApertureManager:
     def test_default_state(self):
         from luna.context.aperture import ApertureManager, AperturePreset
         mgr = ApertureManager()
-        assert mgr.state.preset == AperturePreset.BALANCED
-        assert mgr.state.angle == 55
+        assert mgr.state.preset == AperturePreset.WIDE
+        assert mgr.state.angle == 75
 
     def test_set_app_context_kozmo(self):
         from luna.context.aperture import ApertureManager, AperturePreset
@@ -397,7 +397,7 @@ class TestApertureManager:
         mgr.set_preset(AperturePreset.TUNNEL)
         mgr.set_focus_tags(["test"])
         mgr.reset()
-        assert mgr.state.preset == AperturePreset.BALANCED
+        assert mgr.state.preset == AperturePreset.WIDE
         assert mgr.state.focus_tags == []
 
 
@@ -770,8 +770,8 @@ class TestApertureGetTool:
         at._aperture_manager = mgr
 
         result = await at.aperture_get()
-        assert result["preset"] == "balanced"
-        assert result["angle"] == 55
+        assert result["preset"] == "wide"
+        assert result["angle"] == 75
         assert "breakthrough_threshold" in result
 
         at._aperture_manager = None  # cleanup

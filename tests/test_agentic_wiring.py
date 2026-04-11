@@ -163,13 +163,25 @@ class TestAgentLoopMatrixWiring:
 
     @pytest.mark.asyncio
     async def test_retrieve_queries_matrix(self, tmp_path):
-        """Test that _execute_retrieve queries the Matrix."""
+        """Test that _execute_retrieve queries the Matrix via UnifiedRetrieval."""
         config = EngineConfig(data_dir=tmp_path)
         engine = LunaEngine(config)
 
+        # UnifiedRetrieval accesses matrix_actor._matrix.get_context directly
+        mock_node = MagicMock()
+        mock_node.summary = "Test memory content about AI"
+        mock_node.content = "Test memory content about AI"
+        mock_node._retrieval_score = 0.9
+        mock_node.node_type = "FACT"
+        mock_node.confidence = 0.9
+
+        mock_inner_matrix = MagicMock()
+        mock_inner_matrix.get_context = AsyncMock(return_value=[mock_node])
+
         mock_matrix = MagicMock()
         mock_matrix.is_ready = True
-        mock_matrix.get_context = AsyncMock(return_value="Test memory content about AI")
+        mock_matrix._matrix = mock_inner_matrix
+        mock_matrix._format_context = MagicMock(return_value="## FACTs\n- Test memory content about AI")
         engine.actors["matrix"] = mock_matrix
 
         loop = AgentLoop(orchestrator=engine)
@@ -185,7 +197,7 @@ class TestAgentLoopMatrixWiring:
 
         result = await loop._execute_retrieve(action)
 
-        mock_matrix.get_context.assert_called_once()
+        mock_inner_matrix.get_context.assert_called_once()
         assert "memory content" in result.lower() or "context" in result.lower()
 
     @pytest.mark.asyncio
@@ -226,7 +238,7 @@ class TestAgentLoopMatrixWiring:
 
         result = await loop._execute_retrieve(action)
 
-        assert "not ready" in result.lower()
+        assert "no relevant memories" in result.lower() or "not ready" in result.lower()
 
 
 class TestToolRegistryInitialization:

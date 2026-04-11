@@ -733,41 +733,32 @@ class AgentLoop:
         return f"Observed: {action.description}"
 
     async def _execute_retrieve(self, action: Action) -> str:
-        """Execute a RETRIEVE action by querying Matrix + Nexus collections."""
+        """Execute RETRIEVE via unified retrieval module."""
         if not self.orchestrator:
             return "Memory retrieval not available (no orchestrator)"
 
-        # Determine query from action params or working context
+        from luna.retrieval import UnifiedRetrieval, RetrievalRequest
+
         query = action.params.get("query") or self.working_context.goal
-        parts = []
 
-        # 1. Matrix (conversation memory, personal knowledge)
-        matrix = self.orchestrator.get_actor("matrix")
-        if matrix and matrix.is_ready and hasattr(matrix, "get_context"):
-            try:
-                context = await matrix.get_context(query=query, max_tokens=1000)
-                if context:
-                    parts.append(context)
-            except Exception as e:
-                logger.warning(f"Matrix retrieval failed: {e}")
+        retriever = UnifiedRetrieval(
+            matrix_actor=self.orchestrator.get_actor("matrix"),
+            aibrarian=getattr(self.orchestrator, 'aibrarian', None),
+            aperture=getattr(self.orchestrator, 'aperture', None),
+            collection_lock_in=getattr(self.orchestrator, 'collection_lock_in', None),
+            active_scopes=getattr(self.orchestrator, 'active_scopes', ['global']),
+            active_project=getattr(self.orchestrator, '_active_project', None),
+        )
+        request = RetrievalRequest(query=query)
+        result = await retriever.retrieve(request)
 
-        # 2. Nexus collections (document chunks — the deep evidence)
-        if hasattr(self.orchestrator, 'aibrarian') and self.orchestrator.aibrarian:
-            try:
-                nexus_context = await self.orchestrator._get_collection_context(query)
-                if nexus_context:
-                    parts.append(nexus_context)
-            except Exception as e:
-                logger.warning(f"Nexus retrieval failed: {e}")
+        if self.working_context and result.context_string:
+            self.working_context.variables["memory_context"] = result.context_string
 
-        combined = "\n\n".join(parts)
-        if self.working_context and combined:
-            self.working_context.variables["memory_context"] = combined
-
-        if combined:
-            preview = combined[:500]
-            if len(combined) > 500:
-                preview += f"... ({len(combined)} chars)"
+        if result.context_string:
+            preview = result.context_string[:500]
+            if len(result.context_string) > 500:
+                preview += f"... ({len(result.context_string)} chars)"
             return f"Retrieved context:\n{preview}"
         else:
             return "No relevant memories found"

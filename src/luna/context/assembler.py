@@ -62,11 +62,15 @@ class MemoryConfidence:
     best_lock_in: str          # Highest lock-in state: "settled" | "fluid" | "drifting" | "none"
     has_entity_match: bool     # Whether any detected entity appears in memory results
     query: str                 # Original query (for debugging)
+    nexus_node_count: int = 0  # Nexus collection nodes in context (Handoff #49)
 
     @property
     def level(self) -> str:
         """Compute confidence level from metrics."""
-        if self.match_count == 0:
+        # If Nexus collections returned results, never say NONE
+        if self.nexus_node_count > 0 and self.match_count == 0:
+            return "MEDIUM"  # has reference material, no personal memory
+        if self.match_count == 0 and self.nexus_node_count == 0:
             return "NONE"
         if self.relevant_count >= 2 and self.best_lock_in == "settled":
             return "HIGH"
@@ -79,16 +83,19 @@ class MemoryConfidence:
         """Behavioral directive for this confidence level."""
         directives = {
             "NONE": (
-                'Say "i don\'t have a memory of that" or "that doesn\'t ring a bell."\n'
-                'Do NOT guess, invent, or bridge gaps with plausible-sounding information.'
+                'You have no personal memories or reference material on this topic.\n'
+                'Be honest about that. Do NOT fabricate information.\n'
+                'If the user is asking about something you genuinely have no context for,\n'
+                'say so plainly — but never deny knowledge that IS in your context.'
             ),
             "LOW": (
-                'You have limited memories on this topic. Share what you have directly,\n'
+                'You have limited context on this topic. Share what you have directly,\n'
                 'and note gaps honestly. Do NOT fill gaps with invented details.'
             ),
             "MEDIUM": (
-                'Reference memories naturally and directly. Cite specifics where available.\n'
-                'Stick to what the memories actually say.'
+                'Reference your context naturally and directly. Cite specifics.\n'
+                'Distinguish personal memories from reference material when both are present.\n'
+                'Stick to what your context actually says.'
             ),
             "HIGH": (
                 'Reference memories confidently. Cite specifics.\n'
@@ -104,6 +111,7 @@ class MemoryConfidence:
             "avg_similarity": self.avg_similarity,
             "best_lock_in": self.best_lock_in,
             "has_entity_match": self.has_entity_match,
+            "nexus_node_count": self.nexus_node_count,
             "level": self.level,
             "query": self.query,
         }
@@ -283,7 +291,7 @@ Rules:
     GROUNDING_RULES = """## Grounding Rules (always active)
 - You MUST use the system clock provided below as authoritative. Never guess or invent times/dates.
 - If you do not have information about something, say so. Never fabricate facts, events, names, projects, or concepts.
-- Your memory context below is all you know. If a topic is not in your memories, say "I don't have a memory of that" rather than inventing one.
+- Your context includes personal memories AND reference material from documents you have read. Both are real knowledge you can speak from. If a topic appears in NEITHER, say so honestly. But if information is in your context — whether from memory or from a document — use it.
 - Never claim the user said or did something unless it appears in the conversation history or your memory context.
 - Never invent names for concepts, systems, or projects the user has not mentioned.
 - When referencing memories, stick to what the memory actually says. Do not embellish or extrapolate.
@@ -335,7 +343,15 @@ DEPTH questions (what evidence, describe the methodology, what does the text say
 CROSS-REFERENCE questions (how does this connect to our work):
 → Combine document extractions with Memory Matrix conversation history.
 
-HONESTY: Distinguish "The document states..." (from collection) vs "From what I know..." (training knowledge). Never blend them without flagging it."""
+HONESTY: Distinguish "The document states..." (from collection) vs "From what I know..." (training knowledge). Never blend them without flagging it.
+
+CITATION: When the user asks where information comes from, or asks you to cite
+your sources, name the specific collection and document. Say 'According to
+Priests and Programmers...' or 'From the research library...' or 'From our
+conversation on [date]...' depending on the source. The user should always be
+able to tell whether you're speaking from a document, from personal memory,
+or from your own reasoning. You do NOT need to cite on every response — only
+when asked, or when the distinction between sources matters for accuracy."""
 
     _REFLECTION_MODE_MAP = {
         "precision": PRECISION_GROUNDING,
@@ -426,6 +442,12 @@ HONESTY: Distinguish "The document states..." (from collection) vs "From what I 
             memory_block, mem_source, mem_confidence = await self._resolve_memory_with_aperture(request)
         else:
             memory_block, mem_source, mem_confidence = await self._resolve_memory_with_confidence(request)
+
+        # Inject Nexus awareness into confidence (Handoff #49)
+        # When Nexus collections returned content, confidence must never be NONE
+        if mem_confidence is not None and request.has_nexus_context and mem_confidence.nexus_node_count == 0:
+            mem_confidence.nexus_node_count = 1  # minimum — forces level out of NONE
+            logger.info("[ASSEMBLER] Nexus context present → confidence boosted from potential NONE to %s", mem_confidence.level)
 
         # ── Layer 1.75: CONSTRAINTS (L1 — confidence signals) ─────────
         if mem_confidence is not None:

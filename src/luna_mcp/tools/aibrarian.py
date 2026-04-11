@@ -376,3 +376,182 @@ async def aibrarian_sql_impl(
     if result["row_count"] > 20:
         lines.append(f"  ... and {result['row_count'] - 20} more rows")
     return "\n".join(lines)
+
+
+# =====================================================================
+# Knowledge Forge — folder mapping, watch mode, compile
+# =====================================================================
+
+# Engine-level watcher reference — set from api/server.py at boot
+_forge_watcher = None
+
+
+def set_forge_watcher(watcher_instance):
+    """Attach the Engine-owned ForgeWatcher. Called once at startup."""
+    global _forge_watcher
+    _forge_watcher = watcher_instance
+
+
+async def forge_map_folder_impl(
+    collection: str, folder_path: str, watch: bool = True,
+) -> str:
+    """Map a source folder to a Nexus collection."""
+    engine = await _get_engine()
+    path = Path(folder_path).expanduser().resolve()
+
+    if not path.exists():
+        return f"Error: folder does not exist: {path}"
+    if not path.is_dir():
+        return f"Error: not a directory: {path}"
+
+    # Validate collection exists
+    if collection not in engine.connections:
+        available = list(engine.connections.keys())
+        return f"Error: collection '{collection}' not found. Available: {available}"
+
+    cfg = engine.registry.collections.get(collection)
+    if not cfg:
+        return f"Error: no config for collection '{collection}'"
+
+    # Update in-memory config
+    cfg.source_dir = str(path)
+    cfg.watch = watch
+
+    # Persist to registry YAML
+    _persist_registry_field(engine, collection, "source_dir", str(path))
+    _persist_registry_field(engine, collection, "watch", watch)
+
+    # Count supported files
+    supported = {".md", ".txt", ".csv", ".pdf", ".docx", ".json", ".yaml", ".yml"}
+    file_count = sum(1 for f in path.rglob("*") if f.is_file() and f.suffix.lower() in supported)
+
+    # Start watching if requested
+    watch_status = "off"
+    if watch and _forge_watcher is not None:
+        if _forge_watcher.watch(collection, str(path)):
+            watch_status = "on"
+
+    return (
+        f"Mapped {path} → {collection}\n"
+        f"  Supported files: {file_count}\n"
+        f"  Watch mode: {watch_status}\n"
+        f"  Run forge_compile to ingest existing files."
+    )
+
+
+async def forge_unmap_folder_impl(collection: str) -> str:
+    """Unmap a source folder and stop watching."""
+    engine = await _get_engine()
+
+    cfg = engine.registry.collections.get(collection)
+    if not cfg:
+        return f"Error: no config for collection '{collection}'"
+
+    old_dir = cfg.source_dir
+    cfg.source_dir = ""
+    cfg.watch = False
+
+    _persist_registry_field(engine, collection, "source_dir", "")
+    _persist_registry_field(engine, collection, "watch", False)
+
+    if _forge_watcher is not None:
+        _forge_watcher.unwatch(collection)
+
+    return f"Unmapped {old_dir or '(none)'} from {collection}. Ingested data preserved."
+
+
+async def forge_sync_status_impl(collection: str) -> str:
+    """Get sync status for a collection."""
+    engine = await _get_engine()
+
+    conn = engine._get_conn(collection)
+    cfg = engine.registry.collections.get(collection)
+
+    # Query forge_sync table
+    try:
+        rows = conn.conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM forge_sync GROUP BY status"
+        ).fetchall()
+        status_counts = {row["status"]: row["cnt"] for row in rows}
+    except Exception:
+        status_counts = {}
+
+    total = sum(status_counts.values())
+    last_synced_row = conn.conn.execute(
+        "SELECT MAX(last_synced) as ts FROM forge_sync"
+    ).fetchone()
+    last_synced = last_synced_row["ts"] if last_synced_row else "never"
+
+    watching = (
+        _forge_watcher is not None
+        and collection in _forge_watcher.watched_collections
+    )
+
+    lines = [
+        f"Forge sync status for '{collection}':",
+        f"  Source dir: {cfg.source_dir or '(not mapped)'}",
+        f"  Watch mode: {'on' if watching else 'off'}",
+        f"  Total tracked files: {total}",
+    ]
+    for status, count in sorted(status_counts.items()):
+        lines.append(f"    {status}: {count}")
+    lines.append(f"  Last sync: {last_synced}")
+    return "\n".join(lines)
+
+
+async def forge_compile_impl(collection: str) -> str:
+    """Run a full compile (sync-aware ingest_directory) on mapped source folder."""
+    engine = await _get_engine()
+
+    cfg = engine.registry.collections.get(collection)
+    if not cfg or not cfg.source_dir:
+        return f"Error: no source_dir mapped for collection '{collection}'"
+
+    source = Path(cfg.source_dir).expanduser().resolve()
+    if not source.exists():
+        return f"Error: source dir does not exist: {source}"
+
+    doc_ids = await engine.ingest_directory(collection, source, sync_aware=True)
+    return f"Compiled {len(doc_ids)} new/modified files from {source} into '{collection}'"
+
+
+async def forge_watch_toggle_impl(collection: str, enabled: bool) -> str:
+    """Start or stop watching a collection's source folder."""
+    engine = await _get_engine()
+
+    cfg = engine.registry.collections.get(collection)
+    if not cfg:
+        return f"Error: no config for collection '{collection}'"
+
+    if not cfg.source_dir:
+        return f"Error: no source_dir mapped for '{collection}'. Use forge_map_folder first."
+
+    cfg.watch = enabled
+    _persist_registry_field(engine, collection, "watch", enabled)
+
+    if _forge_watcher is None:
+        return "Error: ForgeWatcher not initialized (watchdog not installed?)"
+
+    if enabled:
+        ok = _forge_watcher.watch(collection, cfg.source_dir)
+        return f"Watch {'started' if ok else 'FAILED'} for {collection} → {cfg.source_dir}"
+    else:
+        _forge_watcher.unwatch(collection)
+        return f"Watch stopped for {collection}"
+
+
+def _persist_registry_field(engine, collection: str, field: str, value) -> None:
+    """Write a single field back to the registry YAML."""
+    import yaml
+
+    registry_path = engine.registry.config_path
+    try:
+        with open(registry_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        collections = data.get("collections", {})
+        if collection in collections:
+            collections[collection][field] = value
+            with open(registry_path, "w") as f:
+                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    except Exception as e:
+        logger.warning("Failed to persist %s.%s to registry: %s", collection, field, e)

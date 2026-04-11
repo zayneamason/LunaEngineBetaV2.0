@@ -50,9 +50,15 @@ logger = logging.getLogger(__name__)
 class AperturePreset(str, Enum):
     TUNNEL = "tunnel"       # 15° — project focus only
     NARROW = "narrow"       # 35° — project + related
-    BALANCED = "balanced"   # 55° — focus with peripheral awareness (DEFAULT)
-    WIDE = "wide"           # 75° — broad recall, light filtering
+    BALANCED = "balanced"   # 55° — focus with peripheral awareness
+    WIDE = "wide"           # 75° — broad recall, light filtering (DEFAULT)
     OPEN = "open"           # 95° — full memory access, no filtering
+
+
+class ApertureMode(str, Enum):
+    OFF = "off"        # No aperture filtering — everything is searched
+    AUTO = "auto"      # Intent-driven — subtask runner sets aperture per query
+    MANUAL = "manual"  # User sets preset — stays until changed
 
 
 APERTURE_ANGLES = {
@@ -69,7 +75,7 @@ APP_DEFAULTS = {
     "kozmo": AperturePreset.NARROW,
     "guardian": AperturePreset.BALANCED,
     "eclissi": AperturePreset.WIDE,
-    "companion": AperturePreset.BALANCED,
+    "companion": AperturePreset.WIDE,
     "dataroom": AperturePreset.TUNNEL,
 }
 
@@ -77,8 +83,8 @@ APP_DEFAULTS = {
 @dataclass
 class ApertureState:
     """Current cognitive focus state."""
-    preset: AperturePreset = AperturePreset.BALANCED
-    angle: int = 55
+    preset: AperturePreset = AperturePreset.WIDE
+    angle: int = 75
     focus_tags: list[str] = field(default_factory=list)
     active_project: Optional[str] = None
     active_collection_keys: list[str] = field(default_factory=list)
@@ -114,8 +120,9 @@ class ApertureState:
         }
         return thresholds.get(self.preset, 0.40)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, mode: str = "auto") -> dict:
         return {
+            "mode": mode,
             "preset": self.preset.value,
             "angle": self.angle,
             "focus_tags": self.focus_tags,
@@ -139,12 +146,80 @@ class ApertureManager:
     - State serialization for API/MCP
     """
 
+    # Intent → aperture mapping for auto mode
+    AUTO_APERTURE_MAP = {
+        ('greeting', 'trivial'): AperturePreset.WIDE,
+        ('greeting', 'simple'): AperturePreset.WIDE,
+        ('greeting', 'moderate'): AperturePreset.WIDE,
+        ('greeting', 'complex'): AperturePreset.WIDE,
+        ('simple_question', 'trivial'): AperturePreset.WIDE,
+        ('simple_question', 'simple'): AperturePreset.WIDE,
+        ('simple_question', 'moderate'): AperturePreset.BALANCED,
+        ('simple_question', 'complex'): AperturePreset.BALANCED,
+        ('memory_query', None): AperturePreset.BALANCED,
+        ('research', 'trivial'): AperturePreset.WIDE,
+        ('research', 'simple'): AperturePreset.WIDE,
+        ('research', 'moderate'): AperturePreset.WIDE,
+        ('research', 'complex'): AperturePreset.OPEN,
+        ('creative', None): AperturePreset.NARROW,
+        ('dataroom', None): AperturePreset.TUNNEL,
+        ('task', None): AperturePreset.BALANCED,
+        ('emotional', None): AperturePreset.WIDE,
+        ('meta', None): AperturePreset.OPEN,
+    }
+
     def __init__(self) -> None:
         self._state = ApertureState()
+        self._mode = ApertureMode.AUTO
 
     @property
     def state(self) -> ApertureState:
         return self._state
+
+    @property
+    def mode(self) -> ApertureMode:
+        return self._mode
+
+    def set_mode(self, mode: str) -> None:
+        """Set aperture mode: off, auto, or manual."""
+        try:
+            self._mode = ApertureMode(mode.lower())
+        except ValueError:
+            self._mode = ApertureMode.AUTO
+
+        if self._mode == ApertureMode.OFF:
+            self._state.preset = AperturePreset.OPEN
+            self._state.angle = 95
+            self._state.user_override = False
+            logger.info("[APERTURE] Mode: OFF — all filtering disabled")
+        elif self._mode == ApertureMode.MANUAL:
+            self._state.user_override = True
+            logger.info("[APERTURE] Mode: MANUAL — preset=%s", self._state.preset.value)
+        else:  # AUTO
+            self._state.user_override = False
+            logger.info("[APERTURE] Mode: AUTO — intent-driven")
+
+    def auto_aperture(self, intent: str, complexity: str) -> AperturePreset:
+        """
+        Automatically set aperture based on query intent + complexity.
+        Only acts when mode is 'auto'. Does NOT set user_override.
+        """
+        if self._mode != ApertureMode.AUTO:
+            return self._state.preset
+
+        # Try exact match first, then intent-only match
+        preset = self.AUTO_APERTURE_MAP.get((intent, complexity))
+        if not preset:
+            preset = self.AUTO_APERTURE_MAP.get((intent, None))
+        if not preset:
+            preset = AperturePreset.WIDE  # default fallback
+
+        self._state.preset = preset
+        self._state.angle = APERTURE_ANGLES[preset]
+        self._state.user_override = False
+        logger.info("[AUTO-APERTURE] intent=%s complexity=%s -> %s (%d°)",
+            intent, complexity, preset.value, self._state.angle)
+        return preset
 
     def set_app_context(self, app: str) -> None:
         """
@@ -156,17 +231,19 @@ class ApertureManager:
         self._state.app_context = app
 
         if not self._state.user_override:
-            default_preset = APP_DEFAULTS.get(app, AperturePreset.BALANCED)
+            default_preset = APP_DEFAULTS.get(app, AperturePreset.WIDE)
             self._state.preset = default_preset
             self._state.angle = APERTURE_ANGLES[default_preset]
             logger.debug(f"Aperture reset to {default_preset.value} for app={app}")
 
     def set_preset(self, preset: AperturePreset) -> None:
-        """Set aperture to a named preset. Marks as user override."""
+        """Set aperture to a named preset. Switches to MANUAL mode."""
         self._state.preset = preset
         self._state.angle = APERTURE_ANGLES[preset]
         self._state.user_override = True
-        logger.info(f"Aperture set to {preset.value} ({self._state.angle}°) by user")
+        self._mode = ApertureMode.MANUAL
+        logger.info("[APERTURE] Preset: %s (%d°) — mode switched to MANUAL",
+            preset.value, self._state.angle)
 
     def set_angle(self, angle: int) -> None:
         """
@@ -208,6 +285,7 @@ class ApertureManager:
     def reset(self) -> None:
         """Full reset to default state."""
         self._state = ApertureState()
+        self._mode = ApertureMode.AUTO
 
     def from_dict(self, data: dict) -> None:
         """Restore state from a serialized dict."""
@@ -215,7 +293,7 @@ class ApertureManager:
             try:
                 self._state.preset = AperturePreset(data["preset"])
             except ValueError:
-                self._state.preset = AperturePreset.BALANCED
+                self._state.preset = AperturePreset.WIDE
 
         if "angle" in data:
             self._state.angle = max(15, min(95, int(data["angle"])))
