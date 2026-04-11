@@ -2526,8 +2526,9 @@ class AiBrarianEngine:
                 lun_node_to_chunk[node["id"]] = chunk_id
                 chunk_index += 1
 
-            # Copy embeddings to collection's chunk_embeddings
-            if conn._vec_loaded:
+            # Copy embeddings to collection's chunk_embeddings (or fallback)
+            fallback = getattr(conn, "_fallback_vec", None)
+            if conn._vec_loaded or fallback:
                 embeddings = lun_conn.execute(
                     "SELECT node_id, level, vector FROM embeddings"
                 ).fetchall()
@@ -2540,10 +2541,13 @@ class AiBrarianEngine:
                         # Section-level embedding — map to a synthetic chunk_id
                         chunk_id = f"{doc_id}:section:{node_id}"
                     blob = emb_row["vector"]
-                    conn.conn.execute(
-                        "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
-                        (chunk_id, blob),
-                    )
+                    if conn._vec_loaded:
+                        conn.conn.execute(
+                            "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                            (chunk_id, blob),
+                        )
+                    else:
+                        fallback.store(chunk_id, blob)
                     valid_embeddings.append(blob)
 
                 # Doc-level average embedding
@@ -2551,10 +2555,13 @@ class AiBrarianEngine:
                     import numpy as np
                     vecs = [_blob_to_vector(b) for b in valid_embeddings]
                     doc_vec = np.mean(vecs, axis=0).tolist()
-                    conn.conn.execute(
-                        "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
-                        (doc_id, _vector_to_blob(doc_vec)),
-                    )
+                    if conn._vec_loaded:
+                        conn.conn.execute(
+                            "INSERT OR REPLACE INTO chunk_embeddings (chunk_id, embedding) VALUES (?, ?)",
+                            (doc_id, _vector_to_blob(doc_vec)),
+                        )
+                    else:
+                        fallback.store(doc_id, _vector_to_blob(doc_vec))
 
             conn.conn.commit()
             logger.info(
