@@ -63,7 +63,7 @@ function ThreadItem({ thread, isSelected, onClick }) {
           background: config.bg,
           border: `1px solid ${config.color}55`,
           display: "flex", alignItems: "center", justifyContent: "center",
-          color: config.color, fontSize: 13, flexShrink: 0,
+          color: config.color, fontSize: 'var(--ec-fs-sm)', flexShrink: 0,
           fontFamily: "monospace",
           boxShadow: config.glow,
         }}>
@@ -73,7 +73,7 @@ function ThreadItem({ thread, isSelected, onClick }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             color: isSelected ? "#e2e8f0" : "#b0b0c0",
-            fontSize: 13,
+            fontSize: 'var(--ec-fs-sm)',
             fontWeight: 600,
             marginBottom: 3,
             overflow: "hidden",
@@ -83,7 +83,7 @@ function ThreadItem({ thread, isSelected, onClick }) {
             {thread.topic || "Untitled thread"}
           </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 'var(--ec-fs-label)', flexWrap: "wrap" }}>
             <span style={{ color: config.color }}>{config.label}</span>
             <span style={{ color: "#333" }}>·</span>
             <span style={{ color: "#666" }}>{thread.turn_count || 0} turns</span>
@@ -112,7 +112,7 @@ function ThreadItem({ thread, isSelected, onClick }) {
               <span key={i} style={{
                 padding: "1px 6px",
                 borderRadius: 3,
-                fontSize: 9,
+                fontSize: 'var(--ec-fs-label)',
                 background: `${ENTITY_COLORS[i % ENTITY_COLORS.length]}15`,
                 color: ENTITY_COLORS[i % ENTITY_COLORS.length],
                 border: `1px solid ${ENTITY_COLORS[i % ENTITY_COLORS.length]}30`,
@@ -121,12 +121,12 @@ function ThreadItem({ thread, isSelected, onClick }) {
               </span>
             ))}
             {(thread.entities || []).length > 4 && (
-              <span style={{ fontSize: 9, color: "#555" }}>+{thread.entities.length - 4}</span>
+              <span style={{ fontSize: 'var(--ec-fs-label)', color: "#555" }}>+{thread.entities.length - 4}</span>
             )}
           </div>
         </div>
 
-        <div style={{ fontSize: 10, color: "#555", textAlign: "right", flexShrink: 0 }}>
+        <div style={{ fontSize: 'var(--ec-fs-label)', color: "#555", textAlign: "right", flexShrink: 0 }}>
           {relativeTime(thread.parked_at || thread.started_at)}
         </div>
       </div>
@@ -138,7 +138,7 @@ function ThreadItem({ thread, isSelected, onClick }) {
 function ThreadDetail({ thread }) {
   if (!thread) {
     return (
-      <div style={{ color: "#444", textAlign: "center", paddingTop: 80, fontSize: 13 }}>
+      <div style={{ color: "#444", textAlign: "center", paddingTop: 80, fontSize: 'var(--ec-fs-sm)' }}>
         Select a thread to view details
       </div>
     )
@@ -161,17 +161,17 @@ function ThreadDetail({ thread }) {
           background: config.bg,
           border: `2px solid ${config.color}`,
           display: "flex", alignItems: "center", justifyContent: "center",
-          color: config.color, fontSize: 18, flexShrink: 0,
+          color: config.color, fontSize: 'var(--ec-fs-md)', flexShrink: 0,
           fontFamily: "monospace",
           boxShadow: config.glow,
         }}>
           {config.icon}
         </div>
         <div>
-          <div style={{ color: "#e2e8f0", fontSize: 18, fontWeight: 700, marginBottom: 4, lineHeight: 1.2 }}>
+          <div style={{ color: "#e2e8f0", fontSize: 'var(--ec-fs-md)', fontWeight: 700, marginBottom: 4, lineHeight: 1.2 }}>
             {thread.topic || "Untitled thread"}
           </div>
-          <div style={{ display: "flex", gap: 12, fontSize: 11, color: "#666" }}>
+          <div style={{ display: "flex", gap: 12, fontSize: 'var(--ec-fs-xs)', color: "#666" }}>
             <span>Status: <span style={{ color: config.color }}>{config.label}</span></span>
             <span>Turns: <span style={{ color: "#aaa" }}>{thread.turn_count || 0}</span></span>
             <span>Resumes: <span style={{ color: "#7dd3fc" }}>{thread.resume_count || 0}</span></span>
@@ -186,13 +186,13 @@ function ThreadDetail({ thread }) {
       <Section title="ENTITIES" count={(thread.entities || []).length}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {(thread.entities || []).length === 0 ? (
-            <div style={{ color: "#444", fontSize: 12 }}>No entities linked yet</div>
+            <div style={{ color: "#444", fontSize: 'var(--ec-fs-sm)' }}>No entities linked yet</div>
           ) : (
             (thread.entities || []).map((entity, i) => (
               <span key={i} style={{
                 padding: "4px 10px",
                 borderRadius: 4,
-                fontSize: 12,
+                fontSize: 'var(--ec-fs-sm)',
                 background: `${ENTITY_COLORS[i % ENTITY_COLORS.length]}15`,
                 color: ENTITY_COLORS[i % ENTITY_COLORS.length],
                 border: `1px solid ${ENTITY_COLORS[i % ENTITY_COLORS.length]}30`,
@@ -218,8 +218,8 @@ function ThreadDetail({ thread }) {
               alignItems: "center",
               gap: 8,
             }}>
-              <span style={{ color: "#f59e0b", fontSize: 11 }}>⚡</span>
-              <span style={{ color: "#d4a574", fontSize: 12 }}>
+              <span style={{ color: "#f59e0b", fontSize: 'var(--ec-fs-xs)' }}>⚡</span>
+              <span style={{ color: "#d4a574", fontSize: 'var(--ec-fs-sm)' }}>
                 {task.replace("action:", "")}
               </span>
             </div>
@@ -250,10 +250,10 @@ function ThreadDetail({ thread }) {
                   border: "2px solid #06060e",
                   boxShadow: `0 0 6px ${evt.color}44`,
                 }} />
-                <div style={{ fontSize: 10, color: "#555", width: 80, flexShrink: 0 }}>
+                <div style={{ fontSize: 'var(--ec-fs-label)', color: "#555", width: 80, flexShrink: 0 }}>
                   {formatDate(evt.time)} {formatTime(evt.time)}
                 </div>
-                <div style={{ fontSize: 12, color: evt.color }}>
+                <div style={{ fontSize: 'var(--ec-fs-sm)', color: evt.color }}>
                   {evt.label}
                 </div>
               </div>
@@ -271,7 +271,7 @@ function ThreadDetail({ thread }) {
         </div>
       </Section>
 
-      <div style={{ marginTop: 24, fontSize: 10, color: "#333", fontFamily: "monospace" }}>
+      <div style={{ marginTop: 24, fontSize: 'var(--ec-fs-label)', color: "#333", fontFamily: "monospace" }}>
         {thread.node_id || thread.id}
       </div>
     </div>
@@ -282,14 +282,14 @@ function Section({ title, count, accentColor = "#7dd3fc", children }) {
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{
-        fontSize: 10, color: "#555", letterSpacing: 1.5,
+        fontSize: 'var(--ec-fs-label)', color: "#555", letterSpacing: 1.5,
         textTransform: "uppercase", marginBottom: 10,
         display: "flex", alignItems: "center", gap: 8,
       }}>
         {title}
         {count != null && (
           <span style={{
-            color: accentColor, fontSize: 10,
+            color: accentColor, fontSize: 'var(--ec-fs-label)',
             background: `${accentColor}15`,
             padding: "1px 6px", borderRadius: 3,
           }}>
@@ -311,8 +311,8 @@ function StatBox({ label, value, color }) {
       textAlign: "center",
       border: "1px solid #1a1a2e",
     }}>
-      <div style={{ color, fontSize: 20, fontWeight: 700, marginBottom: 2 }}>{value}</div>
-      <div style={{ color: "#555", fontSize: 10, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ color, fontSize: 'var(--ec-fs-lg)', fontWeight: 700, marginBottom: 2 }}>{value}</div>
+      <div style={{ color: "#555", fontSize: 'var(--ec-fs-label)', textTransform: "uppercase" }}>{label}</div>
     </div>
   )
 }
@@ -329,7 +329,7 @@ function SummaryBar({ threads }) {
       display: "flex", gap: 16, padding: "8px 16px",
       borderBottom: "1px solid #1a1a2e",
       background: "#08080f",
-      fontSize: 10,
+      fontSize: 'var(--ec-fs-label)',
     }}>
       <span style={{ color: "#4ade80" }}>▸ {active} active</span>
       <span style={{ color: "#f59e0b" }}>▪ {parked} parked</span>
@@ -387,7 +387,7 @@ export default function ThreadsView({ navigateTab, activeProjectSlug }) {
               display: "flex", justifyContent: "space-between",
               alignItems: "center", marginBottom: 8,
             }}>
-              <div style={{ color: "#888", fontSize: 11 }}>
+              <div style={{ color: "#888", fontSize: 'var(--ec-fs-xs)' }}>
                 THREADS ({filtered.length})
               </div>
 
@@ -396,7 +396,7 @@ export default function ThreadsView({ navigateTab, activeProjectSlug }) {
                 onChange={e => setSortBy(e.target.value)}
                 style={{
                   background: "#1a1a2e", color: "#888", border: "1px solid #2a2a3e",
-                  padding: "2px 6px", borderRadius: 3, fontSize: 10,
+                  padding: "2px 6px", borderRadius: 3, fontSize: 'var(--ec-fs-label)',
                   cursor: "pointer", outline: "none",
                 }}
               >
@@ -421,7 +421,7 @@ export default function ThreadsView({ navigateTab, activeProjectSlug }) {
                       color: isActive ? color : "#555",
                       padding: "3px 10px",
                       borderRadius: 4,
-                      fontSize: 10,
+                      fontSize: 'var(--ec-fs-label)',
                       cursor: "pointer",
                       transition: "all 0.15s ease",
                     }}
@@ -435,7 +435,7 @@ export default function ThreadsView({ navigateTab, activeProjectSlug }) {
 
           <div style={{ flex: 1, overflow: "auto" }}>
             {filtered.length === 0 ? (
-              <div style={{ color: "#444", textAlign: "center", paddingTop: 40, fontSize: 12 }}>
+              <div style={{ color: "#444", textAlign: "center", paddingTop: 40, fontSize: 'var(--ec-fs-sm)' }}>
                 {threads.length === 0
                   ? "No threads yet — threads appear after conversations flow through the engine"
                   : `No threads with status "${statusFilter}"`}

@@ -249,7 +249,7 @@ const ObservatoryGlobe = forwardRef(function ObservatoryGlobe({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       const cx = dw / 2
       const cy = dh / 2
-      s.globeRadius = Math.min(dw, dh) * 0.38
+      s.globeRadius = Math.min(dw, dh) * 0.44
 
       // Smooth zoom interpolation
       s.zoom += (s.zoomTarget - s.zoom) * 0.12

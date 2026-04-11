@@ -5,6 +5,7 @@ import { IdentityBadge, FaceIDCapture, StatusDot } from '../../components';
 const TAB_CONFIG = [
   { id: 'eclissi',     label: 'ECLISSI',     accent: 'var(--ec-accent-luna)' },
   { id: 'studio',      label: 'LUNAR STUDIO', accent: 'var(--ec-accent-voice)' },
+  { id: 'nexus',       label: 'NEXUS',        accent: 'var(--ec-accent-voice)' },
   { id: 'kozmo',       label: 'KOZMO',       accent: '#c8ff00' },
   { id: 'guardian',    label: 'GUARDIAN',     accent: 'var(--ec-accent-guardian)' },
   { id: 'observatory', label: 'OBSERVATORY', accent: 'var(--ec-accent-memory)' },

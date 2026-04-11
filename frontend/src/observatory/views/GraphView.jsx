@@ -465,7 +465,7 @@ export default function GraphView({ navigateTab }) {
       <div style={{
         position: 'absolute', top: 12, left: 16, zIndex: 2,
         display: 'flex', alignItems: 'center', gap: 4,
-        fontSize: 11, pointerEvents: 'auto',
+        fontSize: 'var(--ec-fs-xs)', pointerEvents: 'auto',
       }}>
         {breadcrumb.map((part, i) => (
           <React.Fragment key={i}>
@@ -475,7 +475,7 @@ export default function GraphView({ navigateTab }) {
                 onClick={part.onClick}
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer',
-                  color: '#7dd3fc', fontFamily: 'inherit', fontSize: 11,
+                  color: '#7dd3fc', fontFamily: 'inherit', fontSize: 'var(--ec-fs-xs)',
                   padding: '2px 4px', borderRadius: 2,
                   transition: 'background 0.15s',
                 }}
@@ -498,7 +498,7 @@ export default function GraphView({ navigateTab }) {
           color: '#7dd3fc',
           padding: '1px 8px',
           borderRadius: 3,
-          fontSize: 9,
+          fontSize: 'var(--ec-fs-label)',
           fontWeight: 700,
           letterSpacing: 1,
         }}>
@@ -509,7 +509,7 @@ export default function GraphView({ navigateTab }) {
       {/* Stats line */}
       <div style={{
         position: 'absolute', top: 34, left: 16, zIndex: 2,
-        color: '#444', fontSize: 10, pointerEvents: 'none',
+        color: '#444', fontSize: 'var(--ec-fs-label)', pointerEvents: 'none',
       }}>
         {statsText}
       </div>
@@ -526,7 +526,7 @@ export default function GraphView({ navigateTab }) {
             padding: '6px 14px',
             borderRadius: 4,
             cursor: 'pointer',
-            fontSize: 11,
+            fontSize: 'var(--ec-fs-xs)',
             fontFamily: 'inherit',
             fontWeight: 600,
             transition: 'all 0.15s',
@@ -542,7 +542,7 @@ export default function GraphView({ navigateTab }) {
       {/* Interaction hint */}
       <div style={{
         position: 'absolute', bottom: 60, left: 16, zIndex: 2,
-        color: '#333', fontSize: 9, lineHeight: 1.5, pointerEvents: 'none',
+        color: '#333', fontSize: 'var(--ec-fs-label)', lineHeight: 1.5, pointerEvents: 'none',
       }}>
         {zoomLevel === 'universe' && 'CLICK cluster to inspect  ·  PINCH-IN to drill into galaxy  ·  SCROLL to zoom'}
         {zoomLevel === 'galaxy' && 'CLICK node to inspect  ·  PINCH-IN to drill into solar system  ·  PINCH-OUT to go back'}
@@ -553,7 +553,7 @@ export default function GraphView({ navigateTab }) {
       <div style={{
         position: 'absolute', bottom: 16, left: 16, zIndex: 2,
         background: '#0a0a14dd', border: '1px solid #1a1a2e',
-        padding: '8px 12px', borderRadius: 4, fontSize: 11,
+        padding: '8px 12px', borderRadius: 4, fontSize: 'var(--ec-fs-xs)',
         pointerEvents: 'none',
       }}>
         <div style={{ color: '#555', marginBottom: 4 }}>
@@ -588,7 +588,7 @@ export default function GraphView({ navigateTab }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: '#06060ecc', zIndex: 100,
         }}>
-          <div style={{ color: '#7dd3fc', fontSize: 13, fontFamily: 'inherit' }}>
+          <div style={{ color: '#7dd3fc', fontSize: 'var(--ec-fs-sm)', fontFamily: 'inherit' }}>
             Loading...
           </div>
         </div>
@@ -608,24 +608,24 @@ export default function GraphView({ navigateTab }) {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <div>
-                  <div style={{ color: '#22d3ee', fontSize: 10, letterSpacing: 1, marginBottom: 2 }}>CLUSTER</div>
-                  <div style={{ color: '#ddd', fontSize: 14, fontWeight: 600 }}>
+                  <div style={{ color: '#22d3ee', fontSize: 'var(--ec-fs-label)', letterSpacing: 1, marginBottom: 2 }}>CLUSTER</div>
+                  <div style={{ color: '#ddd', fontSize: 'var(--ec-fs-base)', fontWeight: 600 }}>
                     {selectedNode.name || selectedNode.label || selectedNode.id}
                   </div>
                 </div>
                 <button onClick={() => selectNode(null)} style={{
                   background: 'none', border: 'none', color: '#555', cursor: 'pointer',
-                  fontSize: 16, padding: '0 4px',
+                  fontSize: 'var(--ec-fs-md)', padding: '0 4px',
                 }}>x</button>
               </div>
               {selectedNode.summary && (
-                <div style={{ color: '#999', fontSize: 12, lineHeight: 1.5, marginBottom: 12 }}>
+                <div style={{ color: '#999', fontSize: 'var(--ec-fs-sm)', lineHeight: 1.5, marginBottom: 12 }}>
                   {selectedNode.summary}
                 </div>
               )}
               <div style={{
                 display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
-                fontSize: 11, color: '#666', marginBottom: 14,
+                fontSize: 'var(--ec-fs-xs)', color: '#666', marginBottom: 14,
               }}>
                 <div>Nodes: <span style={{ color: '#888' }}>{selectedNode.member_count || selectedNode.node_count || 0}</span></div>
                 <div>Lock-in: <span style={{ color: '#888' }}>{((selectedNode.lock_in || 0) * 100).toFixed(0)}%</span></div>
@@ -637,7 +637,7 @@ export default function GraphView({ navigateTab }) {
                 style={{
                   width: '100%', padding: '8px 0', background: '#1a1a2e',
                   border: '1px solid #2a2a3e', borderRadius: 4, color: '#7dd3fc',
-                  cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+                  cursor: 'pointer', fontSize: 'var(--ec-fs-xs)', fontFamily: 'inherit', fontWeight: 600,
                 }}
               >
                 EXPLORE CLUSTER
@@ -653,7 +653,7 @@ export default function GraphView({ navigateTab }) {
                   style={{
                     width: '100%', marginTop: 8, padding: '8px 0', background: '#1a1a2e',
                     border: '1px solid #2a2a3e', borderRadius: 4, color: '#7dd3fc',
-                    cursor: 'pointer', fontSize: 11, fontFamily: 'inherit', fontWeight: 600,
+                    cursor: 'pointer', fontSize: 'var(--ec-fs-xs)', fontFamily: 'inherit', fontWeight: 600,
                   }}
                 >
                   VIEW CONNECTIONS

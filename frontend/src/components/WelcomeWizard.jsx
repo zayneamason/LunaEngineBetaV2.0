@@ -233,12 +233,12 @@ export default function WelcomeWizard({ onComplete }) {
     background: '#13131a', border: '1px solid #2a2a3a',
   };
   const inputStyle = {
-    width: '100%', padding: '12px 16px', fontSize: 16, borderRadius: 8,
+    width: '100%', padding: '12px 16px', fontSize: 'var(--ec-fs-md)', borderRadius: 8,
     border: '1px solid #3a3a4a', background: '#1a1a24', color: '#e0e0e0',
     outline: 'none', boxSizing: 'border-box', marginTop: 12,
   };
   const btn = (active = true) => ({
-    padding: '12px 28px', fontSize: 15, fontWeight: 600, borderRadius: 8, border: 'none',
+    padding: '12px 28px', fontSize: 'var(--ec-fs-base)', fontWeight: 600, borderRadius: 8, border: 'none',
     cursor: active ? 'pointer' : 'default', marginTop: 20,
     background: active ? '#6366f1' : '#2a2a3a', color: active ? '#fff' : '#666',
     opacity: active ? 1 : 0.6, transition: 'all 0.2s',
@@ -266,10 +266,10 @@ export default function WelcomeWizard({ onComplete }) {
         {/* ── Step: Name ── */}
         {currentStep === 'name' && (
           <>
-            <h2 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 600 }}>
+            <h2 style={{ margin: '0 0 8px', fontSize: 'var(--ec-fs-lg)', fontWeight: 600, fontFamily: "'Fraunces', serif" }}>
               Luna is yours.
             </h2>
-            <p style={{ margin: '0 0 4px', color: '#888', fontSize: 14 }}>
+            <p style={{ margin: '0 0 4px', color: '#888', fontSize: 'var(--ec-fs-base)' }}>
               {customWelcome || "Let's get you set up."}
             </p>
             <input
@@ -280,7 +280,7 @@ export default function WelcomeWizard({ onComplete }) {
               onKeyDown={e => e.key === 'Enter' && handleNameSubmit()}
               autoFocus
             />
-            {nameError && <p style={{ color: '#ef4444', fontSize: 13, margin: '8px 0 0' }}>{nameError}</p>}
+            {nameError && <p style={{ color: '#ef4444', fontSize: 'var(--ec-fs-sm)', margin: '8px 0 0' }}>{nameError}</p>}
             <button style={btn(!saving && name.trim())} onClick={handleNameSubmit} disabled={saving || !name.trim()}>
               {saving ? 'Saving...' : 'Continue'}
             </button>
@@ -290,10 +290,10 @@ export default function WelcomeWizard({ onComplete }) {
         {/* ── Step: LLM Key ── */}
         {currentStep === 'llm' && (
           <>
-            <h2 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 600 }}>
+            <h2 style={{ margin: '0 0 8px', fontSize: 'var(--ec-fs-lg)', fontWeight: 600, fontFamily: "'Fraunces', serif" }}>
               Connect a brain.
             </h2>
-            <p style={{ margin: '0 0 16px', color: '#888', fontSize: 14 }}>
+            <p style={{ margin: '0 0 16px', color: '#888', fontSize: 'var(--ec-fs-base)' }}>
               Luna needs an LLM. Pick one (you can change later).
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -303,15 +303,15 @@ export default function WelcomeWizard({ onComplete }) {
                   onClick={() => { setSelectedProvider(p); setKeyStatus(null); setApiKey(''); setKeyError(''); }}
                   style={optionCard(selectedProvider?.id === p.id, p.color)}
                 >
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{p.label}</div>
-                  <div style={{ color: '#888', fontSize: 12 }}>{p.desc}</div>
+                  <div style={{ fontWeight: 600, fontSize: 'var(--ec-fs-base)' }}>{p.label}</div>
+                  <div style={{ color: '#888', fontSize: 'var(--ec-fs-sm)' }}>{p.desc}</div>
                 </div>
               ))}
             </div>
             {selectedProvider && (
               <>
                 <input
-                  style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 13 }}
+                  style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 'var(--ec-fs-sm)' }}
                   placeholder={`Paste your ${selectedProvider.label} API key`}
                   value={apiKey}
                   onChange={e => setApiKey(e.target.value)}
@@ -321,14 +321,14 @@ export default function WelcomeWizard({ onComplete }) {
                   <button style={btn(apiKey.trim())} onClick={handleTestKey} disabled={!apiKey.trim() || keyStatus === 'testing'}>
                     {keyStatus === 'testing' ? 'Testing...' : 'Verify Key'}
                   </button>
-                  {keyStatus === 'valid' && <span style={{ color: '#22c55e', fontSize: 18 }}>✓</span>}
-                  {keyStatus === 'invalid' && <span style={{ color: '#ef4444', fontSize: 13 }}>{keyError}</span>}
+                  {keyStatus === 'valid' && <span style={{ color: '#22c55e', fontSize: 'var(--ec-fs-md)' }}>✓</span>}
+                  {keyStatus === 'invalid' && <span style={{ color: '#ef4444', fontSize: 'var(--ec-fs-sm)' }}>{keyError}</span>}
                 </div>
               </>
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20 }}>
               <button
-                style={{ ...btn(true), background: 'transparent', color: '#888', fontSize: 13 }}
+                style={{ ...btn(true), background: 'transparent', color: '#888', fontSize: 'var(--ec-fs-sm)' }}
                 onClick={advance}
               >
                 Skip for now
@@ -343,10 +343,10 @@ export default function WelcomeWizard({ onComplete }) {
         {/* ── Step: Voice ── */}
         {currentStep === 'voice' && (
           <>
-            <h2 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 600 }}>
+            <h2 style={{ margin: '0 0 8px', fontSize: 'var(--ec-fs-lg)', fontWeight: 600, fontFamily: "'Fraunces', serif" }}>
               Give Luna a voice.
             </h2>
-            <p style={{ margin: '0 0 16px', color: '#888', fontSize: 14 }}>
+            <p style={{ margin: '0 0 16px', color: '#888', fontSize: 'var(--ec-fs-base)' }}>
               Enable voice chat so Luna can speak and listen.
             </p>
             <div
@@ -361,18 +361,18 @@ export default function WelcomeWizard({ onComplete }) {
                 border: `2px solid ${voiceEnabled ? '#22c55e' : '#3a3a4a'}`,
                 background: voiceEnabled ? '#22c55e' : 'transparent',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 14, color: '#fff', fontWeight: 700, transition: 'all 0.2s',
+                fontSize: 'var(--ec-fs-base)', color: '#fff', fontWeight: 700, transition: 'all 0.2s',
               }}>
                 {voiceEnabled ? '✓' : ''}
               </div>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>Enable voice chat</div>
-                <div style={{ color: '#888', fontSize: 12 }}>Luna can speak responses and listen to you</div>
+                <div style={{ fontWeight: 600, fontSize: 'var(--ec-fs-base)' }}>Enable voice chat</div>
+                <div style={{ color: '#888', fontSize: 'var(--ec-fs-sm)' }}>Luna can speak responses and listen to you</div>
               </div>
             </div>
             {voiceEnabled && (
               <div style={{ marginTop: 8 }}>
-                <div style={{ color: '#888', fontSize: 13, marginBottom: 8 }}>TTS Engine:</div>
+                <div style={{ color: '#888', fontSize: 'var(--ec-fs-sm)', marginBottom: 8 }}>TTS Engine:</div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   {[
                     { id: 'apple', label: 'Apple TTS', desc: 'macOS native' },
@@ -383,8 +383,8 @@ export default function WelcomeWizard({ onComplete }) {
                       onClick={() => setTtsEngine(eng.id)}
                       style={{ ...optionCard(ttsEngine === eng.id, '#6366f1'), flex: 1 }}
                     >
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{eng.label}</div>
-                      <div style={{ color: '#888', fontSize: 11 }}>{eng.desc}</div>
+                      <div style={{ fontWeight: 600, fontSize: 'var(--ec-fs-sm)' }}>{eng.label}</div>
+                      <div style={{ color: '#888', fontSize: 'var(--ec-fs-xs)' }}>{eng.desc}</div>
                     </div>
                   ))}
                 </div>
@@ -397,10 +397,10 @@ export default function WelcomeWizard({ onComplete }) {
         {/* ── Step: Personality ── */}
         {currentStep === 'personality' && (
           <>
-            <h2 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 600 }}>
+            <h2 style={{ margin: '0 0 8px', fontSize: 'var(--ec-fs-lg)', fontWeight: 600, fontFamily: "'Fraunces', serif" }}>
               Set the tone.
             </h2>
-            <p style={{ margin: '0 0 16px', color: '#888', fontSize: 14 }}>
+            <p style={{ margin: '0 0 16px', color: '#888', fontSize: 'var(--ec-fs-base)' }}>
               How should Luna communicate? You can fine-tune this later.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -410,8 +410,8 @@ export default function WelcomeWizard({ onComplete }) {
                   onClick={() => setPersonalityPreset(p.id)}
                   style={optionCard(personalityPreset === p.id, '#6366f1')}
                 >
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>{p.label}</div>
-                  <div style={{ color: '#888', fontSize: 12 }}>{p.desc}</div>
+                  <div style={{ fontWeight: 600, fontSize: 'var(--ec-fs-base)' }}>{p.label}</div>
+                  <div style={{ color: '#888', fontSize: 'var(--ec-fs-sm)' }}>{p.desc}</div>
                 </div>
               ))}
             </div>
@@ -422,13 +422,13 @@ export default function WelcomeWizard({ onComplete }) {
         {/* ── Step: Greeting ── */}
         {currentStep === 'greeting' && (
           <>
-            <h2 style={{ margin: '0 0 16px', fontSize: 22, fontWeight: 600 }}>
+            <h2 style={{ margin: '0 0 16px', fontSize: 'var(--ec-fs-lg)', fontWeight: 600, fontFamily: "'Fraunces', serif" }}>
               Luna
             </h2>
             <div style={{
               minHeight: 80, padding: 16, borderRadius: 8,
               background: '#1a1a24', border: '1px solid #2a2a3a',
-              fontSize: 15, lineHeight: 1.6, whiteSpace: 'pre-wrap',
+              fontSize: 'var(--ec-fs-base)', lineHeight: 1.6, whiteSpace: 'pre-wrap',
             }}>
               {greeting || (streaming ? '...' : 'Connecting...')}
               {streaming && <span style={{ opacity: 0.5 }}>▌</span>}

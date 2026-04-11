@@ -129,15 +129,15 @@ export default function ObservatoryApp({ onBack, activeProjectSlug }) {
             &larr; LUNA
           </button>
 
-          <span style={{ color: '#7dd3fc', fontWeight: 700, fontSize: 14, letterSpacing: 1 }}>
+          <span style={{ color: '#7dd3fc', fontWeight: 700, fontSize: 'var(--ec-fs-base)', letterSpacing: 1 }}>
             OBSERVATORY
           </span>
-          <span style={{ color: '#444', fontSize: 11 }}>Memory Matrix</span>
+          <span style={{ color: '#444', fontSize: 'var(--ec-fs-xs)' }}>Memory Matrix</span>
           {activeProjectSlug && (
             <span style={{
               background: '#1a2a1e', color: '#4ade80',
               padding: '2px 8px', borderRadius: 4,
-              fontSize: 10, fontWeight: 600,
+              fontSize: 'var(--ec-fs-label)', fontWeight: 600,
               letterSpacing: 0.5, textTransform: 'uppercase',
             }}>
               {activeProjectSlug}
@@ -160,7 +160,7 @@ export default function ObservatoryApp({ onBack, activeProjectSlug }) {
                   color: tab === t ? '#7dd3fc' : '#666',
                   borderBottom: tab === t ? '2px solid #7dd3fc' : '2px solid transparent',
                   fontFamily: 'inherit',
-                  fontSize: 13,
+                  fontSize: 'var(--ec-fs-sm)',
                   transition: 'all 0.15s',
                 }}
               >
@@ -170,7 +170,7 @@ export default function ObservatoryApp({ onBack, activeProjectSlug }) {
           </div>
 
           {/* Connection indicator */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--ec-fs-xs)' }}>
             <div style={{
               width: 8, height: 8, borderRadius: '50%',
               background: wsConnected ? '#4ade80' : '#ef4444',

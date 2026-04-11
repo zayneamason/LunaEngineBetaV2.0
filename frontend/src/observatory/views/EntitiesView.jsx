@@ -43,7 +43,7 @@ export default function EntitiesView({ navigateTab, activeProjectSlug }) {
         flexDirection: 'column',
       }}>
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a1a2e' }}>
-          <div style={{ color: '#aaa', fontSize: 12, marginBottom: 8 }}>
+          <div style={{ color: '#aaa', fontSize: 'var(--ec-fs-sm)', marginBottom: 8 }}>
             ENTITIES ({filtered.length})
           </div>
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -57,7 +57,7 @@ export default function EntitiesView({ navigateTab, activeProjectSlug }) {
                   color: typeFilter === type ? '#7dd3fc' : '#777',
                   padding: '4px 10px',
                   borderRadius: 4,
-                  fontSize: 11,
+                  fontSize: 'var(--ec-fs-xs)',
                   cursor: 'pointer',
                 }}
               >
@@ -92,23 +92,23 @@ export default function EntitiesView({ navigateTab, activeProjectSlug }) {
                     width: 36, height: 36, borderRadius: '50%',
                     background: config.bg, border: `2px solid ${config.color}`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: config.color, fontSize: 16, fontWeight: 600,
+                    color: config.color, fontSize: 'var(--ec-fs-md)', fontWeight: 600,
                   }}>
                     {entity.avatar || config.icon}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
-                      color: config.color, fontSize: 13, fontWeight: 600,
+                      color: config.color, fontSize: 'var(--ec-fs-sm)', fontWeight: 600,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
                       {entity.name}
                     </div>
-                    <div style={{ color: '#666', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+                    <div style={{ color: '#666', fontSize: 'var(--ec-fs-label)', textTransform: 'uppercase', letterSpacing: 1 }}>
                       {entity.type}
                     </div>
                   </div>
                   <div style={{
-                    background: '#1a1a2e', color: '#888', fontSize: 10,
+                    background: '#1a1a2e', color: '#888', fontSize: 'var(--ec-fs-label)',
                     padding: '2px 6px', borderRadius: 3,
                   }}>
                     {entity.mention_count || 0}
@@ -161,7 +161,7 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
           <div style={{ color: config.color, fontSize: 20, fontWeight: 700, marginBottom: 4 }}>
             {entity.entity.name}
           </div>
-          <div style={{ color: '#666', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>
+          <div style={{ color: '#666', fontSize: 'var(--ec-fs-xs)', textTransform: 'uppercase', letterSpacing: 1 }}>
             {entity.entity.type} · v{entity.entity.current_version} · {entity.entity.mention_count} mentions
           </div>
         </div>
@@ -172,7 +172,7 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
           {aliases.map((alias, i) => (
             <span key={i} style={{
               background: '#1a1a2e', color: '#888', padding: '4px 10px',
-              borderRadius: 4, fontSize: 11,
+              borderRadius: 4, fontSize: 'var(--ec-fs-xs)',
             }}>
               {alias}
             </span>
@@ -189,7 +189,7 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
               background: 'none', border: 'none',
               color: tab === t ? '#7dd3fc' : '#666',
               borderBottom: tab === t ? '2px solid #7dd3fc' : '2px solid transparent',
-              padding: '8px 4px', cursor: 'pointer', fontSize: 12,
+              padding: '8px 4px', cursor: 'pointer', fontSize: 'var(--ec-fs-sm)',
               textTransform: 'uppercase', letterSpacing: 1,
             }}
           >
@@ -202,7 +202,7 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
         <div>
           {entity.entity.profile && (
             <div style={{
-              color: '#aaa', fontSize: 14, lineHeight: 1.6,
+              color: '#aaa', fontSize: 'var(--ec-fs-base)', lineHeight: 1.6,
               fontStyle: 'italic', marginBottom: 20, padding: 16,
               background: '#0a0a14', borderLeft: '3px solid ' + config.color,
             }}>
@@ -212,10 +212,10 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
 
           {Object.keys(coreFacts).length > 0 && (
             <div>
-              <div style={{ color: '#888', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+              <div style={{ color: '#888', fontSize: 'var(--ec-fs-xs)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
                 Core Facts
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8, fontSize: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8, fontSize: 'var(--ec-fs-sm)' }}>
                 {Object.entries(coreFacts).map(([key, value]) => (
                   <React.Fragment key={key}>
                     <div style={{ color: '#666' }}>{key}:</div>
@@ -230,13 +230,13 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
 
           {entity.relationships.length > 0 && (
             <div style={{ marginTop: 20 }}>
-              <div style={{ color: '#888', fontSize: 11, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+              <div style={{ color: '#888', fontSize: 'var(--ec-fs-xs)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
                 Relationships ({entity.relationships.length})
               </div>
               {entity.relationships.map((rel, i) => (
                 <div key={i} style={{
                   padding: 8, background: '#0a0a14', marginBottom: 4,
-                  borderRadius: 4, fontSize: 12,
+                  borderRadius: 4, fontSize: 'var(--ec-fs-sm)',
                 }}>
                   <span style={{ color: '#888' }}>{rel.from_id === entity.entity.id ? '\u2192' : '\u2190'}</span>{' '}
                   <span style={{ color: '#7dd3fc' }}>{rel.rel_type}</span>{' '}
@@ -276,9 +276,9 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
               }}
                 onClick={() => navigateTab && navigateTab('Quests', { questId: quest.id })}
               >
-                <div style={{ color: '#7dd3fc', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{quest.title}</div>
-                <div style={{ color: '#666', fontSize: 11, marginBottom: 8 }}>{quest.subtitle}</div>
-                <div style={{ color: '#888', fontSize: 10 }}>
+                <div style={{ color: '#7dd3fc', fontSize: 'var(--ec-fs-sm)', fontWeight: 600, marginBottom: 4 }}>{quest.title}</div>
+                <div style={{ color: '#666', fontSize: 'var(--ec-fs-xs)', marginBottom: 8 }}>{quest.subtitle}</div>
+                <div style={{ color: '#888', fontSize: 'var(--ec-fs-label)' }}>
                   Status: <span style={{ color: quest.status === 'complete' ? '#4ade80' : quest.status === 'active' ? '#7dd3fc' : '#aaa' }}>
                     {quest.status}
                   </span>
@@ -296,11 +296,11 @@ function EntityDetail({ entity, allEntities = [], onEntityClick, navigateTab }) 
               padding: 12, background: '#0a0a14', marginBottom: 8, borderRadius: 4,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <span style={{ color: '#7dd3fc', fontSize: 12 }}>v{version.version}</span>
-                <span style={{ color: '#666', fontSize: 10 }}>{new Date(version.created_at).toLocaleDateString()}</span>
+                <span style={{ color: '#7dd3fc', fontSize: 'var(--ec-fs-sm)' }}>v{version.version}</span>
+                <span style={{ color: '#666', fontSize: 'var(--ec-fs-label)' }}>{new Date(version.created_at).toLocaleDateString()}</span>
               </div>
-              <div style={{ color: '#888', fontSize: 11, marginBottom: 4, textTransform: 'uppercase' }}>{version.change_type}</div>
-              <div style={{ color: '#aaa', fontSize: 12 }}>{version.summary}</div>
+              <div style={{ color: '#888', fontSize: 'var(--ec-fs-xs)', marginBottom: 4, textTransform: 'uppercase' }}>{version.change_type}</div>
+              <div style={{ color: '#aaa', fontSize: 'var(--ec-fs-sm)' }}>{version.summary}</div>
             </div>
           ))}
         </div>
@@ -357,17 +357,17 @@ function KnowledgeTab({ mentions, allEntities, onEntityClick, navigateTab }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span style={{
-                  background: typeColor + '22', color: typeColor, fontSize: 9,
+                  background: typeColor + '22', color: typeColor, fontSize: 'var(--ec-fs-label)',
                   padding: '2px 6px', borderRadius: 3, textTransform: 'uppercase',
                   fontWeight: 600, letterSpacing: 0.5,
                 }}>
                   {mentionType} {(confidence * 100).toFixed(0)}%
                 </span>
-                <span style={{ color: '#888', fontSize: 10, textTransform: 'uppercase' }}>{mention.type}</span>
+                <span style={{ color: '#888', fontSize: 'var(--ec-fs-label)', textTransform: 'uppercase' }}>{mention.type}</span>
               </div>
-              <span style={{ color: '#666', fontSize: 10 }}>Lock-in: {((mention.lock_in || 0) * 100).toFixed(0)}%</span>
+              <span style={{ color: '#666', fontSize: 'var(--ec-fs-label)' }}>Lock-in: {((mention.lock_in || 0) * 100).toFixed(0)}%</span>
             </div>
-            <div style={{ color: '#aaa', fontSize: 13, lineHeight: 1.5 }}>
+            <div style={{ color: '#aaa', fontSize: 'var(--ec-fs-sm)', lineHeight: 1.5 }}>
               <AnnotatedText
                 text={mention.context_snippet || mention.content}
                 entities={allEntities}
@@ -384,7 +384,7 @@ function KnowledgeTab({ mentions, allEntities, onEntityClick, navigateTab }) {
             onClick={() => setShowRefs(!showRefs)}
             style={{
               background: '#1a1a2e', border: '1px solid #2a2a3e', color: '#888',
-              padding: '8px 16px', borderRadius: 4, fontSize: 12, cursor: 'pointer',
+              padding: '8px 16px', borderRadius: 4, fontSize: 'var(--ec-fs-sm)', cursor: 'pointer',
               width: '100%', textAlign: 'left',
             }}
           >
@@ -396,11 +396,11 @@ function KnowledgeTab({ mentions, allEntities, onEntityClick, navigateTab }) {
               {references.map((m, i) => (
                 <div key={m.node_id || i} style={{
                   padding: 8, background: '#0a0a14', marginBottom: 4,
-                  borderRadius: 4, fontSize: 12, display: 'flex', gap: 8,
+                  borderRadius: 4, fontSize: 'var(--ec-fs-sm)', display: 'flex', gap: 8,
                   alignItems: 'baseline',
                 }}>
                   <span style={{
-                    color: '#64748b', fontSize: 10, minWidth: 32, textAlign: 'right',
+                    color: '#64748b', fontSize: 'var(--ec-fs-label)', minWidth: 32, textAlign: 'right',
                   }}>
                     {((m.confidence || 0) * 100).toFixed(0)}%
                   </span>
