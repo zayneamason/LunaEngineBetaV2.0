@@ -201,6 +201,34 @@ class AiBrarianFallbackVec:
             except Exception as e:
                 logger.debug("Could not create fallback embedding table: %s", e)
 
+    def store(self, chunk_id: str, embedding) -> bool:
+        """Store an embedding for a chunk_id in the fallback table.
+
+        Accepts either a list[float] (will be serialized via _vec_to_blob)
+        or a bytes blob already in the wire format. Cartridge ingestion
+        passes raw blobs read from the .lun file's embeddings table; the
+        runtime embedding pipeline passes list[float] from the generator.
+        """
+        if not self._migrated:
+            return False
+        if isinstance(embedding, (list, tuple)):
+            blob = _vec_to_blob(list(embedding))
+        elif isinstance(embedding, (bytes, bytearray, memoryview)):
+            blob = bytes(embedding)
+        else:
+            logger.debug(
+                "FallbackVec.store: unexpected embedding type %s for %s",
+                type(embedding).__name__, chunk_id,
+            )
+            return False
+        self.conn.execute(
+            "INSERT OR REPLACE INTO chunk_embeddings_fallback "
+            "(chunk_id, embedding) VALUES (?, ?)",
+            (chunk_id, blob),
+        )
+        self.conn.commit()
+        return True
+
     def search(self, query_vec: list[float], limit: int = 10) -> list[tuple[str, float]]:
         """Search chunk embeddings and return (chunk_id, distance) pairs."""
         if not self._migrated:
