@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useFrontendConfig, updateFrontendConfig } from '../../hooks/useFrontendConfig';
 
 const BADGE_LABELS = {
   route: 'Route indicator (delegated / local / cloud)',
@@ -19,9 +20,9 @@ const DEFAULTS = {
 };
 
 const TEXT_SIZE_PRESETS = [
-  { id: 'normal', label: 'Normal', scale: 1 },
-  { id: 'large', label: 'Large', scale: 1.15 },
-  { id: 'xlarge', label: 'Extra Large', scale: 1.35 },
+  { id: 'compact', label: 'Compact', scale: 0.85, lineHeight: 1.4, paragraphGap: '0.5em' },
+  { id: 'readable', label: 'Readable', scale: 1, lineHeight: 1.6, paragraphGap: '0.75em' },
+  { id: 'large', label: 'Large', scale: 1.15, lineHeight: 1.7, paragraphGap: '1em' },
 ];
 
 function getStoredFontScale() {
@@ -32,12 +33,21 @@ function getStoredFontScale() {
   return 1;
 }
 
-function applyFontScale(scale) {
-  document.documentElement.style.setProperty('--ec-font-scale', scale);
-  try { localStorage.setItem('ec-font-scale', String(scale)); } catch { /* ignore */ }
+function applyFontScale(scale, lineHeight, paragraphGap) {
+  const root = document.documentElement.style;
+  root.setProperty('--ec-font-scale', scale);
+  if (lineHeight != null) root.setProperty('--ec-line-height', lineHeight);
+  if (paragraphGap != null) root.setProperty('--ec-paragraph-gap', paragraphGap);
+  try {
+    localStorage.setItem('ec-font-scale', String(scale));
+    if (lineHeight != null) localStorage.setItem('ec-line-height', String(lineHeight));
+    if (paragraphGap != null) localStorage.setItem('ec-paragraph-gap', paragraphGap);
+  } catch { /* ignore */ }
 }
 
 export default function DisplaySection() {
+  const frontendConfig = useFrontendConfig();
+  const debugMode = frontendConfig.debug_mode === true;
   const [badges, setBadges] = useState(DEFAULTS);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -55,8 +65,13 @@ export default function DisplaySection() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Apply stored font scale on mount
-  useEffect(() => { applyFontScale(fontScale); }, []);
+  // Apply stored formatting preset on mount
+  useEffect(() => {
+    let storedLH, storedPG;
+    try { storedLH = parseFloat(localStorage.getItem('ec-line-height')); } catch {}
+    try { storedPG = localStorage.getItem('ec-paragraph-gap'); } catch {}
+    applyFontScale(fontScale, storedLH || undefined, storedPG || undefined);
+  }, []);
 
   const toggle = (key) => {
     setBadges((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -78,14 +93,51 @@ export default function DisplaySection() {
     setSaving(false);
   };
 
-  const handleFontScale = (scale) => {
-    setFontScale(scale);
-    applyFontScale(scale);
+  const handleFontScale = (preset) => {
+    setFontScale(preset.scale);
+    applyFontScale(preset.scale, preset.lineHeight, preset.paragraphGap);
   };
 
   return (
     <div style={{ maxWidth: 480 }}>
       <h2 className="ec-font-label" style={headerStyle}>DISPLAY</h2>
+
+      {/* Developer Mode Toggle */}
+      <div style={{ marginBottom: 20 }}>
+        <label className="ec-font-label" style={labelStyle}>DEVELOPER MODE</label>
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+          padding: '10px 12px', borderRadius: 6,
+          background: debugMode ? 'rgba(251,191,36,0.06)' : 'transparent',
+          border: `1px solid ${debugMode ? 'rgba(251,191,36,0.2)' : 'var(--ec-border)'}`,
+          transition: 'all 0.2s',
+        }}>
+          <div
+            onClick={() => updateFrontendConfig({ debug_mode: !debugMode })}
+            style={{
+              width: 36, height: 20, borderRadius: 10, position: 'relative', cursor: 'pointer',
+              background: debugMode ? 'rgba(251,191,36,0.3)' : 'rgba(255,255,255,0.08)',
+              border: `1px solid ${debugMode ? 'rgba(251,191,36,0.5)' : 'var(--ec-border)'}`,
+              transition: 'all 0.2s',
+            }}
+          >
+            <div style={{
+              width: 14, height: 14, borderRadius: '50%', position: 'absolute', top: 2,
+              left: debugMode ? 19 : 2,
+              background: debugMode ? '#fbbf24' : 'var(--ec-text-faint)',
+              transition: 'left 0.2s',
+            }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 'var(--ec-fs-sm)', color: 'var(--ec-text)' }}>
+              {debugMode ? 'On' : 'Off'}
+            </div>
+            <div style={{ fontSize: 'var(--ec-fs-label)', color: 'var(--ec-text-faint)', marginTop: 1 }}>
+              Show diagnostic badges, grounding scores, lock-in meters, and pipeline indicators.
+            </div>
+          </div>
+        </label>
+      </div>
 
       {/* Text Size */}
       <div style={{ marginBottom: 20 }}>
@@ -94,7 +146,7 @@ export default function DisplaySection() {
           {TEXT_SIZE_PRESETS.map(preset => (
             <button
               key={preset.id}
-              onClick={() => handleFontScale(preset.scale)}
+              onClick={() => handleFontScale(preset)}
               style={{
                 flex: 1,
                 padding: '10px 12px',

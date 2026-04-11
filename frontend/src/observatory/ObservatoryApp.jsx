@@ -184,7 +184,7 @@ export default function ObservatoryApp({ onBack, activeProjectSlug }) {
       </div>
 
       {/* Tab content */}
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {renderTab()}
       </div>
     </div>

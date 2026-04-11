@@ -31,6 +31,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _FallbackLLMAdapter:
+    """Wraps FallbackChain to expose a .complete() matching OllamaProvider."""
+
+    def __init__(self, chain):
+        self._chain = chain
+
+    async def complete(self, messages=None, temperature=0.7, max_tokens=512, model=None, **kw):
+        from luna.llm.base import Message as LLMMessage
+        # Convert LLMMessage objects to dicts, extract system prompt
+        system = ""
+        msg_dicts = []
+        for m in (messages or []):
+            role = m.role if hasattr(m, "role") else m.get("role", "user")
+            content = m.content if hasattr(m, "content") else m.get("content", "")
+            if role == "system":
+                system = content
+            else:
+                msg_dicts.append({"role": role, "content": content})
+        result = await self._chain.generate(
+            messages=msg_dicts,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        # Return an object with .content like OllamaProvider does
+        return LLMMessage(role="assistant", content=result.content)
+
+
 class Station:
     """
     LunaFM station — owns channels, schedules them, and exposes shared
@@ -69,13 +97,26 @@ class Station:
 
     @property
     def llm(self):
-        """Lazy OllamaProvider for background thought generation."""
-        if self._llm is None:
-            try:
-                from luna.llm.providers.ollama_provider import OllamaProvider
-                self._llm = OllamaProvider()
-            except Exception as e:
-                logger.warning(f"[LUNAFM] OllamaProvider unavailable: {e}")
+        """LLM access via the engine's fallback chain (online or offline).
+
+        Returns a wrapper with a .complete() method matching the
+        OllamaProvider interface so handlers work unchanged, while
+        routing through the Director's fallback chain under the hood.
+        """
+        if self._llm is not None:
+            return self._llm
+        # Use the Director's fallback chain — respects user's provider config
+        director = self.engine.get_actor("director") if self.engine else None
+        chain = getattr(director, "_fallback_chain", None) if director else None
+        if chain is not None:
+            self._llm = _FallbackLLMAdapter(chain)
+            return self._llm
+        # Last resort: try OllamaProvider directly
+        try:
+            from luna.llm.providers.ollama_provider import OllamaProvider
+            self._llm = OllamaProvider()
+        except Exception as e:
+            logger.warning(f"[LUNAFM] No LLM available: {e}")
         return self._llm
 
     @property

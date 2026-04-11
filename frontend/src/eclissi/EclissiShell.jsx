@@ -8,6 +8,7 @@ import ObservatoryApp from '../observatory/ObservatoryApp';
 import PlaceholderView from './components/PlaceholderView';
 import ProjectStrip from './components/ProjectStrip';
 import SettingsApp from '../settings/SettingsApp';
+import NexusApp from '../nexus/NexusApp';
 import WelcomeWizard from '../components/WelcomeWizard';
 
 import { useNavigation } from '../hooks/useNavigation';
@@ -212,7 +213,7 @@ export default function EclissiShell() {
             <ObservatoryApp onBack={() => switchTab('eclissi')} activeProjectSlug={activeProjectSlug} />
           )}
           {activeTab === 'studio' && <iframe src="/studio/?v=2" style={{ width: '100%', height: '100%', border: 'none' }} />}
-          {activeTab === 'nexus' && <iframe src="/studio/?v=2&view=nexus" style={{ width: '100%', height: '100%', border: 'none' }} />}
+          {activeTab === 'nexus' && <NexusApp debugMode={frontendConfig.debug_mode === true} />}
           {/* Guardian tab now redirects to eclissi + opens Guardian panel (see switchTab) */}
           {activeTab === 'settings' && <SettingsApp keysUnlocked={keysUnlocked} />}
         </main>

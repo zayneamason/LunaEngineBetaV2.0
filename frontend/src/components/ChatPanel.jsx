@@ -527,7 +527,7 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                 Scroll up for older messages
               </div>
             )}
-            {visibleMessages.map((msg) => (
+            {visibleMessages.filter((msg) => !(msg.role === 'user' && msg.content?.startsWith('[SYSTEM:'))).map((msg) => (
               <React.Fragment key={msg.id}>
                 <div
                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -537,19 +537,21 @@ const ChatPanel = ({ onSend, isLoading, messages = [], debugKeywords = [], entit
                       msg.role === 'user'
                         ? 'bg-kozmo-accent/10 border border-kozmo-accent/30 text-white/90'
                         : 'bg-kozmo-surface border border-kozmo-border text-white/80'
-                    }`}
-                    style={msg.role === 'assistant' && msg.metadata?.life_state ? {
-                      borderLeft: `2.5px solid ${
-                        msg.metadata.life_state === 'personal' ? '#5b8fa8' :
-                        msg.metadata.life_state === 'project' ? '#7a9e6d' :
-                        msg.metadata.life_state === 'bridge' ? '#c4975a' :
-                        msg.metadata.life_state === 'mixed' ? '#9a7fb5' :
-                        'transparent'
-                      }`,
-                    } : undefined}
+                    } ${msg.role === 'assistant' ? 'luna-message-accent' : ''}`}
+                    style={msg.role === 'assistant' ? (() => {
+                      const ls = msg.metadata?.life_state;
+                      const colorMap = { personal: '#5b8fa8', project: '#7a9e6d', bridge: '#c4975a', mixed: '#9a7fb5' };
+                      const c = colorMap[ls];
+                      if (!c) return undefined;
+                      return {
+                        '--accent-color': `${c}33`,
+                        '--accent-color-hover': `${c}59`,
+                        '--accent-dot': c,
+                      };
+                    })() : undefined}
                     data-state={msg.role === 'assistant' ? (msg.metadata?.life_state || undefined) : undefined}
                   >
-                    <div className="text-sm whitespace-pre-wrap">
+                    <div className={`text-sm ${msg.role === 'assistant' && debugKeywords.length === 0 ? '' : 'whitespace-pre-wrap'}`}>
                       {debugKeywords.length > 0
                         ? <p>{highlightKeywords(msg.content, debugKeywords)}</p>
                         : msg.role === 'assistant'

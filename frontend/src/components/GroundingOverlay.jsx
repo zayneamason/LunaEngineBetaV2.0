@@ -10,6 +10,7 @@
 
 import React, { useState } from 'react';
 import AnnotatedText from './AnnotatedText';
+import MarkdownRenderer from './MarkdownRenderer';
 
 // Grounding confidence level styles (subtle left-border)
 const LEVEL_STYLES = {
@@ -192,16 +193,16 @@ const GroundingOverlay = ({
   const [hoveredIdx, setHoveredIdx] = useState(null);
   const [expandedIdx, setExpandedIdx] = useState(null);
 
-  // When no metadata available, render with entity highlighting only
+  // When no metadata available, render with markdown + entity highlighting
   if (!groundingMetadata || !groundingMetadata.supports) {
-    return <p><AnnotatedText text={text} entities={entities} onEntityClick={onEntityClick} /></p>;
+    return <MarkdownRenderer entities={entities} onEntityClick={onEntityClick}>{text}</MarkdownRenderer>;
   }
 
-  // When verification mode is off, show entity-highlighted text with subtle summary badge
+  // When verification mode is off, show markdown-rendered text with subtle summary badge
   if (!verificationMode) {
     return (
       <div>
-        <p><AnnotatedText text={text} entities={entities} onEntityClick={onEntityClick} /></p>
+        <MarkdownRenderer entities={entities} onEntityClick={onEntityClick}>{text}</MarkdownRenderer>
         {debugMode && <GroundingSummary summary={groundingMetadata.summary} />}
         {debugMode && <SourceBadges sources={groundingMetadata.sources_used} />}
       </div>
